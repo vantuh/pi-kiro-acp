@@ -6,7 +6,6 @@ import { createInterface } from "node:readline";
 import { readFileSync, watch } from "node:fs";
 import { request } from "node:http";
 
-// Parse CLI args
 let toolsPath = "";
 for (let i = 2; i < process.argv.length; i++) {
   if (process.argv[i] === "--tools") toolsPath = process.argv[++i] || "";
@@ -26,11 +25,14 @@ function httpPost(port, path, body, secret) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const headers = { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(data) };
-    if (secret) headers["Authorization"] = `Bearer ${secret}`;
+    if (secret) headers.Authorization = `Bearer ${secret}`;
     const req = request({ hostname: "127.0.0.1", port, path, method: "POST", headers, timeout: 1800000 }, (res) => {
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
-      res.on("end", () => { try { resolve(JSON.parse(Buffer.concat(chunks).toString())); } catch { reject(new Error("Invalid JSON")); } });
+      res.on("end", () => {
+        try { resolve(JSON.parse(Buffer.concat(chunks).toString())); }
+        catch { reject(new Error("Invalid JSON")); }
+      });
       res.on("error", reject);
     });
     req.on("error", reject);
@@ -43,7 +45,7 @@ function httpPost(port, path, body, secret) {
 let callCounter = 0;
 
 async function handleMessage(msg) {
-  if (!("id" in msg)) return; // ignore notifications
+  if (!("id" in msg)) return;
 
   switch (msg.method) {
     case "initialize":
@@ -87,7 +89,6 @@ async function handleMessage(msg) {
   }
 }
 
-// Watch for tool file changes
 try {
   let debounce = null;
   watch(toolsPath, () => {
@@ -98,7 +99,6 @@ try {
   });
 } catch {}
 
-// Stdio transport
 const rl = createInterface({ input: process.stdin });
 rl.on("line", (line) => {
   try { handleMessage(JSON.parse(line.trim())); } catch {}

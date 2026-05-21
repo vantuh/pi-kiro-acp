@@ -1,0 +1,13 @@
+export const KIRO_MODELS = [
+  { id: "claude-opus-4.6", name: "Claude Opus 4.6 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 32000 },
+  { id: "claude-sonnet-4.6", name: "Claude Sonnet 4.6 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 16384 },
+  { id: "claude-opus-4.5", name: "Claude Opus 4.5 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 32000 },
+  { id: "claude-sonnet-4.5", name: "Claude Sonnet 4.5 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 16384 },
+  { id: "claude-sonnet-4", name: "Claude Sonnet 4 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 16384 },
+  { id: "claude-haiku-4.5", name: "Claude Haiku 4.5 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 200000, maxTokens: 8192 },
+  { id: "deepseek-3.2", name: "DeepSeek 3.2 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 },
+  { id: "minimax-m2.5", name: "MiniMax M2.5 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 },
+  { id: "minimax-m2.1", name: "MiniMax M2.1 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 },
+  { id: "glm-5", name: "GLM-5 (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 },
+  { id: "qwen3-coder-next", name: "Qwen3 Coder Next (Kiro)", reasoning: false, input: ["text"] as any, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 128000, maxTokens: 8192 },
+];
