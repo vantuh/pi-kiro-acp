@@ -8,23 +8,24 @@ import { streamKiroAcp } from "./stream.ts";
 const REGISTERED_SYMBOL = Symbol.for("kiro-acp:registered");
 
 export default function (pi: ExtensionAPI) {
-  if ((globalThis as any)[REGISTERED_SYMBOL]) {
-    log("extension skipped (subagent context)", { pid: process.pid });
-    return;
-  }
-  (globalThis as any)[REGISTERED_SYMBOL] = true;
+	if ((globalThis as any)[REGISTERED_SYMBOL]) {
+		log("extension skipped (subagent context)", { pid: process.pid });
+		return;
+	}
+	(globalThis as any)[REGISTERED_SYMBOL] = true;
 
-  log("extension loaded", { pid: process.pid, models: KIRO_MODELS.length });
-  pi.registerProvider("kiro-acp", {
-    name: "Kiro ACP",
-    baseUrl: "local",
-    apiKey: "KIRO_ACP_DUMMY",
-    api: "kiro-acp-api" as any,
-    models: KIRO_MODELS,
-    streamSimple: streamKiroAcp,
-  });
+	log("extension loaded", { pid: process.pid, models: KIRO_MODELS.length });
+	pi.registerProvider("kiro-acp", {
+		name: "Kiro ACP",
+		baseUrl: "local",
+		apiKey: "KIRO_ACP_DUMMY",
+		api: "kiro-acp-api" as any,
+		models: KIRO_MODELS,
+		streamSimple: streamKiroAcp,
+	});
 
-  pi.on("session_shutdown", async () => {
-    await stopAllSessions();
-  });
+	pi.on("session_shutdown", async () => {
+		log("session_shutdown event received");
+		await stopAllSessions();
+	});
 }
