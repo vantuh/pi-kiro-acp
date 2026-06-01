@@ -231,6 +231,7 @@ export class AcpSession {
 		modelId: string,
 		systemPrompt: string,
 		userMessage: string,
+		images: { type: "image"; data: string; mimeType: string }[] = [],
 	): Promise<void> {
 		if (!this.acpSessionId) {
 			const result = (await this.rpcSend("session/new", {
@@ -268,7 +269,10 @@ export class AcpSession {
 				"session/prompt",
 				{
 					sessionId: this.acpSessionId,
-					prompt: [{ type: "text", text: promptText }],
+					prompt: [
+						{ type: "text", text: promptText },
+						...images,
+					],
 				},
 				0,
 			) as Promise<any>
@@ -616,11 +620,20 @@ function httpRespond(res: ServerResponse, status: number, body: unknown): void {
 export function buildPromptParts(
 	context: Context,
 	includeHistory: boolean,
-): { systemPrompt: string; userMessage: string } {
+): { systemPrompt: string; userMessage: string; images: { type: "image"; data: string; mimeType: string }[] } {
+	const msgs = context.messages || [];
+	const lastUser = [...msgs].reverse().find((m) => m.role === "user");
+	const images: { type: "image"; data: string; mimeType: string }[] = [];
+	if (lastUser && Array.isArray(lastUser.content)) {
+		for (const block of lastUser.content as any[]) {
+			if (block.type === "image") images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+		}
+	}
 	return {
 		systemPrompt: context.systemPrompt || "",
 		userMessage: includeHistory
 			? buildConversationPrompt(context)
 			: lastUserMessage(context),
+		images,
 	};
 }

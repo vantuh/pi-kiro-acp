@@ -48,9 +48,9 @@ export function streamKiroAcp(
 
       if (!routed.isResumption) {
         const includeHistory = !session.acpSessionId;
-        const { systemPrompt, userMessage } = buildPromptParts(context, includeHistory);
+        const { systemPrompt, userMessage, images } = buildPromptParts(context, includeHistory);
         log("prompt parts", { session: session.id, includeHistory, promptChars: userMessage.length, sessionBusy: session.busy, hasActivePrompt: !!session.activePromptDone });
-        await session.startPrompt(model.id, systemPrompt, userMessage);
+        await session.startPrompt(model.id, systemPrompt, userMessage, images);
       }
 
       if (options?.signal) {
