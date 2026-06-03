@@ -9,12 +9,16 @@ export interface PendingRpc {
   timer: ReturnType<typeof setTimeout> | null;
 }
 
+export type ToolResultContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
+
 export interface PendingToolCall {
   callId: string;
   rawCallId: string;
   toolName: string;
   args: Record<string, unknown>;
-  resolve: (result: { result: string; isError?: boolean }) => void;
+  resolve: (result: { result: string; isError?: boolean; content?: ToolResultContentBlock[] }) => void;
   emitted?: boolean;
 }
 
@@ -34,6 +38,7 @@ export interface ToolResultInfo {
   toolCallId: string;
   toolName: string;
   text: string;
+  content?: ToolResultContentBlock[];
   isError: boolean;
 }
 

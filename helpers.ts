@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import type { SessionMetadata, ToolResultInfo } from "./types.ts";
+import type { SessionMetadata, ToolResultContentBlock, ToolResultInfo } from "./types.ts";
 
 const MAX_HISTORY_TEXT_CHARS = 12000;
 const MAX_TOOL_RESULT_CHARS = 20000;
@@ -104,11 +104,14 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
   for (let i = msgs.length - 1; i >= 0; i--) {
     const msg = msgs[i];
     if (msg.role === "toolResult") {
-      const text = (msg.content as any[]).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
+      const content = normalizeToolResultContent(msg.content as any[]);
+      const text = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      const hasImages = content.some((c) => c.type === "image");
       results.push({
         toolCallId: msg.toolCallId,
         toolName: msg.toolName,
         text,
+        ...(hasImages ? { content } : {}),
         isError: msg.isError,
       });
     } else if (msg.role === "assistant") {
@@ -117,6 +120,22 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
   }
 
   return results.reverse();
+}
+
+function normalizeToolResultContent(content: any[]): ToolResultContentBlock[] {
+  const blocks: ToolResultContentBlock[] = [];
+  for (const block of content || []) {
+    if (block?.type === "text" && typeof block.text === "string") {
+      blocks.push({ type: "text", text: block.text });
+    } else if (
+      block?.type === "image" &&
+      typeof block.data === "string" &&
+      typeof block.mimeType === "string"
+    ) {
+      blocks.push({ type: "image", data: block.data, mimeType: block.mimeType });
+    }
+  }
+  return blocks;
 }
 
 export function estimateUsage(

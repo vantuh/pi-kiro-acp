@@ -29,6 +29,7 @@ import type {
 	PendingToolCall,
 	SessionMetadata,
 	SessionUpdate,
+	ToolResultContentBlock,
 	ToolResultInfo,
 } from "./types.ts";
 
@@ -482,8 +483,10 @@ export class AcpSession {
 					callId,
 					toolName: call.toolName,
 					resultLen: tr.text.length,
+					contentBlocks: tr.content?.length ?? 0,
+					imageBlocks: tr.content?.filter((block) => block.type === "image").length ?? 0,
 				});
-				call.resolve({ result: tr.text, isError: tr.isError });
+				call.resolve({ result: tr.text, isError: tr.isError, content: tr.content });
 			} else {
 				log("UNMATCHED tool result", {
 					session: this.id,
@@ -553,6 +556,7 @@ export class AcpSession {
 				const resultPromise = new Promise<{
 					result: string;
 					isError?: boolean;
+					content?: ToolResultContentBlock[];
 				}>((resolve) => {
 					const call: PendingToolCall = {
 						callId: publicCallId,
@@ -576,6 +580,7 @@ export class AcpSession {
 				httpRespond(res, 200, {
 					status: result.isError ? "error" : "success",
 					[result.isError ? "error" : "result"]: result.result,
+					...(result.content?.length ? { content: result.content } : {}),
 				});
 				return;
 			}
