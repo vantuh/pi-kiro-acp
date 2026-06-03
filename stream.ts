@@ -5,7 +5,7 @@ import {
   type SimpleStreamOptions,
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
-import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage } from "./helpers.ts";
+import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage, lastUserMessage } from "./helpers.ts";
 import { log } from "./logging.ts";
 import { buildPromptParts } from "./session.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
@@ -65,8 +65,10 @@ export function streamKiroAcp(
       let textIdx = -1;
       let thinkingStarted = false;
       let thinkingIdx = -1;
+      let suppressUpdates = false;
 
       session.updateHandler = (update) => {
+        if (suppressUpdates) return;
         if (update.sessionUpdate === "agent_thought_chunk") {
           const text = (update.content as any)?.text;
           if (text) {
@@ -102,7 +104,57 @@ export function streamKiroAcp(
         }
       };
 
-      if (routed.isResumption) session.deliverToolResults(routed.toolResults);
+      if (routed.isResumption) {
+        const imageBlocks = routed.toolResults.flatMap((tr) =>
+          (tr.content ?? []).filter(
+            (b): b is { type: "image"; data: string; mimeType: string } => b.type === "image",
+          )
+        );
+
+        if (imageBlocks.length > 0) {
+          log("image FUP: detected images in tool results", {
+            session: session.id,
+            imageCount: imageBlocks.length,
+            tools: routed.toolResults.map((tr) => tr.toolName),
+          });
+          suppressUpdates = true;
+          session.deliverToolResultsTextOnly(routed.toolResults);
+
+          const userQ = lastUserMessage(context);
+          const imageTools = routed.toolResults.filter((tr) =>
+            (tr.content ?? []).some((b) => b.type === "image")
+          );
+          const toolNames = [...new Set(imageTools.map((tr) => tr.toolName))].join(", ");
+          const textSummaries = imageTools
+            .map((tr) => {
+              const txt = tr.text.trim();
+              return txt ? `[${tr.toolName}]: ${txt}` : `[${tr.toolName}]: (image result)`;
+            })
+            .join("\n");
+          const followupText =
+            `The user asked: ${userQ}\n\n` +
+            `Tool(s) ${toolNames} returned image(s) attached to this message.` +
+            (textSummaries ? `\n\nText summaries from tools:\n${textSummaries}` : "") +
+            `\n\nPlease answer the user's question based on the attached image(s). ` +
+            `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.`;
+
+          const { systemPrompt } = buildPromptParts(context, false);
+          try {
+            await session.cancelAndStartFollowUp(
+              model.id,
+              systemPrompt,
+              followupText,
+              imageBlocks,
+              15000,
+              () => { suppressUpdates = false; },
+            );
+          } finally {
+            suppressUpdates = false;
+          }
+        } else {
+          session.deliverToolResults(routed.toolResults);
+        }
+      }
 
       const gen = ++session.streamGen;
       let promptError: Error | null = null;

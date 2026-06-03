@@ -498,6 +498,85 @@ export class AcpSession {
 		}
 	}
 
+	/** Deliver tool results without image content blocks (text-only MCP response). */
+	deliverToolResultsTextOnly(toolResults: ToolResultInfo[]): void {
+		for (const tr of toolResults) {
+			const match = this.findToolCallMatch(tr);
+			if (match) {
+				const [callId, call] = match;
+				this.pendingToolCalls.delete(callId);
+				log("delivering tool result (text-only for image FUP)", {
+					session: this.id,
+					callId,
+					toolName: call.toolName,
+					resultLen: tr.text.length,
+				});
+				call.resolve({ result: tr.text, isError: tr.isError });
+			} else {
+				log("UNMATCHED tool result (text-only)", {
+					session: this.id,
+					toolCallId: tr.toolCallId,
+					toolName: tr.toolName,
+					pendingCalls: [...this.pendingToolCalls.keys()],
+				});
+			}
+		}
+	}
+
+	/**
+	 * Wait for the current activePromptDone to settle (with timeout), then start
+	 * a new follow-up prompt on the same ACP session with the given images attached.
+	 */
+	async cancelAndStartFollowUp(
+		modelId: string,
+		systemPrompt: string,
+		followupText: string,
+		images: { type: "image"; data: string; mimeType: string }[],
+		settleTimeoutMs = 15000,
+		beforeStart?: () => void,
+	): Promise<void> {
+		const prevPromise = this.activePromptDone;
+		if (prevPromise) {
+			this.activePromptDone = null;
+			if (this.acpSessionId) {
+				this.rpcNotify("session/cancel", { sessionId: this.acpSessionId });
+			}
+			log("image FUP: cancel sent; waiting for old prompt to settle", {
+				session: this.id,
+				settleTimeoutMs,
+			});
+			let settled = false;
+			await Promise.race([
+				prevPromise.then(() => { settled = true; }, () => { settled = true; }),
+				new Promise<void>((r) => setTimeout(r, settleTimeoutMs)),
+			]);
+			log("image FUP: old prompt settle wait complete", { session: this.id, settled });
+		}
+		this.rejectPendingToolCalls("Cancelled old prompt during image follow-up handoff");
+		beforeStart?.();
+
+		log("image FUP: starting follow-up prompt", {
+			session: this.id,
+			imageCount: images.length,
+			promptChars: followupText.length,
+		});
+		await this.startPrompt(modelId, systemPrompt, followupText, images);
+		log("image FUP: follow-up prompt started", { session: this.id });
+	}
+
+	private rejectPendingToolCalls(reason: string): void {
+		const calls = [...this.pendingToolCalls.values()];
+		if (calls.length === 0) return;
+		this.pendingToolCalls.clear();
+		log("rejecting pending tool calls", {
+			session: this.id,
+			reason,
+			count: calls.length,
+			callIds: calls.map((call) => call.callId),
+		});
+		for (const call of calls) call.resolve({ result: reason, isError: true });
+	}
+
 	private findToolCallMatch(
 		tr: ToolResultInfo,
 	): [string, PendingToolCall] | null {
