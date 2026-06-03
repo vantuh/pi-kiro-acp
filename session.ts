@@ -27,6 +27,7 @@ import { getDescendantPids, killProcessTree } from "./process-utils.ts";
 import type {
 	PendingRpc,
 	PendingToolCall,
+	SessionMetadata,
 	SessionUpdate,
 	ToolResultInfo,
 } from "./types.ts";
@@ -49,6 +50,7 @@ export class AcpSession {
 	readonly agentName = `pi-kiro-${randomBytes(4).toString("hex")}`;
 	started = false;
 	updateHandler: ((u: SessionUpdate) => void) | null = null;
+	metadata: SessionMetadata | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	onToolCallFromBridge: ((call: PendingToolCall) => void) | null = null;
 	activePromptDone: Promise<{ stopReason: string }> | null = null;
@@ -165,8 +167,46 @@ export class AcpSession {
 			) {
 				const update = msg.params?.update as SessionUpdate | undefined;
 				if (update) this.updateHandler?.(update);
+			} else if (msg.method === "_kiro.dev/metadata") {
+				this.handleMetadata(msg.params || {});
 			}
 		}
+	}
+
+	private handleMetadata(params: Record<string, unknown>): void {
+		const sessionId = typeof params.sessionId === "string" ? params.sessionId : this.acpSessionId;
+		if (!sessionId) return;
+		if (this.acpSessionId && sessionId !== this.acpSessionId) return;
+
+		const contextUsagePercentage = typeof params.contextUsagePercentage === "number"
+			? params.contextUsagePercentage
+			: undefined;
+		const turnDurationMs = typeof params.turnDurationMs === "number"
+			? params.turnDurationMs
+			: undefined;
+		const meteringUsage = Array.isArray(params.meteringUsage)
+			? params.meteringUsage
+				.filter((m: any) => typeof m?.unit === "string" && typeof m?.value === "number")
+				.map((m: any) => ({
+					unit: m.unit,
+					unitPlural: typeof m.unitPlural === "string" ? m.unitPlural : undefined,
+					value: m.value,
+				}))
+			: undefined;
+
+		this.metadata = {
+			sessionId,
+			contextUsagePercentage,
+			meteringUsage,
+			turnDurationMs,
+		};
+		log("kiro metadata", {
+			session: this.id,
+			acpSessionId: sessionId,
+			contextUsagePercentage,
+			turnDurationMs,
+			credits: meteringUsage?.find((m) => m.unit === "credit")?.value,
+		});
 	}
 
 	async ensureStarted(tools: Context["tools"]): Promise<void> {
@@ -263,6 +303,8 @@ export class AcpSession {
 		const promptText = systemPrompt
 			? `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n${userMessage}`
 			: userMessage;
+
+		this.metadata = null;
 
 		this.activePromptDone = (
 			this.rpcSend(

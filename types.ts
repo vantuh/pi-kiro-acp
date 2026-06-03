@@ -23,6 +23,13 @@ export interface SessionUpdate {
   [key: string]: unknown;
 }
 
+export interface SessionMetadata {
+  sessionId: string;
+  contextUsagePercentage?: number;
+  meteringUsage?: Array<{ unit: string; unitPlural?: string; value: number }>;
+  turnDurationMs?: number;
+}
+
 export interface ToolResultInfo {
   toolCallId: string;
   toolName: string;
@@ -59,6 +66,7 @@ export interface AcpSessionStateFields {
   agentName: string;
   started: boolean;
   updateHandler: ((u: SessionUpdate) => void) | null;
+  metadata: SessionMetadata | null;
   pendingToolCalls: Map<string, PendingToolCall>;
   onToolCallFromBridge: ((call: PendingToolCall) => void) | null;
   activePromptDone: Promise<{ stopReason: string }> | null;

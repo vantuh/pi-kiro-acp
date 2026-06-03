@@ -1,5 +1,5 @@
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import type { ToolResultInfo } from "./types.ts";
+import type { SessionMetadata, ToolResultInfo } from "./types.ts";
 
 const MAX_HISTORY_TEXT_CHARS = 12000;
 const MAX_TOOL_RESULT_CHARS = 20000;
@@ -119,18 +119,52 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
   return results.reverse();
 }
 
-export function estimateUsage(output: AssistantMessage) {
+export function estimateUsage(
+  output: AssistantMessage,
+  contextWindow?: number,
+  metadata?: SessionMetadata | null,
+) {
   let chars = 0;
-  for (const b of output.content) if (b.type === "text") chars += b.text.length;
-  const tokens = Math.round(chars / 4);
+  for (const b of output.content) {
+    if (b.type === "text") chars += b.text.length;
+    else if (b.type === "thinking") chars += b.thinking.length;
+  }
+
+  const outputTokens = Math.round(chars / 4);
+  const metadataTotal = typeof metadata?.contextUsagePercentage === "number" && contextWindow
+    ? Math.round((Math.max(0, metadata.contextUsagePercentage) / 100) * contextWindow)
+    : 0;
+  const totalTokens = Math.max(outputTokens, metadataTotal);
+
   return {
-    input: 0,
-    output: tokens,
+    input: Math.max(0, totalTokens - outputTokens),
+    output: outputTokens,
     cacheRead: 0,
     cacheWrite: 0,
-    totalTokens: tokens,
+    totalTokens,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
+
+export function appendKiroMetadataDiagnostic(
+  output: AssistantMessage,
+  metadata?: SessionMetadata | null,
+): void {
+  if (!metadata) return;
+  output.diagnostics = [
+    ...(output.diagnostics ?? []),
+    {
+      type: "kiro_metadata",
+      timestamp: Date.now(),
+      details: {
+        sessionId: metadata.sessionId,
+        contextUsagePercentage: metadata.contextUsagePercentage,
+        meteringUsage: metadata.meteringUsage,
+        turnDurationMs: metadata.turnDurationMs,
+        credits: metadata.meteringUsage?.find((m) => m.unit === "credit")?.value,
+      },
+    },
+  ];
 }
 
 export function createOutputMessage(model: any): AssistantMessage {

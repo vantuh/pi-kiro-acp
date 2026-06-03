@@ -5,7 +5,7 @@ import {
   type SimpleStreamOptions,
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
-import { createOutputMessage, estimateUsage } from "./helpers.ts";
+import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage } from "./helpers.ts";
 import { log } from "./logging.ts";
 import { buildPromptParts } from "./session.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
@@ -199,18 +199,21 @@ export function streamKiroAcp(
 
       if (outcome === "toolUse") {
         output.stopReason = "toolUse";
-        output.usage = estimateUsage(output);
+        output.usage = estimateUsage(output, model.contextWindow, session.metadata);
+        appendKiroMetadataDiagnostic(output, session.metadata);
         stream.push({ type: "done", reason: "toolUse", message: output });
       } else if (outcome === "error") {
         session.activePromptDone = null;
         output.stopReason = "error";
         output.errorMessage = promptError?.message || "Kiro ACP prompt failed";
-        output.usage = estimateUsage(output);
+        output.usage = estimateUsage(output, model.contextWindow, session.metadata);
+        appendKiroMetadataDiagnostic(output, session.metadata);
         stream.push({ type: "error", reason: "error", error: output });
       } else {
         session.activePromptDone = null;
         output.stopReason = "stop";
-        output.usage = estimateUsage(output);
+        output.usage = estimateUsage(output, model.contextWindow, session.metadata);
+        appendKiroMetadataDiagnostic(output, session.metadata);
         stream.push({ type: "done", reason: "stop", message: output });
       }
 
