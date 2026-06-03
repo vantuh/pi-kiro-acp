@@ -2,6 +2,7 @@ import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { extractToolResults } from "./helpers.ts";
 import { log } from "./logging.ts";
 import { AcpSession } from "./session.ts";
+import { persistenceKeyForSession } from "./session-persistence.ts";
 import type { ToolResultInfo } from "./types.ts";
 
 const sessions = new Map<string, AcpSession>();
@@ -55,6 +56,7 @@ export async function routeSession(
 	const key = sessionId ? `pi:${sessionId}` : undefined;
 
 	if (key) {
+		const persistenceKey = persistenceKeyForSession(sessionId!, requestedCwd);
 		let existing = sessions.get(key);
 		if (existing && !existing.busy && existing.cwd !== requestedCwd) {
 			sessions.delete(key);
@@ -62,17 +64,20 @@ export async function routeSession(
 			existing = undefined;
 		}
 		if (existing && !existing.busy) {
+			existing.persistenceKey = persistenceKey;
 			log("route existing keyed session", {
 				session: existing.id,
 				key,
 				cwd: requestedCwd,
 				busy: existing.busy,
+				persistenceKey,
 			});
 			return { session: existing, toolResults, isResumption: false };
 		}
 
 		const created = new AcpSession(requestedCwd);
 		const actualKey = existing?.busy ? `${key}:parallel:${created.id}` : key;
+		created.persistenceKey = actualKey === key ? persistenceKey : null;
 		sessions.set(actualKey, created);
 		log("route new keyed session", {
 			session: created.id,
@@ -80,6 +85,7 @@ export async function routeSession(
 			originalKey: key,
 			cwd: requestedCwd,
 			existingBusy: !!existing?.busy,
+			persistenceKey: created.persistenceKey,
 		});
 		return { session: created, toolResults, isResumption: false };
 	}
@@ -88,6 +94,7 @@ export async function routeSession(
 		(s) => !s.busy && s.cwd === requestedCwd,
 	);
 	if (idleSameCwd) {
+		idleSameCwd.persistenceKey = null;
 		log("route idle same-cwd session", {
 			session: idleSameCwd.id,
 			cwd: requestedCwd,
@@ -96,6 +103,7 @@ export async function routeSession(
 	}
 
 	const created = new AcpSession(requestedCwd);
+	created.persistenceKey = null;
 	sessions.set(`anon:${created.id}`, created);
 	log("route new anon session", {
 		session: created.id,

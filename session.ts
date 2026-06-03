@@ -24,6 +24,10 @@ import type { Context } from "@earendil-works/pi-ai";
 import { buildConversationPrompt, lastUserMessage } from "./helpers.ts";
 import { log } from "./logging.ts";
 import { getDescendantPids, killProcessTree } from "./process-utils.ts";
+import {
+	clearPersistedKiroSession,
+	loadPersistedKiroSession,
+} from "./session-persistence.ts";
 import type {
 	PendingRpc,
 	PendingToolCall,
@@ -32,6 +36,12 @@ import type {
 	ToolResultContentBlock,
 	ToolResultInfo,
 } from "./types.ts";
+
+interface StartPromptOptions {
+	expectedHistoryFingerprint?: string;
+	replayUserMessage?: string;
+	tools?: Context["tools"];
+}
 
 export class AcpSession {
 	readonly id = `s-${randomBytes(4).toString("hex")}`;
@@ -52,6 +62,8 @@ export class AcpSession {
 	started = false;
 	updateHandler: ((u: SessionUpdate) => void) | null = null;
 	metadata: SessionMetadata | null = null;
+	agentCapabilities: any = null;
+	persistenceKey: string | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	onToolCallFromBridge: ((call: PendingToolCall) => void) | null = null;
 	activePromptDone: Promise<{ stopReason: string }> | null = null;
@@ -252,7 +264,7 @@ export class AcpSession {
 			this.cleanupAfterProcessExit();
 		});
 
-		await this.rpcSend(
+		const init = (await this.rpcSend(
 			"initialize",
 			{
 				protocolVersion: 1,
@@ -260,11 +272,14 @@ export class AcpSession {
 				clientInfo: { name: "pi-kiro-acp", version: "1.0.0" },
 			},
 			30000,
-		);
+		)) as any;
+		this.agentCapabilities = init?.agentCapabilities || null;
 		log("session initialized", {
 			session: this.id,
 			ipcPort: this.ipcPort,
 			pid: this.proc?.pid,
+			loadSession: this.supportsLoadSession(),
+			resumeSession: this.supportsResumeSession(),
 		});
 
 		this.started = true;
@@ -285,12 +300,39 @@ export class AcpSession {
 		}
 	}
 
-	async startPrompt(
-		modelId: string,
-		systemPrompt: string,
-		userMessage: string,
-		images: { type: "image"; data: string; mimeType: string }[] = [],
-	): Promise<void> {
+	private supportsLoadSession(): boolean {
+		return this.agentCapabilities?.loadSession === true;
+	}
+
+	private supportsResumeSession(): boolean {
+		return !!this.agentCapabilities?.sessionCapabilities?.resume;
+	}
+
+	private async ensureBackendSession(options: StartPromptOptions): Promise<boolean> {
+		if (this.acpSessionId) return false;
+
+		let shouldReplayHistory = true;
+		const persisted = this.persistenceKey ? loadPersistedKiroSession(this.persistenceKey) : null;
+		const canUsePersisted = !!persisted &&
+			!!options.expectedHistoryFingerprint &&
+			persisted.historyFingerprint === options.expectedHistoryFingerprint;
+
+		if (persisted && !canUsePersisted) {
+			log("persisted kiro session fingerprint mismatch", {
+				session: this.id,
+				key: this.persistenceKey,
+				kiroSessionId: persisted.kiroSessionId,
+			});
+		}
+
+		if (persisted && canUsePersisted) {
+			const restored = await this.tryRestorePersistedSession(persisted.kiroSessionId, options.tools);
+			if (restored) {
+				this.currentModelId = persisted.modelId || null;
+				shouldReplayHistory = false;
+			}
+		}
+
 		if (!this.acpSessionId) {
 			const result = (await this.rpcSend("session/new", {
 				cwd: this.cwd,
@@ -300,8 +342,77 @@ export class AcpSession {
 			log("acp session/new", {
 				session: this.id,
 				acpSessionId: this.acpSessionId,
+				replayHistory: shouldReplayHistory,
 			});
 		}
+
+		return shouldReplayHistory;
+	}
+
+	private async tryRestorePersistedSession(kiroSessionId: string, tools: Context["tools"] | undefined): Promise<boolean> {
+		const attempts = [
+			{ method: "session/resume" as const, enabled: this.supportsResumeSession() },
+			{ method: "session/load" as const, enabled: this.supportsLoadSession() },
+		].filter((attempt) => attempt.enabled);
+
+		for (let i = 0; i < attempts.length; i++) {
+			const attempt = attempts[i];
+			try {
+				await this.rpcSend(attempt.method, {
+					sessionId: kiroSessionId,
+					cwd: this.cwd,
+					mcpServers: [],
+				}, 15000);
+				this.acpSessionId = kiroSessionId;
+				log("restored persisted kiro session", {
+					session: this.id,
+					method: attempt.method,
+					acpSessionId: this.acpSessionId,
+				});
+				return true;
+			} catch (error) {
+				const isLastAttempt = i === attempts.length - 1;
+				log("failed to restore persisted kiro session", {
+					session: this.id,
+					method: attempt.method,
+					acpSessionId: kiroSessionId,
+					willFallbackToFresh: isLastAttempt,
+					error: error instanceof Error ? error.message : String(error),
+				});
+				if (!isLastAttempt) continue;
+				if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
+				await this.restartAfterRestoreFailure(tools);
+				return false;
+			}
+		}
+
+		log("persisted kiro session unavailable: restore unsupported", {
+			session: this.id,
+			acpSessionId: kiroSessionId,
+			loadSession: this.supportsLoadSession(),
+			resumeSession: this.supportsResumeSession(),
+		});
+		return false;
+	}
+
+	private async restartAfterRestoreFailure(tools: Context["tools"] | undefined): Promise<void> {
+		if (!this.started) return;
+		log("restarting kiro process after failed restore", { session: this.id });
+		await this.stop();
+		await this.ensureStarted(tools);
+	}
+
+	async startPrompt(
+		modelId: string,
+		systemPrompt: string,
+		userMessage: string,
+		images: { type: "image"; data: string; mimeType: string }[] = [],
+		options: StartPromptOptions = {},
+	): Promise<void> {
+		const shouldReplayHistory = await this.ensureBackendSession(options);
+		const promptUserMessage = shouldReplayHistory && options.replayUserMessage
+			? options.replayUserMessage
+			: userMessage;
 
 		const previousModelId = this.currentModelId;
 		if (this.currentModelId !== modelId) {
@@ -319,8 +430,8 @@ export class AcpSession {
 		}
 
 		const promptText = systemPrompt
-			? `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n${userMessage}`
-			: userMessage;
+			? `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n${promptUserMessage}`
+			: promptUserMessage;
 
 		this.metadata = null;
 

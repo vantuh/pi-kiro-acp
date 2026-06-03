@@ -7,6 +7,12 @@ import {
 } from "@earendil-works/pi-ai";
 import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage, lastUserMessage } from "./helpers.ts";
 import { log } from "./logging.ts";
+import {
+  historyFingerprintAfterAssistantTurn,
+  historyFingerprintBeforeCurrentUser,
+  loadPersistedKiroSession,
+  savePersistedKiroSession,
+} from "./session-persistence.ts";
 import { buildPromptParts } from "./session.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
@@ -46,11 +52,30 @@ export function streamKiroAcp(
         optionSessionId: options?.sessionId,
       });
 
+      const prefixFingerprint = historyFingerprintBeforeCurrentUser(context);
+
       if (!routed.isResumption) {
-        const includeHistory = !session.acpSessionId;
-        const { systemPrompt, userMessage, images } = buildPromptParts(context, includeHistory);
-        log("prompt parts", { session: session.id, includeHistory, promptChars: userMessage.length, sessionBusy: session.busy, hasActivePrompt: !!session.activePromptDone });
-        await session.startPrompt(model.id, systemPrompt, userMessage, images);
+        const currentPrompt = buildPromptParts(context, false);
+        const replayPrompt = buildPromptParts(context, true);
+        log("prompt parts", {
+          session: session.id,
+          promptChars: currentPrompt.userMessage.length,
+          replayPromptChars: replayPrompt.userMessage.length,
+          sessionBusy: session.busy,
+          hasActivePrompt: !!session.activePromptDone,
+          persistenceKey: session.persistenceKey,
+        });
+        await session.startPrompt(
+          model.id,
+          currentPrompt.systemPrompt,
+          currentPrompt.userMessage,
+          currentPrompt.images,
+          {
+            expectedHistoryFingerprint: prefixFingerprint,
+            replayUserMessage: replayPrompt.userMessage,
+            tools: context.tools,
+          },
+        );
       }
 
       if (options?.signal) {
@@ -266,6 +291,18 @@ export function streamKiroAcp(
         output.stopReason = "stop";
         output.usage = estimateUsage(output, model.contextWindow, session.metadata);
         appendKiroMetadataDiagnostic(output, session.metadata);
+        if (session.persistenceKey && session.acpSessionId) {
+          const now = Date.now();
+          const existingPersisted = loadPersistedKiroSession(session.persistenceKey);
+          savePersistedKiroSession(session.persistenceKey, {
+            version: 1,
+            kiroSessionId: session.acpSessionId,
+            historyFingerprint: historyFingerprintAfterAssistantTurn(context, output),
+            modelId: session.currentModelId,
+            createdAt: existingPersisted?.createdAt ?? now,
+            lastUsed: now,
+          });
+        }
         stream.push({ type: "done", reason: "stop", message: output });
       }
 

@@ -72,6 +72,8 @@ export interface AcpSessionStateFields {
   started: boolean;
   updateHandler: ((u: SessionUpdate) => void) | null;
   metadata: SessionMetadata | null;
+  agentCapabilities: unknown;
+  persistenceKey: string | null;
   pendingToolCalls: Map<string, PendingToolCall>;
   onToolCallFromBridge: ((call: PendingToolCall) => void) | null;
   activePromptDone: Promise<{ stopReason: string }> | null;
