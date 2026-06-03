@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
 	createServer,
 	type IncomingMessage,
@@ -220,6 +220,8 @@ export class AcpSession {
 		this.writeTools(tools);
 		this.writeAgentCfg();
 
+		this.configureMcpTimeout();
+
 		log("starting kiro session", {
 			session: this.id,
 			cwd: this.cwd,
@@ -265,6 +267,21 @@ export class AcpSession {
 		});
 
 		this.started = true;
+	}
+
+	private configureMcpTimeout(): void {
+		try {
+			execFileSync("kiro-cli", ["settings", "mcp.noInteractiveTimeout", "30"], {
+				timeout: 5000,
+				stdio: "ignore",
+			});
+			log("configured mcp.noInteractiveTimeout", { session: this.id, minutes: 30 });
+		} catch (error) {
+			log("failed to configure mcp.noInteractiveTimeout", {
+				session: this.id,
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
 	}
 
 	async startPrompt(
