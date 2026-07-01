@@ -1,6 +1,8 @@
 export const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 export const KIRO_MODELS = [
+  { id: "auto", name: "Auto (Kiro)", reasoning: false, input: ["text", "image"] as any, cost: ZERO_COST, contextWindow: 1000000, maxTokens: 32000 },
+  { id: "claude-sonnet-5", name: "Claude Sonnet 5 (Kiro)", reasoning: false, input: ["text", "image"] as any, cost: ZERO_COST, contextWindow: 1000000, maxTokens: 16384 },
   { id: "claude-opus-4.8", name: "Claude Opus 4.8 (Kiro)", reasoning: false, input: ["text", "image"] as any, cost: ZERO_COST, contextWindow: 1000000, maxTokens: 32000 },
   { id: "claude-opus-4.7", name: "Claude Opus 4.7 (Kiro)", reasoning: false, input: ["text", "image"] as any, cost: ZERO_COST, contextWindow: 1000000, maxTokens: 32000 },
   { id: "claude-opus-4.6", name: "Claude Opus 4.6 (Kiro)", reasoning: false, input: ["text", "image"] as any, cost: ZERO_COST, contextWindow: 1000000, maxTokens: 32000 },
