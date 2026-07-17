@@ -150,10 +150,12 @@ export function estimateUsage(
   }
 
   const outputTokens = Math.round(chars / 4);
-  const metadataTotal = typeof metadata?.contextUsagePercentage === "number" && contextWindow
-    ? Math.round((Math.max(0, metadata.contextUsagePercentage) / 100) * contextWindow)
-    : 0;
-  const totalTokens = Math.max(outputTokens, metadataTotal);
+  const reportedContextTokens = typeof metadata?.contextUsed === "number"
+    ? Math.max(0, Math.round(metadata.contextUsed))
+    : typeof metadata?.contextUsagePercentage === "number" && contextWindow
+      ? Math.round((Math.max(0, metadata.contextUsagePercentage) / 100) * contextWindow)
+      : 0;
+  const totalTokens = Math.max(outputTokens, reportedContextTokens);
 
   return {
     input: Math.max(0, totalTokens - outputTokens),
@@ -178,6 +180,9 @@ export function appendKiroMetadataDiagnostic(
       details: {
         sessionId: metadata.sessionId,
         contextUsagePercentage: metadata.contextUsagePercentage,
+        contextUsed: metadata.contextUsed,
+        contextSize: metadata.contextSize,
+        sessionCost: metadata.sessionCost,
         meteringUsage: metadata.meteringUsage,
         turnDurationMs: metadata.turnDurationMs,
         credits: metadata.meteringUsage?.find((m) => m.unit === "credit")?.value,

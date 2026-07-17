@@ -179,11 +179,49 @@ export class AcpSession {
 				msg.method === "_kiro.dev/session/update"
 			) {
 				const update = msg.params?.update as SessionUpdate | undefined;
-				if (update) this.updateHandler?.(update);
+				if (update) {
+					if (update.sessionUpdate === "usage_update") {
+						this.handleUsageUpdate(update, msg.params?.sessionId);
+					}
+					this.updateHandler?.(update);
+				}
 			} else if (msg.method === "_kiro.dev/metadata") {
 				this.handleMetadata(msg.params || {});
 			}
 		}
+	}
+
+	private handleUsageUpdate(update: SessionUpdate, updateSessionId: unknown): void {
+		const sessionId = typeof updateSessionId === "string" ? updateSessionId : this.acpSessionId;
+		if (!sessionId) return;
+		if (this.acpSessionId && sessionId !== this.acpSessionId) return;
+
+		const contextUsed = typeof update.used === "number" ? update.used : undefined;
+		const contextSize = typeof update.size === "number" && update.size > 0 ? update.size : undefined;
+		if (contextUsed === undefined || contextSize === undefined) return;
+
+		const rawCost = update.cost as Record<string, unknown> | null | undefined;
+		const sessionCost = rawCost &&
+			typeof rawCost.amount === "number" &&
+			typeof rawCost.currency === "string"
+			? { amount: rawCost.amount, currency: rawCost.currency }
+			: undefined;
+
+		this.metadata = {
+			...this.metadata,
+			sessionId,
+			contextUsagePercentage: (Math.max(0, contextUsed) / contextSize) * 100,
+			contextUsed: Math.max(0, contextUsed),
+			contextSize,
+			...(update.cost !== undefined ? { sessionCost } : {}),
+		};
+		log("ACP usage update", {
+			session: this.id,
+			acpSessionId: sessionId,
+			contextUsed,
+			contextSize,
+			sessionCost,
+		});
 	}
 
 	private handleMetadata(params: Record<string, unknown>): void {
@@ -208,10 +246,11 @@ export class AcpSession {
 			: undefined;
 
 		this.metadata = {
+			...this.metadata,
 			sessionId,
-			contextUsagePercentage,
-			meteringUsage,
-			turnDurationMs,
+			contextUsagePercentage: contextUsagePercentage ?? this.metadata?.contextUsagePercentage,
+			meteringUsage: meteringUsage ?? this.metadata?.meteringUsage,
+			turnDurationMs: turnDurationMs ?? this.metadata?.turnDurationMs,
 		};
 		log("kiro metadata", {
 			session: this.id,

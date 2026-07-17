@@ -30,6 +30,9 @@ export interface SessionUpdate {
 export interface SessionMetadata {
   sessionId: string;
   contextUsagePercentage?: number;
+  contextUsed?: number;
+  contextSize?: number;
+  sessionCost?: { amount: number; currency: string };
   meteringUsage?: Array<{ unit: string; unitPlural?: string; value: number }>;
   turnDurationMs?: number;
 }
