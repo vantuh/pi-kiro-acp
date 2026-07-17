@@ -13,7 +13,7 @@ import {
   loadPersistedKiroSession,
   savePersistedKiroSession,
 } from "./session-persistence.ts";
-import { buildPromptParts } from "./session.ts";
+import { buildPromptParts, toKiroEffort } from "./session.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
 const TOOL_CALL_DEBOUNCE_MS = 50;
@@ -40,7 +40,7 @@ export function streamKiroAcp(
       const routed = await routeSession(context, options);
       const session = routed.session;
       session.lastUsedAt = Date.now();
-      await session.ensureStarted(context.tools);
+      await session.ensureStarted(context.tools, toKiroEffort(options?.reasoning));
 
       log("streamSimple called", {
         session: session.id,

@@ -20,7 +20,7 @@ import {
 } from "node:readline";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import type { Context } from "@earendil-works/pi-ai";
+import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { buildConversationPrompt, lastUserMessage } from "./helpers.ts";
 import { log } from "./logging.ts";
 import { getDescendantPids, killProcessTree } from "./process-utils.ts";
@@ -43,6 +43,20 @@ interface StartPromptOptions {
 	tools?: Context["tools"];
 }
 
+type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+export function toKiroEffort(reasoning: SimpleStreamOptions["reasoning"]): KiroEffort | null {
+	if (reasoning === "minimal") return "low";
+	if (
+		reasoning === "low" ||
+		reasoning === "medium" ||
+		reasoning === "high" ||
+		reasoning === "xhigh" ||
+		reasoning === "max"
+	) return reasoning;
+	return null;
+}
+
 export class AcpSession {
 	readonly id = `s-${randomBytes(4).toString("hex")}`;
 	cwd: string;
@@ -52,6 +66,7 @@ export class AcpSession {
 	rpcPending = new Map<number, PendingRpc>();
 	acpSessionId: string | null = null;
 	currentModelId: string | null = null;
+	currentEffort: KiroEffort | null = null;
 	ipcServer: Server | null = null;
 	ipcPort: number | null = null;
 	readonly ipcSecret = randomBytes(16).toString("hex");
@@ -261,13 +276,33 @@ export class AcpSession {
 		});
 	}
 
-	async ensureStarted(tools: Context["tools"]): Promise<void> {
+	async ensureStarted(
+		tools: Context["tools"],
+		effort: KiroEffort | null = this.currentEffort,
+	): Promise<void> {
 		this.lastUsedAt = Date.now();
+		if (this.started && this.currentEffort !== effort) {
+			if (this.busy) {
+				log("deferring effort change while session is busy", {
+					session: this.id,
+					currentEffort: this.currentEffort,
+					requestedEffort: effort,
+				});
+			} else {
+				log("restarting Kiro for effort change", {
+					session: this.id,
+					currentEffort: this.currentEffort,
+					requestedEffort: effort,
+				});
+				await this.stop();
+			}
+		}
 		if (this.started) {
 			this.writeTools(tools);
 			return;
 		}
 
+		this.currentEffort = effort;
 		await this.startIpcServer();
 		this.writeTools(tools);
 		this.writeAgentCfg();
@@ -279,10 +314,13 @@ export class AcpSession {
 			cwd: this.cwd,
 			agentRootPath: this.agentRootPath,
 			agentName: this.agentName,
+			effort: this.currentEffort,
 		});
+		const args = ["acp", "--agent", this.agentName, "--trust-all-tools"];
+		if (this.currentEffort) args.push("--effort", this.currentEffort);
 		this.proc = spawn(
 			"kiro-cli",
-			["acp", "--agent", this.agentName, "--trust-all-tools"],
+			args,
 			{
 				cwd: this.agentRootPath || this.cwd,
 				stdio: ["pipe", "pipe", "pipe"],

@@ -66,6 +66,7 @@ export interface AcpSessionStateFields {
   rpcPending: Map<number, PendingRpc>;
   acpSessionId: string | null;
   currentModelId: string | null;
+  currentEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   ipcServer: Server | null;
   ipcPort: number | null;
   ipcSecret: string;

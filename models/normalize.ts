@@ -1,4 +1,4 @@
-import { ZERO_COST, KIRO_MODELS, type KiroModelConfig } from "./fallback.ts";
+import { ZERO_COST, KIRO_MODELS, KIRO_THINKING_LEVEL_MAP, type KiroModelConfig } from "./fallback.ts";
 
 type AvailableKiroModel = {
   modelId?: string;
@@ -21,7 +21,8 @@ export function normalizeDiscoveredModel(model: AvailableKiroModel): KiroModelCo
   return {
     id,
     name: formatModelName(model.name || id),
-    reasoning: false,
+    reasoning: true,
+    thinkingLevelMap: KIRO_THINKING_LEVEL_MAP,
     input: supportsImages(id) ? ["text", "image"] as any : ["text"] as any,
     cost: ZERO_COST,
     contextWindow: inferContextWindow(id),
