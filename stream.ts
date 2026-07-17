@@ -90,38 +90,56 @@ export function streamKiroAcp(
       let textIdx = -1;
       let thinkingStarted = false;
       let thinkingIdx = -1;
+      let textMessageId: string | undefined;
+      let thinkingMessageId: string | undefined;
       let suppressUpdates = false;
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;
         if (update.sessionUpdate === "agent_thought_chunk") {
           const text = (update.content as any)?.text;
+          const messageId = typeof update.messageId === "string" ? update.messageId : undefined;
           if (text) {
             if (textStarted) {
               stream.push({ type: "text_end", contentIndex: textIdx, content: (output.content[textIdx] as any).text, partial: output });
               textStarted = false;
+            }
+            if (thinkingStarted && messageId && thinkingMessageId && messageId !== thinkingMessageId) {
+              stream.push({ type: "thinking_end", contentIndex: thinkingIdx, content: (output.content[thinkingIdx] as any).thinking, partial: output });
+              thinkingStarted = false;
             }
             if (!thinkingStarted) {
               output.content.push({ type: "thinking", thinking: "" } as any);
               thinkingIdx = output.content.length - 1;
               stream.push({ type: "thinking_start", contentIndex: thinkingIdx, partial: output });
               thinkingStarted = true;
+              thinkingMessageId = messageId;
+            } else if (!thinkingMessageId && messageId) {
+              thinkingMessageId = messageId;
             }
             (output.content[thinkingIdx] as any).thinking += text;
             stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta: text, partial: output });
           }
         } else if (update.sessionUpdate === "agent_message_chunk") {
           const text = (update.content as any)?.text;
+          const messageId = typeof update.messageId === "string" ? update.messageId : undefined;
           if (text) {
             if (thinkingStarted) {
               stream.push({ type: "thinking_end", contentIndex: thinkingIdx, content: (output.content[thinkingIdx] as any).thinking, partial: output });
               thinkingStarted = false;
+            }
+            if (textStarted && messageId && textMessageId && messageId !== textMessageId) {
+              stream.push({ type: "text_end", contentIndex: textIdx, content: (output.content[textIdx] as any).text, partial: output });
+              textStarted = false;
             }
             if (!textStarted) {
               output.content.push({ type: "text", text: "" });
               textIdx = output.content.length - 1;
               stream.push({ type: "text_start", contentIndex: textIdx, partial: output });
               textStarted = true;
+              textMessageId = messageId;
+            } else if (!textMessageId && messageId) {
+              textMessageId = messageId;
             }
             (output.content[textIdx] as any).text += text;
             stream.push({ type: "text_delta", contentIndex: textIdx, delta: text, partial: output });
