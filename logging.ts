@@ -1,13 +1,18 @@
-import { appendFileSync } from "node:fs";
+import { appendFile } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 export const LOG_FILE = join(tmpdir(), "kiro-acp-debug.log");
 
+const DEBUG =
+  !!process.env.PI_KIRO_ACP_DEBUG && process.env.PI_KIRO_ACP_DEBUG !== "0";
+
 export function log(...args: any[]): void {
+  if (!DEBUG) return;
   const ts = new Date().toISOString().slice(11, 23);
-  appendFileSync(
+  appendFile(
     LOG_FILE,
     `[${ts}] ${args.map((a) => (typeof a === "object" ? JSON.stringify(a) : String(a))).join(" ")}\n`,
+    () => {},
   );
 }
