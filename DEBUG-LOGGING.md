@@ -2,20 +2,27 @@
 
 ## Log File
 
+Path comes from Node `os.tmpdir()` (not always `/tmp` on macOS):
+
 ```
-/tmp/kiro-acp-debug.log
+$TMPDIR/kiro-acp-debug.log
 ```
 
-Format: `[HH:MM:SS.mmm] message {json}` — written by `logging.ts:log()` via `appendFileSync`.
+Example on this machine: `/var/folders/.../T/kiro-acp-debug.log`.  
+On load, `extension loaded` includes `{ logFile }` when debug is on.
+
+Format: `[HH:MM:SS.mmm] message {json}` — written by `logging.ts:log()` via `appendFile`.
 
 ### Watch in real-time
 
 ```sh
-tail -f /tmp/kiro-acp-debug.log
+LOG="${TMPDIR%/}/kiro-acp-debug.log"
+# or: node -e "console.log(require('os').tmpdir()+'/kiro-acp-debug.log')"
+tail -f "$LOG"
 # filter to one session
-tail -f /tmp/kiro-acp-debug.log | grep '"session":"abc123"'
+tail -f "$LOG" | grep '"session":"abc123"'
 # clear and restart
-> /tmp/kiro-acp-debug.log && tail -f /tmp/kiro-acp-debug.log
+: > "$LOG" && tail -f "$LOG"
 ```
 
 ---
@@ -41,7 +48,7 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | Message | Data | When |
 |---|---|---|
 | `extension skipped (subagent context)` | `{ pid }` | Duplicate registration via Symbol |
-| `extension loaded` | `{ pid, models }` | Extension initialized |
+| `extension loaded` | `{ pid, models, logFile }` | Extension initialized |
 | `session_shutdown event received` | — | Pi fires session_shutdown |
 
 ### stream.ts — request flow
@@ -49,14 +56,35 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | Message | Data | When |
 |---|---|---|
 | `streamKiroAcp entry` | `{ modelId, toolsCount, messagesCount, systemPromptLen, sessionId }` | Stream handler called |
-| `streamSimple called` | `{ session, isResumption, toolResults, pendingToolCalls, hasActivePrompt, cwd, optionSessionId }` | Session routed |
+| `streamSimple called` | `{ session, isResumption, toolResults, pendingToolCalls, hasActivePrompt, cwd, optionSessionId, ensureStartedMs }` | Session routed |
 | `prompt parts` | `{ session, includeHistory, promptChars, sessionBusy, hasActivePrompt }` | Before sending to kiro-cli |
+| `timing first thinking` | `{ session, ttftMs, sincePromptMs }` | First `agent_thought_chunk` |
+| `timing first text` | `{ session, ttftMs, sincePromptMs, sinceThinkingMs }` | First `agent_message_chunk` |
+| `timing first tool` | `{ session, sinceTurnMs, sincePromptMs, toolName }` | First bridge tool call |
 | `tool calls → stream` | `{ session, count, callIds }` | Tool calls emitted to AI stream |
 | `tool call queued` | `{ session, callId, toolName }` | Tool call received from bridge |
 | `prompt done → stop` | `{ session }` | Prompt completed, no tool calls |
 | `prompt error → error` | `{ session, error }` | Prompt promise rejected |
-| `outcome` | `{ session, outcome, gen, streamGen }` | Stream outcome: toolUse/stop/error |
+| `outcome` | `{ session, outcome, gen, streamGen, timing }` | Stream outcome + TTFT / chunk stats |
 | `streamKiroAcp FATAL error` | `{ error }` | Uncaught exception in stream handler |
+
+`outcome.timing` fields:
+
+| Field | Meaning |
+|---|---|
+| `turnMs` | Total time for this stream invocation |
+| `streamMs` | Prompt sent → turn end (`turnMs − promptReadyMs`) |
+| `ensureStartedMs` | Time until `ensureStarted` returned |
+| `promptReadyMs` | Time until prompt sent / resumption delivered |
+| `ttftThinkingMs` | Entry → first thinking chunk (`null` if none) |
+| `ttftTextMs` | Entry → first text chunk (`null` if none) |
+| `firstToolMs` | Entry → first tool call (`null` if none) |
+| `thinkingChars` / `textChars` | Total chars received (pre-coalesce) |
+| `thinkingChunks` / `textChunks` | ACP update count (pre-coalesce) |
+| `avgThinkingChunkChars` / `avgTextChunkChars` | Mean chars per ACP chunk |
+| `emittedThinkingDeltas` / `emittedTextDeltas` | Deltas pushed to pi after coalesce |
+| `avgEmittedThinkingChars` / `avgEmittedTextChars` | Mean chars per emitted delta |
+| `coalesceMs` | Batch window (`STREAM_COALESCE_MS`) |
 
 ### session-manager.ts — routing
 
@@ -75,10 +103,15 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | Message | Data | When |
 |---|---|---|
 | `starting kiro session` | `{ session, cwd, agentRootPath, agentName }` | About to spawn kiro-cli |
-| `session initialized` | `{ session, ipcPort, pid }` | RPC initialize succeeded |
+| `session initialized` | `{ session, ipcPort, pid, timing }` | RPC initialize succeeded (`timing.mcpCfgMs` = settings-call duration, `preSpawnSetupMs`, `initializeMs`, `totalMs`) |
+| `configured mcp.noInteractiveTimeout` | `{ session, minutes }` | First successful `kiro-cli settings` in this process |
+| `skipped mcp.noInteractiveTimeout (already configured)` | `{ session }` | Later cold starts skip the ~0.3s settings call |
+| `failed to configure mcp.noInteractiveTimeout` | `{ session, error }` | Settings call failed; will retry next cold start |
 | `acp session/new` | `{ session, acpSessionId }` | New ACP session ID allocated |
 | `model set` | `{ session, modelId, previousModel }` | Model changed via RPC |
+| `prompt sent` | `{ session, modelId, replayHistory, promptChars, systemPromptChars, systemPromptIncluded, systemPromptSkipped, userMessageChars, imageCount, timing }` | `session/prompt` fired (system block once per ACP session unless hash changes) |
 | `rpc →` | `{ session, method, id, timeoutMs, pendingCount }` | RPC request sent |
+| `rpc ←` | `{ session, method, id, ms, hasError }` | RPC response received (`ms` = roundtrip) |
 | `RPC TIMEOUT` | `{ session, method, id, timeoutMs, remainingPending }` | RPC exceeded timeout (60s default) |
 | `stdout parse error` | `{ session, line }` | kiro-cli stdout is not valid JSON |
 | `orphan RPC response` | `{ session, id, hasError }` | RPC response with no pending request |
@@ -88,8 +121,9 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | `stopping kiro session` | `{ session }` | stop() called |
 | `stop: killing process tree` | `{ session, rootPid, descendants }` | Force-killing (timeout path) |
 | `IPC tool call received` | `{ session, callId, rawCallId, toolName, argsKeys }` | Bridge POST /tool/pending |
+| `IPC tool call completed` | `{ session, callId, toolName, isError, roundtripMs }` | HTTP response after pi delivered result |
 | `IPC error` | `{ session, error }` | Exception in handleIpcRequest |
-| `delivering tool result` | `{ session, callId, toolName, resultLen }` | Tool result matched and delivered |
+| `delivering tool result` | `{ session, callId, toolName, resultLen, roundtripMs }` | Tool result matched and delivered |
 | `UNMATCHED tool result` | `{ session, toolCallId, toolName, pendingCalls }` | Tool result with no matching call |
 | `findToolCallMatch: rejecting name-match (foreign toolCallId)` | `{ session, toolCallId, toolName }` | Tool result from different session rejected |
 | `ambiguous tool name match` | `{ session, toolName, matchCount, callIds }` | Multiple pending calls with same name |
@@ -118,6 +152,22 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 2. Look for preceding `rpc →` with the same `id` to measure latency
 3. Check `kiro stderr` around same timestamp for subprocess errors
 4. If `initialize` times out, kiro-cli never became ready — check spawn args in `starting kiro session`
+
+### Streaming feels slow / waiting
+
+1. Enable debug: `PI_KIRO_ACP_DEBUG=1`
+2. Clear log: `LOG="${TMPDIR%/}/kiro-acp-debug.log"; : > "$LOG"`
+3. Reproduce one slow turn, then:
+   ```sh
+   grep -E 'timing first|prompt sent|outcome|IPC tool call|rpc ←|delivering tool' "$LOG"
+   ```
+4. Interpret:
+   - Large `promptReadyMs` / `rpc ← initialize|session/new|set_model` → cold init / model set
+   - Large gap `prompt sent` → `timing first thinking|text` → model/effort (not extension buffering)
+   - Large `delivering tool result.roundtripMs` → pi tool-loop roundtrip (bridge waiting)
+   - Tiny `avgTextChunkChars` + many `textChunks` → tiny ACP chunks; after coalesce check `avgEmittedTextChars` / `emittedTextDeltas`
+
+See also `LATENCY-FIX-PLAN.md`.
 
 ### Wrong session selected / unexpected resumption
 
