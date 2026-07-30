@@ -5,7 +5,7 @@ import {
 	type Server,
 	type ServerResponse,
 } from "node:http";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
 	mkdirSync,
 	writeFileSync,
@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { buildConversationPrompt, lastUserMessage } from "./helpers.ts";
-import { log } from "./logging.ts";
+import { log, msSince } from "./logging.ts";
 import { getDescendantPids, killProcessTree } from "./process-utils.ts";
 import {
 	clearPersistedKiroSession,
@@ -45,6 +45,12 @@ interface StartPromptOptions {
 
 type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/** Process-wide: kiro-cli settings are global; configure once per pi process.
+ * `Ready` flips true after the first success; `InFlight` lets concurrent cold
+ * starts share one settings call instead of each spawning their own. */
+let mcpNoInteractiveTimeoutReady = false;
+let mcpNoInteractiveTimeoutInFlight: Promise<void> | null = null;
+
 export function toKiroEffort(reasoning: SimpleStreamOptions["reasoning"]): KiroEffort | null {
 	if (reasoning === "minimal") return "low";
 	if (
@@ -65,6 +71,8 @@ export class AcpSession {
 	rpcId = 0;
 	rpcPending = new Map<number, PendingRpc>();
 	acpSessionId: string | null = null;
+	/** SHA-256 of last system prompt wrapped into this ACP session; null = not sent yet. */
+	systemPromptHash: string | null = null;
 	currentModelId: string | null = null;
 	currentEffort: KiroEffort | null = null;
 	ipcServer: Server | null = null;
@@ -116,7 +124,13 @@ export class AcpSession {
 							reject(new Error(`RPC timeout: ${method}`));
 						}, timeoutMs)
 					: null;
-			this.rpcPending.set(id, { resolve, reject, timer });
+			this.rpcPending.set(id, {
+				resolve,
+				reject,
+				timer,
+				startedAt: Date.now(),
+				method,
+			});
 			this.proc.stdin.write(
 				JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
 			);
@@ -172,6 +186,13 @@ export class AcpSession {
 			}
 			if (p.timer) clearTimeout(p.timer);
 			this.rpcPending.delete(msg.id);
+			log("rpc ←", {
+				session: this.id,
+				method: p.method,
+				id: msg.id,
+				ms: msSince(p.startedAt),
+				hasError: !!msg.error,
+			});
 			msg.error
 				? p.reject(new Error(msg.error.message || "RPC error"))
 				: p.resolve(msg.result);
@@ -302,12 +323,16 @@ export class AcpSession {
 			return;
 		}
 
+		const ensureStartedAt = Date.now();
 		this.currentEffort = effort;
 		await this.startIpcServer();
+		const ipcReadyAt = Date.now();
 		this.writeTools(tools);
 		this.writeAgentCfg();
 
-		await this.configureMcpTimeout();
+		// Overlap with spawn/initialize — setting is global and only needed before
+		// tools. configureMcpTimeout never rejects (execFile errors are swallowed).
+		const mcpCfgPromise = this.configureMcpTimeout();
 
 		log("starting kiro session", {
 			session: this.id,
@@ -318,6 +343,7 @@ export class AcpSession {
 		});
 		const args = ["acp", "--agent", this.agentName, "--trust-all-tools"];
 		if (this.currentEffort) args.push("--effort", this.currentEffort);
+		const spawnAt = Date.now();
 		this.proc = spawn(
 			"kiro-cli",
 			args,
@@ -350,6 +376,8 @@ export class AcpSession {
 			},
 			30000,
 		)) as any;
+		const initDoneAt = Date.now();
+		const mcpCfgMs = await mcpCfgPromise;
 		this.agentCapabilities = init?.agentCapabilities || null;
 		log("session initialized", {
 			session: this.id,
@@ -357,13 +385,35 @@ export class AcpSession {
 			pid: this.proc?.pid,
 			loadSession: this.supportsLoadSession(),
 			resumeSession: this.supportsResumeSession(),
+			timing: {
+				ipcMs: ipcReadyAt - ensureStartedAt,
+				preSpawnSetupMs: spawnAt - ipcReadyAt,
+				mcpCfgMs,
+				initializeMs: initDoneAt - spawnAt,
+				totalMs: msSince(ensureStartedAt),
+			},
 		});
 
 		this.started = true;
 	}
 
-	private configureMcpTimeout(): Promise<void> {
-		return new Promise<void>((resolve) => {
+	/** Configure the global kiro-cli setting once per process. Resolves with the
+	 * settings-call duration in ms (0 when skipped or shared with an in-flight
+	 * call). Never rejects — execFile errors are logged and swallowed, so a
+	 * failure simply retries on the next cold start. */
+	private configureMcpTimeout(): Promise<number> {
+		if (mcpNoInteractiveTimeoutReady) {
+			log("skipped mcp.noInteractiveTimeout (already configured)", {
+				session: this.id,
+			});
+			return Promise.resolve(0);
+		}
+		if (mcpNoInteractiveTimeoutInFlight) {
+			log("skipped mcp.noInteractiveTimeout (in flight)", { session: this.id });
+			return mcpNoInteractiveTimeoutInFlight.then(() => 0);
+		}
+		const startedAt = Date.now();
+		mcpNoInteractiveTimeoutInFlight = new Promise<void>((resolve) => {
 			execFile(
 				"kiro-cli",
 				["settings", "mcp.noInteractiveTimeout", "30"],
@@ -375,12 +425,16 @@ export class AcpSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					} else {
+						mcpNoInteractiveTimeoutReady = true;
 						log("configured mcp.noInteractiveTimeout", { session: this.id, minutes: 30 });
 					}
+					// Clear so a failed call retries next cold start; harmless on success.
+					mcpNoInteractiveTimeoutInFlight = null;
 					resolve();
 				},
 			);
 		});
+		return mcpNoInteractiveTimeoutInFlight.then(() => msSince(startedAt));
 	}
 
 	private supportsLoadSession(): boolean {
@@ -422,6 +476,7 @@ export class AcpSession {
 				mcpServers: [],
 			})) as any;
 			this.acpSessionId = result.sessionId;
+			this.systemPromptHash = null;
 			log("acp session/new", {
 				session: this.id,
 				acpSessionId: this.acpSessionId,
@@ -447,6 +502,8 @@ export class AcpSession {
 					mcpServers: [],
 				}, 15000);
 				this.acpSessionId = kiroSessionId;
+				// Re-bind current pi instructions after resume/load.
+				this.systemPromptHash = null;
 				log("restored persisted kiro session", {
 					session: this.id,
 					method: attempt.method,
@@ -492,7 +549,9 @@ export class AcpSession {
 		images: { type: "image"; data: string; mimeType: string }[] = [],
 		options: StartPromptOptions = {},
 	): Promise<void> {
+		const startPromptAt = Date.now();
 		const shouldReplayHistory = await this.ensureBackendSession(options);
+		const backendReadyAt = Date.now();
 		const promptUserMessage = shouldReplayHistory && options.replayUserMessage
 			? options.replayUserMessage
 			: userMessage;
@@ -511,12 +570,24 @@ export class AcpSession {
 				previousModel: previousModelId,
 			});
 		}
+		const modelReadyAt = Date.now();
 
-		const promptText = systemPrompt
+		// Send full <system_instructions> once per ACP session (and again if pi changes it).
+		const systemHash = systemPrompt ? hashSystemPrompt(systemPrompt) : null;
+		const includeSystem = !!systemHash && systemHash !== this.systemPromptHash;
+		const promptText = includeSystem
 			? `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n${promptUserMessage}`
 			: promptUserMessage;
 
 		this.metadata = null;
+
+		// Optimistically record the system-prompt hash, but roll it back if the
+		// prompt RPC fails while the process is still alive, so the next turn
+		// re-sends <system_instructions> instead of silently running without them.
+		// pi serializes turns, so the rollback lands before the next startPrompt
+		// reads the hash.
+		const prevSystemPromptHash = this.systemPromptHash;
+		if (includeSystem && systemHash) this.systemPromptHash = systemHash;
 
 		this.activePromptDone = (
 			this.rpcSend(
@@ -533,9 +604,27 @@ export class AcpSession {
 		).then(
 			(r: any) => ({ stopReason: r?.stopReason || "end_turn" }),
 			(e: Error) => {
+				this.systemPromptHash = prevSystemPromptHash;
 				throw e;
 			},
 		);
+
+		log("prompt sent", {
+			session: this.id,
+			modelId,
+			replayHistory: shouldReplayHistory,
+			promptChars: promptText.length,
+			systemPromptChars: includeSystem ? systemPrompt.length : 0,
+			systemPromptIncluded: includeSystem,
+			systemPromptSkipped: !!systemPrompt && !includeSystem,
+			userMessageChars: promptUserMessage.length,
+			imageCount: images.length,
+			timing: {
+				backendMs: backendReadyAt - startPromptAt,
+				setModelMs: modelReadyAt - backendReadyAt,
+				totalMs: msSince(startPromptAt),
+			},
+		});
 	}
 
 	private cleanupAfterProcessExit(): void {
@@ -564,6 +653,7 @@ export class AcpSession {
 		this.proc = null;
 		this.rl = null;
 		this.acpSessionId = null;
+		this.systemPromptHash = null;
 		this.currentModelId = null;
 
 		const server = this.ipcServer;
@@ -659,6 +749,7 @@ export class AcpSession {
 			this.agentRootPath = null;
 		}
 		this.acpSessionId = null;
+		this.systemPromptHash = null;
 		this.currentModelId = null;
 	}
 
@@ -679,6 +770,7 @@ export class AcpSession {
 					resultLen: tr.text.length,
 					contentBlocks: tr.content?.length ?? 0,
 					imageBlocks: tr.content?.filter((block) => block.type === "image").length ?? 0,
+					roundtripMs: msSince(call.receivedAt),
 				});
 				call.resolve({ result: tr.text, isError: tr.isError, content: tr.content });
 			} else {
@@ -704,6 +796,7 @@ export class AcpSession {
 					callId,
 					toolName: call.toolName,
 					resultLen: tr.text.length,
+					roundtripMs: msSince(call.receivedAt),
 				});
 				call.resolve({ result: tr.text, isError: tr.isError });
 			} else {
@@ -825,6 +918,7 @@ export class AcpSession {
 				const body = JSON.parse(await readBody(req));
 				const { callId: rawCallId, toolName, args = {} } = body;
 				const publicCallId = `${this.id}-${rawCallId}`;
+				const receivedAt = Date.now();
 
 				const resultPromise = new Promise<{
 					result: string;
@@ -837,6 +931,7 @@ export class AcpSession {
 						toolName,
 						args,
 						resolve,
+						receivedAt,
 					};
 					this.pendingToolCalls.set(publicCallId, call);
 					log("IPC tool call received", {
@@ -854,6 +949,13 @@ export class AcpSession {
 					status: result.isError ? "error" : "success",
 					[result.isError ? "error" : "result"]: result.result,
 					...(result.content?.length ? { content: result.content } : {}),
+				});
+				log("IPC tool call completed", {
+					session: this.id,
+					callId: publicCallId,
+					toolName,
+					isError: !!result.isError,
+					roundtripMs: msSince(receivedAt),
 				});
 				return;
 			}
@@ -925,7 +1027,7 @@ export class AcpSession {
 				},
 			},
 			prompt:
-				"You are a coding assistant. Your identity and instructions are defined by the <system_instructions> block in each request. Always follow <system_instructions> as your primary directive. Use tools proactively. If a tool call fails, retry or try alternatives.",
+				"You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives.",
 		};
 
 		this.agentRootPath = join(tmpdir(), "kiro-acp", `agent-root-${this.id}`);
@@ -952,6 +1054,10 @@ function httpRespond(res: ServerResponse, status: number, body: unknown): void {
 		"Content-Length": Buffer.byteLength(json),
 	});
 	res.end(json);
+}
+
+function hashSystemPrompt(systemPrompt: string): string {
+	return createHash("sha256").update(systemPrompt).digest("hex");
 }
 
 export function buildPromptParts(

@@ -7,6 +7,8 @@ export interface PendingRpc {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout> | null;
+  startedAt: number;
+  method: string;
 }
 
 export type ToolResultContentBlock =
@@ -20,6 +22,8 @@ export interface PendingToolCall {
   args: Record<string, unknown>;
   resolve: (result: { result: string; isError?: boolean; content?: ToolResultContentBlock[] }) => void;
   emitted?: boolean;
+  /** Date.now() when bridge posted /tool/pending */
+  receivedAt: number;
 }
 
 export interface SessionUpdate {
@@ -65,6 +69,7 @@ export interface AcpSessionStateFields {
   rpcId: number;
   rpcPending: Map<number, PendingRpc>;
   acpSessionId: string | null;
+  systemPromptHash: string | null;
   currentModelId: string | null;
   currentEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
   ipcServer: Server | null;

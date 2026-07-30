@@ -16,3 +16,8 @@ export function log(...args: any[]): void {
     () => {},
   );
 }
+
+/** Elapsed ms since `since` (Date.now()). */
+export function msSince(since: number): number {
+  return Date.now() - since;
+}

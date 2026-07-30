@@ -6,7 +6,7 @@ import {
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage, lastUserMessage } from "./helpers.ts";
-import { log } from "./logging.ts";
+import { log, msSince } from "./logging.ts";
 import {
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
@@ -16,13 +16,23 @@ import {
 import { buildPromptParts, toKiroEffort } from "./session.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
-const TOOL_CALL_DEBOUNCE_MS = 50;
+/**
+ * Delay before emitting pending tool calls to pi.
+ * 0 = next timer tick: still batches tools that arrive in the same I/O wave
+ * (kiro often fires parallel MCP calls within one ms), without the old 50ms stall.
+ */
+const TOOL_CALL_DEBOUNCE_MS = 0;
+/** Batch tiny ACP deltas before pushing to pi (smoother TUI; ~1 frame). */
+const STREAM_COALESCE_MS = 24;
+
+type CoalesceKind = "thinking" | "text";
 
 export function streamKiroAcp(
   model: Model<any>,
   context: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+  const turnStartedAt = Date.now();
   log("streamKiroAcp entry", {
     modelId: model.id,
     toolsCount: context.tools?.length ?? 0,
@@ -41,6 +51,7 @@ export function streamKiroAcp(
       const session = routed.session;
       session.lastUsedAt = Date.now();
       await session.ensureStarted(context.tools, toKiroEffort(options?.reasoning));
+      const ensuredAt = Date.now();
 
       log("streamSimple called", {
         session: session.id,
@@ -50,6 +61,7 @@ export function streamKiroAcp(
         hasActivePrompt: !!session.activePromptDone,
         cwd: session.cwd,
         optionSessionId: options?.sessionId,
+        ensureStartedMs: ensuredAt - turnStartedAt,
       });
 
       const prefixFingerprint = historyFingerprintBeforeCurrentUser(context);
@@ -77,6 +89,7 @@ export function streamKiroAcp(
           },
         );
       }
+      const promptReadyAt = Date.now();
 
       if (options?.signal) {
         const handler = () => session.rpcNotify("session/cancel", { sessionId: session.acpSessionId });
@@ -93,6 +106,92 @@ export function streamKiroAcp(
       let textMessageId: string | undefined;
       let thinkingMessageId: string | undefined;
       let suppressUpdates = false;
+      let firstThinkingAt: number | null = null;
+      let firstTextAt: number | null = null;
+      let firstToolAt: number | null = null;
+      let thinkingChars = 0;
+      let textChars = 0;
+      let thinkingChunks = 0;
+      let textChunks = 0;
+      let emittedThinkingDeltas = 0;
+      let emittedTextDeltas = 0;
+
+      let coalesceKind: CoalesceKind | null = null;
+      let coalesceBuf = "";
+      let coalesceIdx = -1;
+      let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
+
+      const flushCoalesced = () => {
+        if (coalesceTimer) {
+          clearTimeout(coalesceTimer);
+          coalesceTimer = null;
+        }
+        if (!coalesceKind || !coalesceBuf) {
+          coalesceKind = null;
+          coalesceBuf = "";
+          coalesceIdx = -1;
+          return;
+        }
+        if (coalesceKind === "thinking") {
+          stream.push({
+            type: "thinking_delta",
+            contentIndex: coalesceIdx,
+            delta: coalesceBuf,
+            partial: output,
+          });
+          emittedThinkingDeltas += 1;
+        } else {
+          stream.push({
+            type: "text_delta",
+            contentIndex: coalesceIdx,
+            delta: coalesceBuf,
+            partial: output,
+          });
+          emittedTextDeltas += 1;
+        }
+        coalesceKind = null;
+        coalesceBuf = "";
+        coalesceIdx = -1;
+      };
+
+      const queueDelta = (kind: CoalesceKind, idx: number, delta: string) => {
+        if (coalesceKind && (coalesceKind !== kind || coalesceIdx !== idx)) {
+          flushCoalesced();
+        }
+        coalesceKind = kind;
+        coalesceIdx = idx;
+        coalesceBuf += delta;
+        if (!coalesceTimer) {
+          coalesceTimer = setTimeout(() => {
+            coalesceTimer = null;
+            flushCoalesced();
+          }, STREAM_COALESCE_MS);
+        }
+      };
+
+      const endThinkingBlock = () => {
+        if (!thinkingStarted) return;
+        flushCoalesced();
+        stream.push({
+          type: "thinking_end",
+          contentIndex: thinkingIdx,
+          content: (output.content[thinkingIdx] as any).thinking,
+          partial: output,
+        });
+        thinkingStarted = false;
+      };
+
+      const endTextBlock = () => {
+        if (!textStarted) return;
+        flushCoalesced();
+        stream.push({
+          type: "text_end",
+          contentIndex: textIdx,
+          content: (output.content[textIdx] as any).text,
+          partial: output,
+        });
+        textStarted = false;
+      };
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;
@@ -100,13 +199,19 @@ export function streamKiroAcp(
           const text = (update.content as any)?.text;
           const messageId = typeof update.messageId === "string" ? update.messageId : undefined;
           if (text) {
-            if (textStarted) {
-              stream.push({ type: "text_end", contentIndex: textIdx, content: (output.content[textIdx] as any).text, partial: output });
-              textStarted = false;
+            if (firstThinkingAt == null) {
+              firstThinkingAt = Date.now();
+              log("timing first thinking", {
+                session: session.id,
+                ttftMs: firstThinkingAt - turnStartedAt,
+                sincePromptMs: firstThinkingAt - promptReadyAt,
+              });
             }
+            thinkingChars += text.length;
+            thinkingChunks += 1;
+            if (textStarted) endTextBlock();
             if (thinkingStarted && messageId && thinkingMessageId && messageId !== thinkingMessageId) {
-              stream.push({ type: "thinking_end", contentIndex: thinkingIdx, content: (output.content[thinkingIdx] as any).thinking, partial: output });
-              thinkingStarted = false;
+              endThinkingBlock();
             }
             if (!thinkingStarted) {
               output.content.push({ type: "thinking", thinking: "" } as any);
@@ -118,19 +223,26 @@ export function streamKiroAcp(
               thinkingMessageId = messageId;
             }
             (output.content[thinkingIdx] as any).thinking += text;
-            stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta: text, partial: output });
+            queueDelta("thinking", thinkingIdx, text);
           }
         } else if (update.sessionUpdate === "agent_message_chunk") {
           const text = (update.content as any)?.text;
           const messageId = typeof update.messageId === "string" ? update.messageId : undefined;
           if (text) {
-            if (thinkingStarted) {
-              stream.push({ type: "thinking_end", contentIndex: thinkingIdx, content: (output.content[thinkingIdx] as any).thinking, partial: output });
-              thinkingStarted = false;
+            if (firstTextAt == null) {
+              firstTextAt = Date.now();
+              log("timing first text", {
+                session: session.id,
+                ttftMs: firstTextAt - turnStartedAt,
+                sincePromptMs: firstTextAt - promptReadyAt,
+                sinceThinkingMs: firstThinkingAt != null ? firstTextAt - firstThinkingAt : null,
+              });
             }
+            textChars += text.length;
+            textChunks += 1;
+            if (thinkingStarted) endThinkingBlock();
             if (textStarted && messageId && textMessageId && messageId !== textMessageId) {
-              stream.push({ type: "text_end", contentIndex: textIdx, content: (output.content[textIdx] as any).text, partial: output });
-              textStarted = false;
+              endTextBlock();
             }
             if (!textStarted) {
               output.content.push({ type: "text", text: "" });
@@ -142,7 +254,7 @@ export function streamKiroAcp(
               textMessageId = messageId;
             }
             (output.content[textIdx] as any).text += text;
-            stream.push({ type: "text_delta", contentIndex: textIdx, delta: text, partial: output });
+            queueDelta("text", textIdx, text);
           }
         }
       };
@@ -216,14 +328,8 @@ export function streamKiroAcp(
 
         const unemittedToolCalls = () => [...session.pendingToolCalls.values()].filter((call) => !call.emitted);
         const closeOpenBlocks = () => {
-          if (thinkingStarted) {
-            stream.push({ type: "thinking_end", contentIndex: thinkingIdx, content: (output.content[thinkingIdx] as any).thinking, partial: output });
-            thinkingStarted = false;
-          }
-          if (textStarted) {
-            stream.push({ type: "text_end", contentIndex: textIdx, content: (output.content[textIdx] as any).text, partial: output });
-            textStarted = false;
-          }
+          endThinkingBlock();
+          endTextBlock();
         };
 
         const flushToolCalls = () => {
@@ -255,6 +361,15 @@ export function streamKiroAcp(
         };
 
         session.onToolCallFromBridge = (call) => {
+          if (firstToolAt == null) {
+            firstToolAt = Date.now();
+            log("timing first tool", {
+              session: session.id,
+              sinceTurnMs: firstToolAt - turnStartedAt,
+              sincePromptMs: firstToolAt - promptReadyAt,
+              toolName: call.toolName,
+            });
+          }
           log("tool call queued", { session: session.id, callId: call.callId, toolName: call.toolName });
           scheduleToolFlush();
         };
@@ -282,15 +397,37 @@ export function streamKiroAcp(
       });
 
       session.updateHandler = null;
+      endThinkingBlock();
+      endTextBlock();
 
-      if (thinkingStarted) {
-        stream.push({ type: "thinking_end", contentIndex: thinkingIdx, content: (output.content[thinkingIdx] as any).thinking, partial: output });
-      }
-      if (textStarted) {
-        stream.push({ type: "text_end", contentIndex: textIdx, content: (output.content[textIdx] as any).text, partial: output });
-      }
-
-      log("outcome", { session: session.id, outcome, gen, streamGen: session.streamGen });
+      const turnMs = msSince(turnStartedAt);
+      const streamMs = Math.max(0, turnMs - (promptReadyAt - turnStartedAt));
+      log("outcome", {
+        session: session.id,
+        outcome,
+        gen,
+        streamGen: session.streamGen,
+        timing: {
+          turnMs,
+          ensureStartedMs: ensuredAt - turnStartedAt,
+          promptReadyMs: promptReadyAt - turnStartedAt,
+          ttftThinkingMs: firstThinkingAt != null ? firstThinkingAt - turnStartedAt : null,
+          ttftTextMs: firstTextAt != null ? firstTextAt - turnStartedAt : null,
+          firstToolMs: firstToolAt != null ? firstToolAt - turnStartedAt : null,
+          thinkingChars,
+          textChars,
+          thinkingChunks,
+          textChunks,
+          emittedThinkingDeltas,
+          emittedTextDeltas,
+          avgThinkingChunkChars: thinkingChunks ? Math.round(thinkingChars / thinkingChunks) : null,
+          avgTextChunkChars: textChunks ? Math.round(textChars / textChunks) : null,
+          avgEmittedThinkingChars: emittedThinkingDeltas ? Math.round(thinkingChars / emittedThinkingDeltas) : null,
+          avgEmittedTextChars: emittedTextDeltas ? Math.round(textChars / emittedTextDeltas) : null,
+          coalesceMs: STREAM_COALESCE_MS,
+          streamMs,
+        },
+      });
 
       if (outcome === "toolUse") {
         output.stopReason = "toolUse";

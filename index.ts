@@ -1,13 +1,13 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 import { discoverKiroModels, KIRO_MODELS, type KiroModelConfig } from "./models.ts";
-import { log } from "./logging.ts";
+import { LOG_FILE, log } from "./logging.ts";
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
 import { stopAllSessions } from "./session-manager.ts";
 import { streamKiroAcp } from "./stream.ts";
 
 export default function (pi: ExtensionAPI) {
-	log("extension loaded", { pid: process.pid, models: KIRO_MODELS.length });
+	log("extension loaded", { pid: process.pid, models: KIRO_MODELS.length, logFile: LOG_FILE });
 	registerKiroProvider(pi, KIRO_MODELS);
 	void refreshKiroModels(pi);
 
