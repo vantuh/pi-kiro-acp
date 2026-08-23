@@ -8,6 +8,7 @@ import {
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage, lastUserMessage } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
+import { createNativeToolMirror } from "./native-tool-mirror.ts";
 import {
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
@@ -23,9 +24,11 @@ type MirrorUi = { setWorkingMessage(message?: string): void };
 
 /**
  * Phase 4: mirror Kiro's native (non-pi_host) tool activity into pi as
- * display-only records so the user sees work happening even though pi does not
- * execute those tools. Never emits toolcall_* into the stream (that would make
- * pi try to execute the tool). Disable with PI_KIRO_ACP_MIRROR=0.
+ * display-only thinking blocks so they interleave with assistant text.
+ * Each finished tool is emitted as one self-contained ASCII frame (| and -),
+ * never as a real toolcall_* (that would make pi execute it).
+ * Disable with PI_KIRO_ACP_MIRROR=0.
+ * Hidden if the user toggles hide-thinking.
  */
 const MIRROR_NATIVE_TOOLS = process.env.PI_KIRO_ACP_MIRROR !== "0";
 
@@ -149,49 +152,32 @@ export function streamKiroAcp(
         textStarted = false;
       };
 
-      const nativeToolMirror = new Map<string, { title: string; text: string }>();
       const mirrorUi = MIRROR_NATIVE_TOOLS ? getUi?.() : undefined;
-      const mirrorNativeToolUpdate = (update: any) => {
-        const toolCallId = update.toolCallId;
-        if (typeof toolCallId !== "string") return;
-        if (update.sessionUpdate === "tool_call") {
-          // pi_host-forwarded tools already render via real pi execution; only
-          // mirror Kiro's native tools, which carry no mcpServerName.
-          if (update._meta?.kiro?.mcpServerName) return;
-          const title = typeof update.title === "string" ? update.title : (update._meta?.kiro?.toolName ?? "tool");
-          nativeToolMirror.set(toolCallId, { title, text: "" });
-          mirrorUi?.setWorkingMessage(`🔧 ${title}`);
-          return;
+
+      const pushThinkingDelta = (delta: string) => {
+        if (!delta) return;
+        if (textStarted) endTextBlock();
+        if (!thinkingStarted) {
+          output.content.push({ type: "thinking", thinking: "" } as any);
+          thinkingIdx = output.content.length - 1;
+          stream.push({ type: "thinking_start", contentIndex: thinkingIdx, partial: output });
+          thinkingStarted = true;
+          thinkingMessageId = undefined;
         }
-        const tracked = nativeToolMirror.get(toolCallId);
-        if (!tracked) return;
-        const content = update.content;
-        if (Array.isArray(content)) {
-          for (const block of content) {
-            const text = block?.content?.text;
-            if (typeof text === "string") tracked.text += text;
-          }
-        }
-        if (update.status === "completed" || update.status === "failed") {
-          nativeToolMirror.delete(toolCallId);
-          const body = tracked.text.trim();
-          pi.sendMessage(
-            {
-              customType: "kiro_native_tool",
-              display: true,
-              content: body ? `🔧 ${tracked.title}\n${body}` : `🔧 ${tracked.title}`,
-              details: { title: tracked.title, status: update.status },
-            },
-            { triggerTurn: false },
-          );
-          if (nativeToolMirror.size === 0) mirrorUi?.setWorkingMessage();
-        }
+        (output.content[thinkingIdx] as any).thinking += delta;
+        stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta, partial: output });
       };
+
+      const nativeToolMirror = createNativeToolMirror({
+        pushThinking: pushThinkingDelta,
+        endThinking: endThinkingBlock,
+        setWorkingMessage: (message) => mirrorUi?.setWorkingMessage(message),
+      });
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;
         if (MIRROR_NATIVE_TOOLS && (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update")) {
-          mirrorNativeToolUpdate(update);
+          nativeToolMirror.update(update);
           return;
         }
         if (update.sessionUpdate === "agent_thought_chunk") {
@@ -399,8 +385,7 @@ export function streamKiroAcp(
 
       session.updateHandler = null;
       if (MIRROR_NATIVE_TOOLS) {
-        nativeToolMirror.clear();
-        mirrorUi?.setWorkingMessage();
+        nativeToolMirror.flush();
       }
       endThinkingBlock();
       endTextBlock();
