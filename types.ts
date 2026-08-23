@@ -1,5 +1,4 @@
 import type { ChildProcess } from "node:child_process";
-import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import type { Interface as ReadlineInterface } from "node:readline";
 import type { AssistantMessage, Context, Model, SimpleStreamOptions } from "@earendil-works/pi-ai";
 
@@ -56,11 +55,6 @@ export interface StreamRequest {
   output: AssistantMessage;
 }
 
-export interface IpcRequestHandlerArgs {
-  req: IncomingMessage;
-  res: ServerResponse;
-}
-
 export interface AcpSessionStateFields {
   id: string;
   cwd: string;
@@ -72,10 +66,8 @@ export interface AcpSessionStateFields {
   systemPromptHash: string | null;
   currentModelId: string | null;
   currentEffort: "low" | "medium" | "high" | "xhigh" | "max" | null;
-  ipcServer: Server | null;
-  ipcPort: number | null;
-  ipcSecret: string;
-  toolsFilePath: string | null;
+  toolBridge: import("./tool-bridge.ts").ToolBridge | null;
+  catalogProvider: (() => import("./tool-catalog.ts").ForwardedToolCatalog) | null;
   agentConfigPath: string | null;
   agentName: string;
   started: boolean;

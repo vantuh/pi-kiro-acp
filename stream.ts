@@ -5,6 +5,7 @@ import {
   type SimpleStreamOptions,
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage, lastUserMessage } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import {
@@ -14,6 +15,7 @@ import {
   savePersistedKiroSession,
 } from "./session-persistence.ts";
 import { buildPromptParts, toKiroEffort } from "./session.ts";
+import { buildForwardedToolCatalog } from "./tool-catalog.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
 /**
@@ -24,6 +26,7 @@ import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 const TOOL_CALL_DEBOUNCE_MS = 0;
 
 export function streamKiroAcp(
+  pi: ExtensionAPI,
   model: Model<any>,
   context: Context,
   options?: SimpleStreamOptions,
@@ -46,7 +49,8 @@ export function streamKiroAcp(
       const routed = await routeSession(context, options);
       const session = routed.session;
       session.lastUsedAt = Date.now();
-      await session.ensureStarted(context.tools, toKiroEffort(options?.reasoning));
+      const catalogProvider = () => buildForwardedToolCatalog(pi.getAllTools(), pi.getActiveTools());
+      await session.ensureStarted(catalogProvider, toKiroEffort(options?.reasoning));
       const ensuredAt = Date.now();
 
       log("streamSimple called", {
@@ -81,7 +85,6 @@ export function streamKiroAcp(
           {
             expectedHistoryFingerprint: prefixFingerprint,
             replayUserMessage: replayPrompt.userMessage,
-            tools: context.tools,
           },
         );
       }

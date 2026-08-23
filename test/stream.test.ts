@@ -32,7 +32,8 @@ async function main() {
 	};
 
 	try {
-		const stream = streamKiroAcp(model, context, {});
+		const pi = { getAllTools: () => [], getActiveTools: () => [] } as any;
+		const stream = streamKiroAcp(pi, model, context, {});
 		let textContent = "";
 		let gotStart = false;
 		let gotDone = false;

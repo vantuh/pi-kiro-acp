@@ -1,25 +1,12 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
-import {
-	createServer,
-	type IncomingMessage,
-	type Server,
-	type ServerResponse,
-} from "node:http";
 import { createHash, randomBytes } from "node:crypto";
-import {
-	mkdirSync,
-	writeFileSync,
-	unlinkSync,
-	rmSync,
-	renameSync,
-} from "node:fs";
-import { dirname, join } from "node:path";
+import { mkdirSync, writeFileSync, unlinkSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import {
 	createInterface,
 	type Interface as ReadlineInterface,
 } from "node:readline";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { buildConversationPrompt, lastUserMessage } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
@@ -28,6 +15,14 @@ import {
 	clearPersistedKiroSession,
 	loadPersistedKiroSession,
 } from "./session-persistence.ts";
+import {
+	startToolBridge,
+	type ToolBridge,
+	type ToolBridgeCall,
+	type ToolBridgeContent,
+	type ToolBridgeResult,
+} from "./tool-bridge.ts";
+import type { ForwardedToolCatalog } from "./tool-catalog.ts";
 import type {
 	PendingRpc,
 	PendingToolCall,
@@ -40,10 +35,17 @@ import type {
 interface StartPromptOptions {
 	expectedHistoryFingerprint?: string;
 	replayUserMessage?: string;
-	tools?: Context["tools"];
 }
 
 type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
+/** Builds the current extension-only tool catalog exposed to Kiro via pi_host. */
+export type CatalogProvider = () => ForwardedToolCatalog;
+
+/** Native Kiro tools Kiro executes directly (the fast path). Pi extension tools
+ * are forwarded through the pi_host MCP bridge instead. Kiro's native
+ * web_search / web_fetch are intentionally excluded so pi's web tools win. */
+const NATIVE_KIRO_TOOLS = ["fs_read", "fs_write", "execute_bash", "glob", "grep"];
 
 /** Process-wide: kiro-cli settings are global; configure once per pi process.
  * `Ready` flips true after the first success; `InFlight` lets concurrent cold
@@ -75,10 +77,9 @@ export class AcpSession {
 	systemPromptHash: string | null = null;
 	currentModelId: string | null = null;
 	currentEffort: KiroEffort | null = null;
-	ipcServer: Server | null = null;
-	ipcPort: number | null = null;
-	readonly ipcSecret = randomBytes(16).toString("hex");
-	toolsFilePath: string | null = null;
+	toolBridge: ToolBridge | null = null;
+	catalogProvider: CatalogProvider | null = null;
+	private bridgeCallSeq = 0;
 	agentRootPath: string | null = null;
 	agentConfigPath: string | null = null;
 	readonly agentName = `pi-kiro-${randomBytes(4).toString("hex")}`;
@@ -298,10 +299,11 @@ export class AcpSession {
 	}
 
 	async ensureStarted(
-		tools: Context["tools"],
+		catalogProvider: CatalogProvider,
 		effort: KiroEffort | null = this.currentEffort,
 	): Promise<void> {
 		this.lastUsedAt = Date.now();
+		this.catalogProvider = catalogProvider;
 		if (this.started && this.currentEffort !== effort) {
 			if (this.busy) {
 				log("deferring effort change while session is busy", {
@@ -319,15 +321,13 @@ export class AcpSession {
 			}
 		}
 		if (this.started) {
-			this.writeTools(tools);
 			return;
 		}
 
 		const ensureStartedAt = Date.now();
 		this.currentEffort = effort;
-		await this.startIpcServer();
-		const ipcReadyAt = Date.now();
-		this.writeTools(tools);
+		await this.startBridge();
+		const bridgeReadyAt = Date.now();
 		this.writeAgentCfg();
 
 		// Overlap with spawn/initialize — setting is global and only needed before
@@ -381,13 +381,13 @@ export class AcpSession {
 		this.agentCapabilities = init?.agentCapabilities || null;
 		log("session initialized", {
 			session: this.id,
-			ipcPort: this.ipcPort,
+			bridgePort: this.toolBridge?.port ?? null,
 			pid: this.proc?.pid,
 			loadSession: this.supportsLoadSession(),
 			resumeSession: this.supportsResumeSession(),
 			timing: {
-				ipcMs: ipcReadyAt - ensureStartedAt,
-				preSpawnSetupMs: spawnAt - ipcReadyAt,
+				bridgeMs: bridgeReadyAt - ensureStartedAt,
+				preSpawnSetupMs: spawnAt - bridgeReadyAt,
 				mcpCfgMs,
 				initializeMs: initDoneAt - spawnAt,
 				totalMs: msSince(ensureStartedAt),
@@ -463,7 +463,7 @@ export class AcpSession {
 		}
 
 		if (persisted && canUsePersisted) {
-			const restored = await this.tryRestorePersistedSession(persisted.kiroSessionId, options.tools);
+			const restored = await this.tryRestorePersistedSession(persisted.kiroSessionId);
 			if (restored) {
 				this.currentModelId = persisted.modelId || null;
 				shouldReplayHistory = false;
@@ -473,7 +473,7 @@ export class AcpSession {
 		if (!this.acpSessionId) {
 			const result = (await this.rpcSend("session/new", {
 				cwd: this.cwd,
-				mcpServers: [],
+				mcpServers: this.mcpServersConfig(),
 			})) as any;
 			this.acpSessionId = result.sessionId;
 			this.systemPromptHash = null;
@@ -487,7 +487,7 @@ export class AcpSession {
 		return shouldReplayHistory;
 	}
 
-	private async tryRestorePersistedSession(kiroSessionId: string, tools: Context["tools"] | undefined): Promise<boolean> {
+	private async tryRestorePersistedSession(kiroSessionId: string): Promise<boolean> {
 		const attempts = [
 			{ method: "session/resume" as const, enabled: this.supportsResumeSession() },
 			{ method: "session/load" as const, enabled: this.supportsLoadSession() },
@@ -499,7 +499,7 @@ export class AcpSession {
 				await this.rpcSend(attempt.method, {
 					sessionId: kiroSessionId,
 					cwd: this.cwd,
-					mcpServers: [],
+					mcpServers: this.mcpServersConfig(),
 				}, 15000);
 				this.acpSessionId = kiroSessionId;
 				// Re-bind current pi instructions after resume/load.
@@ -521,7 +521,7 @@ export class AcpSession {
 				});
 				if (!isLastAttempt) continue;
 				if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
-				await this.restartAfterRestoreFailure(tools);
+				await this.restartAfterRestoreFailure();
 				return false;
 			}
 		}
@@ -535,11 +535,12 @@ export class AcpSession {
 		return false;
 	}
 
-	private async restartAfterRestoreFailure(tools: Context["tools"] | undefined): Promise<void> {
-		if (!this.started) return;
+	private async restartAfterRestoreFailure(): Promise<void> {
+		if (!this.started || !this.catalogProvider) return;
 		log("restarting kiro process after failed restore", { session: this.id });
+		const catalogProvider = this.catalogProvider;
 		await this.stop();
-		await this.ensureStarted(tools);
+		await this.ensureStarted(catalogProvider);
 	}
 
 	async startPrompt(
@@ -656,16 +657,9 @@ export class AcpSession {
 		this.systemPromptHash = null;
 		this.currentModelId = null;
 
-		const server = this.ipcServer;
-		if (server) server.close(() => {});
-		this.ipcServer = null;
-		this.ipcPort = null;
-		if (this.toolsFilePath) {
-			try {
-				unlinkSync(this.toolsFilePath);
-			} catch {}
-			this.toolsFilePath = null;
-		}
+		const bridge = this.toolBridge;
+		this.toolBridge = null;
+		if (bridge) void bridge.close().catch(() => {});
 		if (this.agentConfigPath) {
 			try {
 				unlinkSync(this.agentConfigPath);
@@ -725,16 +719,10 @@ export class AcpSession {
 		}
 		this.rpcPending.clear();
 
-		if (this.ipcServer) {
-			await new Promise<void>((r) => this.ipcServer!.close(() => r()));
-			this.ipcServer = null;
-			this.ipcPort = null;
-		}
-		if (this.toolsFilePath) {
-			try {
-				unlinkSync(this.toolsFilePath);
-			} catch {}
-			this.toolsFilePath = null;
+		if (this.toolBridge) {
+			const bridge = this.toolBridge;
+			this.toolBridge = null;
+			await bridge.close().catch(() => {});
 		}
 		if (this.agentConfigPath) {
 			try {
@@ -890,142 +878,83 @@ export class AcpSession {
 		return nameMatches.length === 1 ? nameMatches[0] : null;
 	}
 
-	private async startIpcServer(): Promise<void> {
-		this.ipcServer = createServer(async (req, res) =>
-			this.handleIpcRequest(req, res),
-		);
-
-		await new Promise<void>((resolve) => {
-			this.ipcServer!.listen(0, "127.0.0.1", () => {
-				this.ipcPort = (this.ipcServer!.address() as any).port;
-				resolve();
-			});
+	private async startBridge(): Promise<void> {
+		this.toolBridge = await startToolBridge({
+			catalog: () => this.currentCatalog(),
+			onToolCall: (call) => this.handleBridgeToolCall(call),
 		});
 	}
 
-	private async handleIpcRequest(
-		req: IncomingMessage,
-		res: ServerResponse,
-	): Promise<void> {
-		try {
-			if (req.method === "GET" && req.url === "/health") {
-				return httpRespond(res, 200, { status: "ok" });
-			}
-			if (req.headers.authorization !== `Bearer ${this.ipcSecret}`) {
-				return httpRespond(res, 401, { error: "Unauthorized" });
-			}
-			if (req.method === "POST" && req.url === "/tool/pending") {
-				const body = JSON.parse(await readBody(req));
-				const { callId: rawCallId, toolName, args = {} } = body;
-				const publicCallId = `${this.id}-${rawCallId}`;
-				const receivedAt = Date.now();
-
-				const resultPromise = new Promise<{
-					result: string;
-					isError?: boolean;
-					content?: ToolResultContentBlock[];
-				}>((resolve) => {
-					const call: PendingToolCall = {
-						callId: publicCallId,
-						rawCallId,
-						toolName,
-						args,
-						resolve,
-						receivedAt,
-					};
-					this.pendingToolCalls.set(publicCallId, call);
-					log("IPC tool call received", {
-						session: this.id,
-						callId: publicCallId,
-						rawCallId,
-						toolName,
-						argsKeys: Object.keys(args),
-					});
-					this.onToolCallFromBridge?.(call);
-				});
-
-				const result = await resultPromise;
-				httpRespond(res, 200, {
-					status: result.isError ? "error" : "success",
-					[result.isError ? "error" : "result"]: result.result,
-					...(result.content?.length ? { content: result.content } : {}),
-				});
-				log("IPC tool call completed", {
-					session: this.id,
-					callId: publicCallId,
-					toolName,
-					isError: !!result.isError,
-					roundtripMs: msSince(receivedAt),
-				});
-				return;
-			}
-			httpRespond(res, 404, { error: "Not found" });
-		} catch (error) {
-			log("IPC error", {
-				session: this.id,
-				error: error instanceof Error ? error.message : String(error),
-			});
-			if (!res.headersSent) httpRespond(res, 500, { error: "Internal error" });
-		}
+	private currentCatalog(): ForwardedToolCatalog {
+		if (!this.catalogProvider) throw new Error("kiro-acp: catalog provider not set");
+		return this.catalogProvider();
 	}
 
-	private static readonly EXCLUDED_TOOLS = new Set([
-		"Agent",
-		"get_subagent_result",
-		"steer_subagent",
-	]);
+	private mcpServersConfig(): Array<{
+		type: "http";
+		name: string;
+		url: string;
+		headers: Array<{ name: string; value: string }>;
+	}> {
+		if (!this.toolBridge) return [];
+		return [
+			{
+				type: "http",
+				name: "pi_host",
+				url: this.toolBridge.url,
+				headers: [{ name: "Authorization", value: `Bearer ${this.toolBridge.token}` }],
+			},
+		];
+	}
 
-	private writeTools(tools: Context["tools"]): void {
-		const dir = join(tmpdir(), "kiro-acp");
-		mkdirSync(dir, { recursive: true, mode: 0o700 });
-		const filePath = join(dir, `tools-${this.id}.json`);
-
-		const mcpTools = (tools || [])
-			.filter((t) => !AcpSession.EXCLUDED_TOOLS.has(t.name))
-			.map((t) => ({
-				name: t.name,
-				description: t.description || "",
-				inputSchema: t.parameters || { type: "object", properties: {} },
-			}));
-
-		const tmp = `${filePath}.${process.pid}.tmp`;
-		writeFileSync(
-			tmp,
-			JSON.stringify(
-				{
-					tools: mcpTools,
-					cwd: this.cwd,
-					ipcPort: this.ipcPort,
-					ipcSecret: this.ipcSecret,
+	/** Bridge an MCP tools/call from Kiro into Pi's outer tool turn using the
+	 * existing pending-call machinery, then map Pi's result back to MCP. The
+	 * bridge serializes calls (one in-flight), so at most one pending per turn. */
+	private handleBridgeToolCall(call: ToolBridgeCall): Promise<ToolBridgeResult> {
+		const publicCallId = `${this.id}-${++this.bridgeCallSeq}`;
+		const receivedAt = Date.now();
+		return new Promise<ToolBridgeResult>((resolveResult) => {
+			if (call.signal.aborted) {
+				resolveResult(errorToolResult("Kiro tool call aborted before dispatch"));
+				return;
+			}
+			const onAbort = () => {
+				const aborted = this.pendingToolCalls.get(publicCallId);
+				if (!aborted) return;
+				this.pendingToolCalls.delete(publicCallId);
+				resolveResult(errorToolResult("Kiro tool call aborted"));
+			};
+			call.signal.addEventListener("abort", onAbort, { once: true });
+			const pending: PendingToolCall = {
+				callId: publicCallId,
+				rawCallId: String(call.requestId),
+				toolName: call.piName,
+				args: call.arguments,
+				receivedAt,
+				resolve: (result) => {
+					call.signal.removeEventListener("abort", onAbort);
+					resolveResult(toToolBridgeResult(result));
 				},
-				null,
-				2,
-			),
-			{ mode: 0o600 },
-		);
-		renameSync(tmp, filePath);
-		this.toolsFilePath = filePath;
+			};
+			this.pendingToolCalls.set(publicCallId, pending);
+			log("bridge tool call received", {
+				session: this.id,
+				callId: publicCallId,
+				kiroName: call.kiroName,
+				toolName: call.piName,
+				argsKeys: Object.keys(call.arguments),
+			});
+			this.onToolCallFromBridge?.(pending);
+		});
 	}
 
 	private writeAgentCfg(): void {
-		const bridgePath = join(
-			dirname(fileURLToPath(import.meta.url)),
-			"kiro-acp-bridge.mjs",
-		);
-		const mcpName = `${this.agentName}-tools`;
 		const config = {
 			name: this.agentName,
-			tools: [`@${mcpName}`],
-			allowedTools: [`@${mcpName}`],
+			tools: [...NATIVE_KIRO_TOOLS, "@pi_host"],
+			allowedTools: [...NATIVE_KIRO_TOOLS, "@pi_host"],
 			includeMcpJson: false,
-			mcpServers: {
-				[mcpName]: {
-					command: "node",
-					args: [bridgePath, "--tools", this.toolsFilePath!],
-					cwd: this.cwd,
-					timeout: 1800000,
-				},
-			},
+			mcpServers: {},
 			prompt:
 				"You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives.",
 		};
@@ -1038,22 +967,19 @@ export class AcpSession {
 	}
 }
 
-function readBody(req: IncomingMessage): Promise<string> {
-	return new Promise((resolve, reject) => {
-		const chunks: Buffer[] = [];
-		req.on("data", (c: Buffer) => chunks.push(c));
-		req.on("end", () => resolve(Buffer.concat(chunks).toString()));
-		req.on("error", reject);
-	});
+function errorToolResult(text: string): ToolBridgeResult {
+	return { content: [{ type: "text", text }], isError: true };
 }
 
-function httpRespond(res: ServerResponse, status: number, body: unknown): void {
-	const json = JSON.stringify(body);
-	res.writeHead(status, {
-		"Content-Type": "application/json",
-		"Content-Length": Buffer.byteLength(json),
-	});
-	res.end(json);
+function toToolBridgeResult(result: {
+	result: string;
+	isError?: boolean;
+	content?: ToolResultContentBlock[];
+}): ToolBridgeResult {
+	const content: ToolBridgeContent[] = result.content?.length
+		? result.content.map((block) => ({ ...block }))
+		: [{ type: "text", text: result.result }];
+	return result.isError ? { content, isError: true } : { content };
 }
 
 function hashSystemPrompt(systemPrompt: string): string {

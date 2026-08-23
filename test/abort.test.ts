@@ -37,7 +37,8 @@ async function main() {
 
 	try {
 		const ac = new AbortController();
-		const stream = streamKiroAcp(model, context, { signal: ac.signal });
+		const pi = { getAllTools: () => [], getActiveTools: () => [] } as any;
+		const stream = streamKiroAcp(pi, model, context, { signal: ac.signal });
 		const eventTypes: string[] = [];
 		let gotDelta = false;
 		let streamEnded = false;

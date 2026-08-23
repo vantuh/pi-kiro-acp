@@ -29,7 +29,7 @@ function registerKiroProvider(pi: ExtensionAPI, models: KiroModelConfig[]): void
 		apiKey: "unused",
 		api: "kiro-acp-api" as any,
 		models,
-		streamSimple: streamKiroAcp,
+		streamSimple: (model, context, options) => streamKiroAcp(pi, model, context, options),
 	});
 }
 
