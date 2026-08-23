@@ -22,10 +22,6 @@ import { pruneIdleSessions, routeSession } from "./session-manager.ts";
  * (kiro often fires parallel MCP calls within one ms), without the old 50ms stall.
  */
 const TOOL_CALL_DEBOUNCE_MS = 0;
-/** Batch tiny ACP deltas before pushing to pi (smoother TUI; ~1 frame). */
-const STREAM_COALESCE_MS = 24;
-
-type CoalesceKind = "thinking" | "text";
 
 export function streamKiroAcp(
   model: Model<any>,
@@ -116,62 +112,8 @@ export function streamKiroAcp(
       let emittedThinkingDeltas = 0;
       let emittedTextDeltas = 0;
 
-      let coalesceKind: CoalesceKind | null = null;
-      let coalesceBuf = "";
-      let coalesceIdx = -1;
-      let coalesceTimer: ReturnType<typeof setTimeout> | null = null;
-
-      const flushCoalesced = () => {
-        if (coalesceTimer) {
-          clearTimeout(coalesceTimer);
-          coalesceTimer = null;
-        }
-        if (!coalesceKind || !coalesceBuf) {
-          coalesceKind = null;
-          coalesceBuf = "";
-          coalesceIdx = -1;
-          return;
-        }
-        if (coalesceKind === "thinking") {
-          stream.push({
-            type: "thinking_delta",
-            contentIndex: coalesceIdx,
-            delta: coalesceBuf,
-            partial: output,
-          });
-          emittedThinkingDeltas += 1;
-        } else {
-          stream.push({
-            type: "text_delta",
-            contentIndex: coalesceIdx,
-            delta: coalesceBuf,
-            partial: output,
-          });
-          emittedTextDeltas += 1;
-        }
-        coalesceKind = null;
-        coalesceBuf = "";
-        coalesceIdx = -1;
-      };
-
-      const queueDelta = (kind: CoalesceKind, idx: number, delta: string) => {
-        if (coalesceKind && (coalesceKind !== kind || coalesceIdx !== idx)) {
-          flushCoalesced();
-        }
-        coalesceKind = kind;
-        coalesceIdx = idx;
-        coalesceBuf += delta;
-        if (!coalesceTimer) {
-          coalesceTimer = setTimeout(() => {
-            coalesceTimer = null;
-            flushCoalesced();
-          }, STREAM_COALESCE_MS);
-        }
-      };
-
       const endThinkingBlock = () => {
         if (!thinkingStarted) return;
-        flushCoalesced();
         stream.push({
           type: "thinking_end",
           contentIndex: thinkingIdx,
@@ -183,7 +125,6 @@ export function streamKiroAcp(
 
       const endTextBlock = () => {
         if (!textStarted) return;
-        flushCoalesced();
         stream.push({
           type: "text_end",
           contentIndex: textIdx,
@@ -223,7 +164,8 @@ export function streamKiroAcp(
               thinkingMessageId = messageId;
             }
             (output.content[thinkingIdx] as any).thinking += text;
-            queueDelta("thinking", thinkingIdx, text);
+            stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta: text, partial: output });
+            emittedThinkingDeltas += 1;
           }
         } else if (update.sessionUpdate === "agent_message_chunk") {
           const text = (update.content as any)?.text;
@@ -254,7 +196,8 @@ export function streamKiroAcp(
               textMessageId = messageId;
             }
             (output.content[textIdx] as any).text += text;
-            queueDelta("text", textIdx, text);
+            stream.push({ type: "text_delta", contentIndex: textIdx, delta: text, partial: output });
+            emittedTextDeltas += 1;
           }
         }
       };
@@ -422,9 +365,6 @@ export function streamKiroAcp(
           emittedTextDeltas,
           avgThinkingChunkChars: thinkingChunks ? Math.round(thinkingChars / thinkingChunks) : null,
           avgTextChunkChars: textChunks ? Math.round(textChars / textChunks) : null,
-          avgEmittedThinkingChars: emittedThinkingDeltas ? Math.round(thinkingChars / emittedThinkingDeltas) : null,
-          avgEmittedTextChars: emittedTextDeltas ? Math.round(textChars / emittedTextDeltas) : null,
-          coalesceMs: STREAM_COALESCE_MS,
           streamMs,
         },
       });
