@@ -1,5 +1,5 @@
 // Test: active extension-tool catalog filtering, aliases, and fingerprints.
-// Run: jiti test/catalog.test.ts
+// Run: test/run-all.sh test/catalog.test.ts
 
 import { createHash } from "node:crypto";
 import { buildForwardedToolCatalog, isKiroToolName } from "../tool-catalog.ts";

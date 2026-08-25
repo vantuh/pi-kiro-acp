@@ -1,5 +1,5 @@
 // Test: streamKiroAcp streams text from a real Kiro ACP session.
-// Run: jiti test/stream.test.ts
+// Run: test/run-all.sh test/stream.test.ts
 
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { streamKiroAcp } from "../stream.ts";

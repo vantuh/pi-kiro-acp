@@ -1,7 +1,6 @@
 // Test: markdown-safe rendering of native Kiro tools as thinking blocks.
-// Run: node --experimental-strip-types test/native-tool-frame.test.ts
-// Needs a node_modules symlink to pi's (gitignored, recreate after a node upgrade):
-//   ln -sfn "$(npm root -g)/@earendil-works/pi-coding-agent/node_modules" node_modules
+// Run: test/run-all.sh test/native-tool-frame.test.ts
+// (the runner resolves `marked` and pi packages from pi's own node_modules)
 
 import { marked } from "marked";
 import { nativeToolFrame } from "../native-tool-frame.ts";

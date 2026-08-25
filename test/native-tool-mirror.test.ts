@@ -1,7 +1,5 @@
 // Test: native Kiro tool mirroring — event ordering, abort flush, concurrency.
-// Run: node --experimental-strip-types test/native-tool-mirror.test.ts
-// Needs a node_modules symlink to pi's (gitignored, recreate after a node upgrade):
-//   ln -sfn "$(npm root -g)/@earendil-works/pi-coding-agent/node_modules" node_modules
+// Run: test/run-all.sh test/native-tool-mirror.test.ts
 
 import { createNativeToolMirror } from "../native-tool-mirror.ts";
 

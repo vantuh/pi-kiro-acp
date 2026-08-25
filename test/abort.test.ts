@@ -1,5 +1,5 @@
 // Test: streamKiroAcp handles AbortSignal without hanging.
-// Run: jiti test/abort.test.ts
+// Run: test/run-all.sh test/abort.test.ts
 
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { streamKiroAcp } from "../stream.ts";

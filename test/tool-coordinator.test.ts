@@ -1,5 +1,5 @@
 // Test: suspended Kiro-to-Pi handoff state machine.
-// Run: jiti test/tool-coordinator.test.ts
+// Run: test/run-all.sh test/tool-coordinator.test.ts
 
 import { KiroToolCoordinator } from "../tool-coordinator.ts";
 

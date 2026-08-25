@@ -1,5 +1,5 @@
 // Test: authenticated loopback Streamable HTTP MCP adapter.
-// Run: jiti test/tool-bridge.test.ts
+// Run: test/run-all.sh test/tool-bridge.test.ts
 
 import { request as httpRequest, type ClientRequest } from "node:http";
 import { buildForwardedToolCatalog } from "../tool-catalog.ts";
