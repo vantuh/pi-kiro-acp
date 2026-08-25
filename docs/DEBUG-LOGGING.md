@@ -32,7 +32,23 @@ tail -f "$LOG" | grep '"session":"abc123"'
 | Variable | Effect |
 |---|---|
 | `PI_KIRO_ACP_DEBUG=1` | Enables the log file above (`0`/unset = no logging at all) |
+| `PI_KIRO_ACP_VERBOSE=1..3` | Passes `-v`/`-vv`/`-vvv` to `kiro-cli acp`; its own logs land in the same file as `kiro log` |
 | `PI_KIRO_ACP_MIRROR=0` | Disables mirroring Kiro's native tool calls into the transcript |
+
+### kiro-cli's own verbosity
+
+kiro-cli writes `-v` output to **stdout — the same pipe as JSON-RPC** (there is no
+file-log or log-level env var for ACP mode). Non-JSON lines are therefore split out
+of the framing path and logged as `kiro log` with ANSI stripped. Two writers sharing
+one pipe can in principle interleave a large frame, so this stays off by default and
+is meant for a specific hunt:
+
+```sh
+PI_KIRO_ACP_VERBOSE=2 pi
+```
+
+Rough volume for one initialize + `session/new` cycle: `-v` ≈ 8 lines, `-vv` ≈ 20,
+`-vvv` ≈ 173 (adds HTTP/transport traces).
 
 ---
 
@@ -80,6 +96,7 @@ blocks in the transcript.
 | `tool call queued` | `{ session, callId, toolName }` | Tool call received from bridge |
 | `prompt done → stop` | `{ session }` | Prompt completed, no tool calls |
 | `prompt error → error` | `{ session, error }` | Prompt promise rejected |
+| `no active prompt → error` | `{ session, error }` | No prompt was in flight (process exited / session stopped) — turn fails instead of hanging |
 | `outcome` | `{ session, outcome, gen, streamGen, timing }` | Stream outcome + TTFT / chunk stats |
 | `image FUP: detected images in tool results` | `{ session, ... }` | Tool results carried images → follow-up prompt handoff |
 | `streamKiroAcp FATAL error` | `{ error }` | Uncaught exception in stream handler |
@@ -127,9 +144,11 @@ blocks in the transcript.
 | `rpc →` | `{ session, method, id, timeoutMs, pendingCount }` | RPC request sent |
 | `rpc ←` | `{ session, method, id, ms, hasError }` | RPC response received (`ms` = roundtrip) |
 | `RPC TIMEOUT` | `{ session, method, id, timeoutMs, remainingPending }` | RPC exceeded timeout (60s default) |
-| `stdout parse error` | `{ session, line }` | kiro-cli stdout is not valid JSON |
+| `stdout parse error` | `{ session, line }` | kiro-cli stdout is not valid JSON (truncated to 200 chars) |
+| `kiro log` | `{ session, text }` | Same, but with `PI_KIRO_ACP_VERBOSE` on: kiro-cli's own `-v` line, kept in full |
+| `stdout dispatch error` | `{ session, method, id, error }` | A consumer callback threw while handling a stdout message |
 | `orphan RPC response` | `{ session, id, hasError }` | RPC response with no pending request |
-| `kiro stderr` | `{ session, text }` | stderr from kiro-cli process |
+| `kiro stderr` | `{ session, text }` | stderr from kiro-cli process (one entry per line, ANSI stripped) |
 | `kiro exited` | `{ session, code, signal }` | kiro-cli process exited |
 | `cleanupAfterProcessExit` | `{ session, pendingRpcs, pendingToolCalls, hadActivePrompt }` | Cleanup after unexpected exit |
 | `stopping kiro session` | `{ session }` | stop() called |
