@@ -8,13 +8,26 @@
 у `session/new` як `type:"http"`; взяти детермінований aliasing імен tools.
 Не втратити фічі `kiro-acp`.
 
-## Статус (2026-08-25)
+## Статус (2026-08-25) — ЗАВЕРШЕНО
 
-Фази 0, 0b, 1, 2, 3, 4, 5, 6 — **зроблено**. Лишилась **Фаза 7** (прибирання мертвого коду
-+ фінальний смоук). Рішення зафіксовані в `adr/0001-in-process-http-mcp-tool-transport.md`.
-Відкриті пункти Фази 7: `tool-coordinator.ts` не використовується (Фаза 3 залишила
-`pendingToolCalls` у `session.ts`) — видалити разом із його тестом; смоук на 2–3 моделях;
-перевірка конкурентних сесій і портів на idle-prune та виході pi.
+Усі фази (0, 0b, 1–7) зроблено. Рішення зафіксовані в
+`adr/0001-in-process-http-mcp-tool-transport.md`.
+
+Фаза 7, підтвердження:
+- Мертвий код прибрано: `tool-coordinator.ts` (+ його тест) не використовувався, бо Фаза 3
+  залишила машинерію `pendingToolCalls` у `session.ts`; стале згадування `/tool/pending`
+  прибрано з `types.ts`.
+- Гейт завантаження (Ризик 2) — `test/extension-load.test.ts`: `index.ts` реєструє провайдер
+  `kiro-acp` з моделями і `streamSimple`, підписки `turn_start`/`message_end`/`session_shutdown`.
+- Смоук `claude-haiku-4.5`: нативний `execute_bash` дав рівно один дзеркальний thinking-блок
+  (`🔧 Running: echo …` + вивід), **0** `bridge tool call received`, **0** pi-toolCalls — цикл цілий.
+- Смоук `claude-opus-5`: `web_search` пройшов через `pi_host` (`callId: s-…-1`, `roundtripMs`
+  2255, `resultLen` 6141), pi виконав тул і Kiro продовжив до `outcome: stop`.
+- Порти: після кожного `-p` прогону bridge-порт звільнено; у `lsof` лишаються лише порти
+  живих pi-сесій (один на сесію), осиротілих немає.
+- **Не підтверджено живим смоуком:** `agent_thought_chunk` — ні `claude-opus-5`, ні
+  `deepseek-3.2` з `--thinking high` не прислали thought-чанків (`ttftThinkingMs: null`,
+  `thinkingChars: 0`), тож reasoning-UX перевірено лише юніт-тестами (`stream.test.ts`).
 
 ---
 

@@ -21,7 +21,7 @@ export interface PendingToolCall {
   args: Record<string, unknown>;
   resolve: (result: { result: string; isError?: boolean; content?: ToolResultContentBlock[] }) => void;
   emitted?: boolean;
-  /** Date.now() when bridge posted /tool/pending */
+  /** Date.now() when the pi_host bridge received Kiro's tools/call */
   receivedAt: number;
 }
 
