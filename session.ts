@@ -47,6 +47,16 @@ export type CatalogProvider = () => ForwardedToolCatalog;
  * web_search / web_fetch are intentionally excluded so pi's web tools win. */
 const NATIVE_KIRO_TOOLS = ["fs_read", "fs_write", "execute_bash", "glob", "grep"];
 
+/** kiro-cli `-v` repeat count from PI_KIRO_ACP_VERBOSE (0 = off, max 3). Its
+ * verbose output goes to stdout, the same pipe as JSON-RPC, so those lines are
+ * picked out of the framing path below. */
+const KIRO_VERBOSITY = Math.min(3, Math.max(0, Number(process.env.PI_KIRO_ACP_VERBOSE) || 0));
+
+/** kiro-cli colours its verbose output; keep the debug log readable. */
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
 /** Process-wide: kiro-cli settings are global; configure once per pi process.
  * `Ready` flips true after the first success; `InFlight` lets concurrent cold
  * starts share one settings call instead of each spawning their own. */
@@ -170,7 +180,10 @@ export class AcpSession {
 		try {
 			msg = JSON.parse(s);
 		} catch {
-			log("stdout parse error", { session: this.id, line: s.slice(0, 200) });
+			// With PI_KIRO_ACP_VERBOSE, kiro-cli's own -v logs land on this same
+			// stdout pipe; keep them in full instead of as truncated parse errors.
+			if (KIRO_VERBOSITY > 0) log("kiro log", { session: this.id, text: stripAnsi(s) });
+			else log("stdout parse error", { session: this.id, line: s.slice(0, 200) });
 			return;
 		}
 
@@ -360,6 +373,7 @@ export class AcpSession {
 		});
 		const args = ["acp", "--agent", this.agentName, "--trust-all-tools"];
 		if (this.currentEffort) args.push("--effort", this.currentEffort);
+		if (KIRO_VERBOSITY > 0) args.push(`-${"v".repeat(KIRO_VERBOSITY)}`);
 		const spawnAt = Date.now();
 		this.proc = spawn(
 			"kiro-cli",
@@ -372,12 +386,11 @@ export class AcpSession {
 
 		this.rl = createInterface({ input: this.proc.stdout! });
 		this.rl.on("line", (line) => this.handleStdoutLine(line));
-		this.proc.stderr?.on("data", (chunk) =>
-			log("kiro stderr", {
-				session: this.id,
-				text: String(chunk).slice(0, 1000),
-			}),
-		);
+		this.proc.stderr?.on("data", (chunk) => {
+			for (const text of String(chunk).split("\n")) {
+				if (text.trim()) log("kiro stderr", { session: this.id, text: stripAnsi(text) });
+			}
+		});
 
 		this.proc.on("exit", (code, signal) => {
 			log("kiro exited", { session: this.id, code, signal });
