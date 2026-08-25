@@ -381,6 +381,15 @@ export function streamKiroAcp(
             }
           },
         );
+
+        // No prompt in flight: settle now instead of awaiting a promise that never arrives.
+        if (!session.activePromptDone && !settled) {
+          if (!flushToolCalls()) {
+            promptError = session.lastPromptError ?? new Error("Kiro ACP session has no active prompt");
+            log("no active prompt → error", { session: session.id, error: promptError.message });
+            finish("error");
+          }
+        }
       });
 
       session.updateHandler = null;

@@ -91,6 +91,8 @@ export class AcpSession {
 	pendingToolCalls = new Map<string, PendingToolCall>();
 	onToolCallFromBridge: ((call: PendingToolCall) => void) | null = null;
 	activePromptDone: Promise<{ stopReason: string }> | null = null;
+	/** Why the last prompt failed, for streams that attach after activePromptDone was cleared. */
+	lastPromptError: Error | null = null;
 	streamGen = 0;
 	lastUsedAt = Date.now();
 
@@ -172,6 +174,21 @@ export class AcpSession {
 			return;
 		}
 
+		// Dispatch runs consumer callbacks synchronously inside readline's 'line'
+		// event; an escaping throw would kill the pi process.
+		try {
+			this.dispatchStdoutMessage(msg);
+		} catch (error) {
+			log("stdout dispatch error", {
+				session: this.id,
+				method: typeof msg?.method === "string" ? msg.method : undefined,
+				id: msg?.id,
+				error: error instanceof Error ? error.stack || error.message : String(error),
+			});
+		}
+	}
+
+	private dispatchStdoutMessage(msg: any): void {
 		const hasId = "id" in msg && msg.id != null;
 		const hasMethod = "method" in msg && typeof msg.method === "string";
 
@@ -590,7 +607,8 @@ export class AcpSession {
 		const prevSystemPromptHash = this.systemPromptHash;
 		if (includeSystem && systemHash) this.systemPromptHash = systemHash;
 
-		this.activePromptDone = (
+		this.lastPromptError = null;
+		const promptDone = (
 			this.rpcSend(
 				"session/prompt",
 				{
@@ -606,9 +624,14 @@ export class AcpSession {
 			(r: any) => ({ stopReason: r?.stopReason || "end_turn" }),
 			(e: Error) => {
 				this.systemPromptHash = prevSystemPromptHash;
+				this.lastPromptError = e;
 				throw e;
 			},
 		);
+		// Keep the rejection observed: Node turns an unobserved one into an
+		// uncaughtException, which kills pi. Consumers still get their own copy.
+		promptDone.catch(() => {});
+		this.activePromptDone = promptDone;
 
 		log("prompt sent", {
 			session: this.id,
