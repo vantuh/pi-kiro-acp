@@ -27,17 +27,31 @@ tail -f "$LOG" | grep '"session":"abc123"'
 
 ---
 
-## Bridge stderr logs
+## Debug toggles
 
-`kiro-acp-bridge.mjs` writes to **stderr** with prefix `[mcp-bridge]`. These appear in the Pi extension host output, not in the log file.
+| Variable | Effect |
+|---|---|
+| `PI_KIRO_ACP_DEBUG=1` | Enables the log file above (`0`/unset = no logging at all) |
+| `PI_KIRO_ACP_MIRROR=0` | Disables mirroring Kiro's native tool calls into the transcript |
 
-```
-[mcp-bridge] tools/list 42 tools
-[mcp-bridge] tools/call read_file callId: abc-123
-[mcp-bridge] tools/call error read_file connect ECONNREFUSED
-```
+---
 
-Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTTP errors (line 150).
+## Tool transport (`pi_host`)
+
+Pi extension tools reach Kiro through an in-process Streamable HTTP MCP server
+(`tool-bridge.ts`) registered as `pi_host`. It has no logging of its own; trace it
+through `session.ts`:
+
+- `session initialized` → `bridgePort` is the port the bridge is listening on
+  (one per session; `null` means the bridge never started).
+- `bridge tool call received` → Kiro issued `tools/call` and the extension turned it
+  into a pending pi tool call.
+- `delivering tool result` / `UNMATCHED tool result` → pi's result went back (or did not)
+  to the waiting MCP request.
+
+Kiro's *native* tools (`fs_read`, `fs_write`, `execute_bash`, `glob`, `grep`) never
+touch the bridge — they run inside kiro-cli and only surface as mirrored thinking
+blocks in the transcript.
 
 ---
 
@@ -47,9 +61,10 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 
 | Message | Data | When |
 |---|---|---|
-| `extension skipped (subagent context)` | `{ pid }` | Duplicate registration via Symbol |
 | `extension loaded` | `{ pid, models, logFile }` | Extension initialized |
-| `session_shutdown event received` | — | Pi fires session_shutdown |
+| `dynamic models registered` | `{ models, ids }` | Model list discovered from kiro-cli |
+| `dynamic model discovery failed; using fallback models` | `{ error }` | Discovery failed; `KIRO_MODELS` used |
+| `session_shutdown` | `{ reason, targetSessionFile }` | Pi fires session_shutdown → all sessions stopped |
 
 ### stream.ts — request flow
 
@@ -66,6 +81,7 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | `prompt done → stop` | `{ session }` | Prompt completed, no tool calls |
 | `prompt error → error` | `{ session, error }` | Prompt promise rejected |
 | `outcome` | `{ session, outcome, gen, streamGen, timing }` | Stream outcome + TTFT / chunk stats |
+| `image FUP: detected images in tool results` | `{ session, ... }` | Tool results carried images → follow-up prompt handoff |
 | `streamKiroAcp FATAL error` | `{ error }` | Uncaught exception in stream handler |
 
 `outcome.timing` fields:
@@ -79,12 +95,10 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | `ttftThinkingMs` | Entry → first thinking chunk (`null` if none) |
 | `ttftTextMs` | Entry → first text chunk (`null` if none) |
 | `firstToolMs` | Entry → first tool call (`null` if none) |
-| `thinkingChars` / `textChars` | Total chars received (pre-coalesce) |
-| `thinkingChunks` / `textChunks` | ACP update count (pre-coalesce) |
+| `thinkingChars` / `textChars` | Total chars received |
+| `thinkingChunks` / `textChunks` | ACP update count |
 | `avgThinkingChunkChars` / `avgTextChunkChars` | Mean chars per ACP chunk |
-| `emittedThinkingDeltas` / `emittedTextDeltas` | Deltas pushed to pi after coalesce |
-| `avgEmittedThinkingChars` / `avgEmittedTextChars` | Mean chars per emitted delta |
-| `coalesceMs` | Batch window (`STREAM_COALESCE_MS`) |
+| `emittedThinkingDeltas` / `emittedTextDeltas` | Deltas pushed to pi (1:1 with ACP chunks since coalescing was removed) |
 
 ### session-manager.ts — routing
 
@@ -103,7 +117,7 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | Message | Data | When |
 |---|---|---|
 | `starting kiro session` | `{ session, cwd, agentRootPath, agentName }` | About to spawn kiro-cli |
-| `session initialized` | `{ session, ipcPort, pid, timing }` | RPC initialize succeeded (`timing.mcpCfgMs` = settings-call duration, `preSpawnSetupMs`, `initializeMs`, `totalMs`) |
+| `session initialized` | `{ session, bridgePort, pid, loadSession, resumeSession, timing }` | RPC initialize succeeded (`timing.bridgeMs` = pi_host startup, `preSpawnSetupMs`, `mcpCfgMs` = settings-call duration, `initializeMs`, `totalMs`) |
 | `configured mcp.noInteractiveTimeout` | `{ session, minutes }` | First successful `kiro-cli settings` in this process |
 | `skipped mcp.noInteractiveTimeout (already configured)` | `{ session }` | Later cold starts skip the ~0.3s settings call |
 | `failed to configure mcp.noInteractiveTimeout` | `{ session, error }` | Settings call failed; will retry next cold start |
@@ -120,11 +134,17 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 | `cleanupAfterProcessExit` | `{ session, pendingRpcs, pendingToolCalls, hadActivePrompt }` | Cleanup after unexpected exit |
 | `stopping kiro session` | `{ session }` | stop() called |
 | `stop: killing process tree` | `{ session, rootPid, descendants }` | Force-killing (timeout path) |
-| `IPC tool call received` | `{ session, callId, rawCallId, toolName, argsKeys }` | Bridge POST /tool/pending |
-| `IPC tool call completed` | `{ session, callId, toolName, isError, roundtripMs }` | HTTP response after pi delivered result |
-| `IPC error` | `{ session, error }` | Exception in handleIpcRequest |
-| `delivering tool result` | `{ session, callId, toolName, resultLen, roundtripMs }` | Tool result matched and delivered |
-| `UNMATCHED tool result` | `{ session, toolCallId, toolName, pendingCalls }` | Tool result with no matching call |
+| `bridge tool call received` | `{ session, callId, kiroName, toolName, argsKeys }` | Kiro called a pi tool over `pi_host`; `callId` is `${session}-<n>` |
+| `delivering tool result` | `{ session, callId, toolName, resultLen, roundtripMs }` | Tool result matched and delivered (`roundtripMs` = bridge wait time) |
+| `delivering tool result (text-only for image FUP)` | `{ session, callId, toolName, resultLen, roundtripMs }` | Same, on the image follow-up path |
+| `rejecting pending tool calls` | `{ session, reason, count, callIds }` | Pending calls failed on cancel / handoff |
+| `ACP usage update` | `{ session, acpSessionId, contextUsed, contextSize, sessionCost }` | `usage_update` for this ACP session |
+| `kiro metadata` | `{ session, ... }` | `_kiro.dev/metadata` notification |
+| `image FUP: *` | `{ session, ... }` | Image follow-up handoff (cancel → settle → re-prompt) |
+| `restored persisted kiro session` / `failed to restore persisted kiro session` | `{ session, ... }` | Fingerprint-keyed resume of a previous ACP session |
+| `persisted kiro session fingerprint mismatch` | `{ session, ... }` | History changed → cannot resume |
+| `restarting Kiro for effort change` / `deferring effort change while session is busy` | `{ session, ... }` | `--effort` change handling |
+| `UNMATCHED tool result` | `{ session, toolCallId, toolName, pendingCalls }` | Tool result with no matching call (`... (text-only)` on the image follow-up path) |
 | `findToolCallMatch: rejecting name-match (foreign toolCallId)` | `{ session, toolCallId, toolName }` | Tool result from different session rejected |
 | `ambiguous tool name match` | `{ session, toolName, matchCount, callIds }` | Multiple pending calls with same name |
 
@@ -134,10 +154,11 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 
 ### Tool call not arriving
 
-1. Check bridge stderr for `tools/call` — confirms kiro-cli issued the call
-2. Check `IPC tool call received` — confirms bridge HTTP POST reached the extension
-3. If missing: `tools/call error` in bridge stderr → IPC server unreachable (check `session initialized` for ipcPort)
-4. Check `tool call queued` → `tool calls → stream` to confirm it was flushed to the AI stream
+1. Check `session initialized` for a non-null `bridgePort` — without it Kiro was never told about `pi_host`
+2. Check `bridge tool call received` — confirms Kiro's `tools/call` reached the extension
+3. Check `tool call queued` → `tool calls → stream` to confirm it was flushed to the AI stream
+4. If a fs/bash/glob/grep call is missing entirely: that is expected — those are Kiro-native and bypass the bridge (look for a mirrored thinking block in the transcript instead)
+5. If the tool is missing from Kiro's list, check the catalog filter in `tool-catalog.ts` (only active, non-builtin/non-sdk pi tools are forwarded)
 
 ### Session dies unexpectedly
 
@@ -159,15 +180,29 @@ Fired at: `tools/list` (line 100), `tools/call` before HTTP POST (line 127), HTT
 2. Clear log: `LOG="${TMPDIR%/}/kiro-acp-debug.log"; : > "$LOG"`
 3. Reproduce one slow turn, then:
    ```sh
-   grep -E 'timing first|prompt sent|outcome|IPC tool call|rpc ←|delivering tool' "$LOG"
+   grep -E 'timing first|prompt sent|outcome|bridge tool call|rpc ←|delivering tool' "$LOG"
    ```
 4. Interpret:
    - Large `promptReadyMs` / `rpc ← initialize|session/new|set_model` → cold init / model set
+     (`session initialized.timing` splits it into `bridgeMs` / `preSpawnSetupMs` / `mcpCfgMs` / `initializeMs`)
    - Large gap `prompt sent` → `timing first thinking|text` → model/effort (not extension buffering)
    - Large `delivering tool result.roundtripMs` → pi tool-loop roundtrip (bridge waiting)
-   - Tiny `avgTextChunkChars` + many `textChunks` → tiny ACP chunks; after coalesce check `avgEmittedTextChars` / `emittedTextDeltas`
+   - Tiny `avgTextChunkChars` + many `textChunks` → tiny ACP chunks; they are forwarded 1:1 now,
+     so this is kiro-cli's chunking, not extension batching
 
-See also `LATENCY-FIX-PLAN.md`.
+See also `LATENCY-FIX-PLAN.md` (same directory).
+
+### Native Kiro tool activity not visible in pi
+
+Kiro runs `fs_read`/`fs_write`/`execute_bash`/`glob`/`grep` itself, so they only appear as
+mirrored thinking blocks (`native-tool-mirror.ts`). If nothing shows up:
+
+1. Confirm `PI_KIRO_ACP_MIRROR` is not `0`
+2. Confirm thinking blocks are not hidden in the TUI — the mirror renders as thinking
+3. The mirror only emits on `tool_call_update` with `status: completed|failed` (or on turn
+   end via `flush()`); a tool still running shows only the transient `🔧 <title>` indicator
+4. Tools carrying `_meta.kiro.mcpServerName` are skipped on purpose — those are `pi_host`
+   tools and already render as real pi tool calls
 
 ### Wrong session selected / unexpected resumption
 

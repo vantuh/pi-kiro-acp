@@ -1,5 +1,5 @@
 // Test: per-session bridge isolation and resource cleanup on stop / idle prune.
-// Covers Symptom 6 from MCP-UNIFIED-PLAN.md: no cross-session tool-call mixing,
+// Covers Symptom 6 from docs/MCP-UNIFIED-PLAN.md: no cross-session tool-call mixing,
 // no leaked HTTP ports.
 // Run: test/run-all.sh test/lifecycle-cleanup.test.ts
 

@@ -14,7 +14,7 @@ With `PI_KIRO_ACP_DEBUG=1`, log TTFT + tool roundtrip:
 |---|---|---|
 | `promptReadyMs` | `outcome.timing` | < 200ms warm; seconds if cold/replay |
 | `ttftThinkingMs` / `ttftTextMs` | `timing first *` / `outcome` | dominated by model, not bridge |
-| `roundtripMs` | `delivering tool result` / `IPC tool call completed` | tool exec time + pi loop overhead |
+| `roundtripMs` | `delivering tool result` | tool exec time + pi loop overhead |
 | `rpc ← ms` | per RPC | initialize/session/new/set_model spikes on cold |
 | `avg*ChunkChars` | `outcome.timing` | very small → jerky UI |
 
@@ -22,7 +22,10 @@ Do not optimize until one slow turn shows which bucket dominates.
 
 ### P1 — Tool handoff (biggest “held by the hand” feel)
 
-Today each tool is: kiro MCP → HTTP `/tool/pending` → wait → pi ends stream (`toolUse`) → pi runs tool → new `streamKiroAcp` resumption → `deliverToolResults` → HTTP responds → kiro continues.
+Today each forwarded tool is: kiro `tools/call` → in-process `pi_host` HTTP MCP → wait → pi ends
+stream (`toolUse`) → pi runs tool → new `streamKiroAcp` resumption → `deliverToolResults` → MCP
+responds → kiro continues. (Kiro's native fs/bash tools skip this path entirely — see
+`adr/0001-in-process-http-mcp-tool-transport.md`.)
 
 Ideas (pick after measurements):
 
@@ -41,7 +44,7 @@ Likely win: cut perceived stall between “tool announced” and “kiro continu
 
 ### P3 — Jerky text / thinking gaps
 
-1. **Coalesce deltas** in `stream.ts` (`STREAM_COALESCE_MS = 24`) before `stream.push` — smoother TUI; TTFT delayed by at most one window. **Implemented.** Compare `thinkingChunks`/`textChunks` vs `emitted*Deltas` / `avgEmitted*Chars` in `outcome.timing`.
+1. **Coalesce deltas** in `stream.ts` (`STREAM_COALESCE_MS = 24`) before `stream.push` — smoother TUI; TTFT delayed by at most one window. **Implemented, then reverted** (decision A1 in `adr/0001-in-process-http-mcp-tool-transport.md`): deltas are forwarded 1:1 for lower latency, so `emitted*Deltas` now tracks `*Chunks`.
 2. **Effort default**: map pi `defaultThinkingLevel: "high"` carefully; document that high effort ⇒ long silent gaps even when chunks stream correctly.
 3. Do **not** chase readline-per-line “µs” overhead — not the user-visible stall.
 
