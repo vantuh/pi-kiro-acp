@@ -55,8 +55,8 @@ Rough volume for one initialize + `session/new` cycle: `-v` ≈ 8 lines, `-vv` �
 ## Tool transport (`pi_host`)
 
 Pi extension tools reach Kiro through an in-process Streamable HTTP MCP server
-(`tool-bridge.ts`) registered as `pi_host`. It has no logging of its own; trace it
-through `session.ts`:
+(`tool-bridge.ts`) registered as `pi_host`. Transport-level diagnostics come from its
+`onDebug` hook (`bridge tools/call *`); the rest is traced through `session.ts`:
 
 - `session initialized` → `bridgePort` is the port the bridge is listening on
   (one per session; `null` means the bridge never started).
@@ -64,6 +64,8 @@ through `session.ts`:
   into a pending pi tool call.
 - `delivering tool result` / `UNMATCHED tool result` → pi's result went back (or did not)
   to the waiting MCP request.
+- `bridge tool call ABANDONED by kiro` → Kiro dropped the call at its 120s deadline; the
+  result is recovered on the next turn instead (ADR 0002).
 
 Kiro's *native* tools (`fs_read`, `fs_write`, `execute_bash`, `glob`, `grep`) never
 touch the bridge — they run inside kiro-cli and only surface as mirrored thinking
@@ -87,8 +89,8 @@ blocks in the transcript.
 | Message | Data | When |
 |---|---|---|
 | `streamKiroAcp entry` | `{ modelId, toolsCount, messagesCount, systemPromptLen, sessionId }` | Stream handler called |
-| `streamSimple called` | `{ session, isResumption, toolResults, pendingToolCalls, hasActivePrompt, cwd, optionSessionId, ensureStartedMs }` | Session routed |
-| `prompt parts` | `{ session, includeHistory, promptChars, sessionBusy, hasActivePrompt }` | Before sending to kiro-cli |
+| `streamSimple called` | `{ session, isResumption, toolResults, pendingToolCalls, hasActivePrompt, hadLiveConversation, cwd, optionSessionId, ensureStartedMs }` | Session routed (`hadLiveConversation` = ACP id existed *before* `ensureStarted`) |
+| `prompt parts` | `{ session, promptChars, replayPromptChars, orphanedToolResults, recoverInPlace, hadLiveConversation, sessionBusy, hasActivePrompt, persistenceKey }` | Before sending to kiro-cli (`recoverInPlace` = a dropped tool result is being handed back instead of the user message) |
 | `timing first thinking` | `{ session, ttftMs, sincePromptMs }` | First `agent_thought_chunk` |
 | `timing first text` | `{ session, ttftMs, sincePromptMs, sinceThinkingMs }` | First `agent_message_chunk` |
 | `timing first tool` | `{ session, sinceTurnMs, sincePromptMs, toolName }` | First bridge tool call |
@@ -122,7 +124,9 @@ blocks in the transcript.
 | Message | Data | When |
 |---|---|---|
 | `route resumption` | `{ session, matches, toolResults }` | Tool results matched → resumption |
-| `route: no resumption match found` | `{ toolResults, toolNames, pendingSessions }` | Tool results with no matching calls |
+| `route: no resumption match found` | `{ toolResults, toolNames, pendingSessions }` | Tool results with no pending call — Kiro abandoned its `tools/call` |
+| `route orphaned tool result to live session` | `{ session, acpSessionId, toolNames }` | Recovery: the result is re-delivered as a follow-up prompt on the same ACP session |
+| `route orphaned tool result: no live session to recover into` | `{ sessionId, cwd }` | No live session left; a full replay is forced instead |
 | `route existing keyed session` | `{ session, key, cwd, busy }` | Reusing keyed session |
 | `route new keyed session` | `{ session, key, originalKey, cwd, existingBusy }` | New keyed session created |
 | `route idle same-cwd session` | `{ session, cwd }` | Reusing idle anon session |
@@ -135,7 +139,7 @@ blocks in the transcript.
 |---|---|---|
 | `starting kiro session` | `{ session, cwd, agentRootPath, agentName }` | About to spawn kiro-cli |
 | `session initialized` | `{ session, bridgePort, pid, loadSession, resumeSession, timing }` | RPC initialize succeeded (`timing.bridgeMs` = pi_host startup, `preSpawnSetupMs`, `mcpCfgMs` = settings-call duration, `initializeMs`, `totalMs`) |
-| `configured mcp.noInteractiveTimeout` | `{ session, minutes }` | First successful `kiro-cli settings` in this process |
+| `configured mcp.noInteractiveTimeout` | `{ session, ms }` | First successful `kiro-cli settings` in this process (MCP *initialization* timeout, in ms) |
 | `skipped mcp.noInteractiveTimeout (already configured)` | `{ session }` | Later cold starts skip the ~0.3s settings call |
 | `failed to configure mcp.noInteractiveTimeout` | `{ session, error }` | Settings call failed; will retry next cold start |
 | `acp session/new` | `{ session, acpSessionId }` | New ACP session ID allocated |
@@ -154,12 +158,19 @@ blocks in the transcript.
 | `stopping kiro session` | `{ session }` | stop() called |
 | `stop: killing process tree` | `{ session, rootPid, descendants }` | Force-killing (timeout path) |
 | `bridge tool call received` | `{ session, callId, kiroName, toolName, argsKeys }` | Kiro called a pi tool over `pi_host`; `callId` is `${session}-<n>` |
+| `bridge tools/call accepted` | `{ session, tool, accept, streaming, hasProgressToken, pendingCount }` | Transport setup for the call (`streaming` = answered over SSE with keepalives; `pendingCount` includes this call) |
+| `bridge tool call ABANDONED by kiro` | `{ session, callId, toolName, waitedMs, remainingPending }` | Kiro gave up on its own `tools/call` (measured: 120s on 2.19.1) while pi was still running the tool |
+| `bridge tools/call disconnected by client` | `{ session, tool, streaming, waitedMs }` | Same event seen from the HTTP side |
+| `bridge tool call DEDUPED (already running)` | `{ session, toolName, abandonedCallId, abandonedAgoMs }` | Kiro reissued an abandoned call; answered without running the tool twice |
+| `cleared abandoned tool call records` | `{ session, cleared, remaining, tools }` | Recovery turn landed; the tool may be called again |
+| `active prompt settled` | `{ session, stopReason, pendingToolCalls, elapsedMs }` | `session/prompt` resolved; the session stops being `busy` even if its stream already ended with `toolUse` |
 | `delivering tool result` | `{ session, callId, toolName, resultLen, roundtripMs }` | Tool result matched and delivered (`roundtripMs` = bridge wait time) |
 | `delivering tool result (text-only for image FUP)` | `{ session, callId, toolName, resultLen, roundtripMs }` | Same, on the image follow-up path |
 | `rejecting pending tool calls` | `{ session, reason, count, callIds }` | Pending calls failed on cancel / handoff |
 | `ACP usage update` | `{ session, acpSessionId, contextUsed, contextSize, sessionCost }` | `usage_update` for this ACP session |
 | `kiro metadata` | `{ session, ... }` | `_kiro.dev/metadata` notification |
-| `image FUP: *` | `{ session, ... }` | Image follow-up handoff (cancel → settle → re-prompt) |
+| `image FUP: *` / `orphaned tool result: *` | `{ session, ... }` | Follow-up handoff (cancel → settle → re-prompt); recovery uses the `orphaned tool result` prefix |
+| `startPrompt overlapping an in-flight prompt` | `{ session, pendingToolCalls }` | A second `session/prompt` was sent without cancel — kiro-cli answers `Internal error` |
 | `restored persisted kiro session` / `failed to restore persisted kiro session` | `{ session, ... }` | Fingerprint-keyed resume of a previous ACP session |
 | `persisted kiro session fingerprint mismatch` | `{ session, ... }` | History changed → cannot resume |
 | `restarting Kiro for effort change` / `deferring effort change while session is busy` | `{ session, ... }` | `--effort` change handling |
@@ -228,3 +239,29 @@ mirrored thinking blocks (`native-tool-mirror.ts`). If nothing shows up:
 1. Trace `route *` messages for the relevant `session` ID
 2. `route: no resumption match found` means tool results were provided but no pending calls matched — check `pendingSessions`
 3. `UNMATCHED tool result` / `findToolCallMatch: rejecting name-match (foreign toolCallId)` indicate cross-session confusion
+
+### A slow tool's result never reaches Kiro
+
+Kiro abandons any `pi_host` `tools/call` after 120s (kiro-cli 2.19.1) — SSE keepalives and
+MCP progress notifications do not extend it, and the deadline is not configurable. Anything
+slower than that (subagents, deep research) always takes the recovery path:
+
+```sh
+grep -E 'ABANDONED by kiro|DEDUPED|route orphaned|recoverInPlace|orphaned tool result' "$LOG"
+```
+
+Expected sequence for one slow tool:
+
+1. `bridge tool call received` → `bridge tools/call accepted`
+2. `bridge tool call ABANDONED by kiro` with `waitedMs` ≈ 120000
+3. optionally `bridge tool call DEDUPED (already running)` if Kiro reissued the call
+4. `route orphaned tool result to live session` + `prompt parts` with `recoverInPlace: true`
+   and `hadLiveConversation: true`
+5. `orphaned tool result: cancel sent` → `old prompt settle wait complete` → follow-up prompt
+6. `cleared abandoned tool call records` after that turn lands (`stop` / `toolUse`)
+
+`prompt error → error { error: "Internal error" }` within a few ms of `recoverInPlace: true`
+while `hasActivePrompt: true` means the follow-up overlapped the original prompt — cancel
+did not run, or did not settle. A `route new keyed session` with `originalKey` at step 4
+instead means recovery failed and Kiro is being asked the original question again. See
+`docs/adr/0002-surviving-kiro-mcp-tool-call-deadline.md`.
