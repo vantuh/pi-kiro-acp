@@ -63,6 +63,12 @@ function stripAnsi(text: string): string {
 let mcpNoInteractiveTimeoutReady = false;
 let mcpNoInteractiveTimeoutInFlight: Promise<void> | null = null;
 
+/** `mcp.noInteractiveTimeout` is the MCP *initialization* timeout in
+ * milliseconds for non-interactive runs (kiro-cli default 30000). It does not
+ * bound individual tool calls — long pi tools are kept alive by the bridge's
+ * keepalive instead (see tool-bridge.ts). */
+const MCP_NO_INTERACTIVE_TIMEOUT_MS = 120000;
+
 export function toKiroEffort(reasoning: SimpleStreamOptions["reasoning"]): KiroEffort | null {
 	if (reasoning === "minimal") return "low";
 	if (
@@ -99,8 +105,13 @@ export class AcpSession {
 	agentCapabilities: any = null;
 	persistenceKey: string | null = null;
 	pendingToolCalls = new Map<string, PendingToolCall>();
+	/** Calls Kiro abandoned at its own deadline while pi kept executing them,
+	 * keyed by tool name + arguments so a retry can be answered instead of run. */
+	private abandonedToolCalls = new Map<string, { callId: string; toolName: string; abandonedAt: number }>();
 	onToolCallFromBridge: ((call: PendingToolCall) => void) | null = null;
 	activePromptDone: Promise<{ stopReason: string }> | null = null;
+	/** Bumped per session/prompt so a late-settling prompt only clears its own. */
+	private promptSeq = 0;
 	/** Why the last prompt failed, for streams that attach after activePromptDone was cleared. */
 	lastPromptError: Error | null = null;
 	streamGen = 0;
@@ -446,7 +457,7 @@ export class AcpSession {
 		mcpNoInteractiveTimeoutInFlight = new Promise<void>((resolve) => {
 			execFile(
 				"kiro-cli",
-				["settings", "mcp.noInteractiveTimeout", "30"],
+				["settings", "mcp.noInteractiveTimeout", String(MCP_NO_INTERACTIVE_TIMEOUT_MS)],
 				{ timeout: 5000 },
 				(error) => {
 					if (error) {
@@ -456,7 +467,10 @@ export class AcpSession {
 						});
 					} else {
 						mcpNoInteractiveTimeoutReady = true;
-						log("configured mcp.noInteractiveTimeout", { session: this.id, minutes: 30 });
+						log("configured mcp.noInteractiveTimeout", {
+							session: this.id,
+							ms: MCP_NO_INTERACTIVE_TIMEOUT_MS,
+						});
 					}
 					// Clear so a failed call retries next cold start; harmless on success.
 					mcpNoInteractiveTimeoutInFlight = null;
@@ -621,6 +635,27 @@ export class AcpSession {
 		if (includeSystem && systemHash) this.systemPromptHash = systemHash;
 
 		this.lastPromptError = null;
+		if (this.activePromptDone) {
+			log("startPrompt overlapping an in-flight prompt", {
+				session: this.id,
+				pendingToolCalls: this.pendingToolCalls.size,
+			});
+		}
+		// Nulled as soon as the RPC settles, even if the stream for this turn
+		// already ended with `toolUse` (Kiro can finish its turn while pi is still
+		// running a tool). Without this the session stays `busy` forever and
+		// routing keeps spawning parallel kiro-cli processes for it.
+		const promptGen = ++this.promptSeq;
+		const clearActivePrompt = (stopReason: string) => {
+			if (this.promptSeq !== promptGen) return;
+			this.activePromptDone = null;
+			log("active prompt settled", {
+				session: this.id,
+				stopReason,
+				pendingToolCalls: this.pendingToolCalls.size,
+				elapsedMs: msSince(startPromptAt),
+			});
+		};
 		const promptDone = (
 			this.rpcSend(
 				"session/prompt",
@@ -634,8 +669,12 @@ export class AcpSession {
 				0,
 			) as Promise<any>
 		).then(
-			(r: any) => ({ stopReason: r?.stopReason || "end_turn" }),
+			(r: any) => {
+				clearActivePrompt(r?.stopReason || "end_turn");
+				return { stopReason: r?.stopReason || "end_turn" };
+			},
 			(e: Error) => {
+				clearActivePrompt("error");
 				this.systemPromptHash = prevSystemPromptHash;
 				this.lastPromptError = e;
 				throw e;
@@ -679,6 +718,7 @@ export class AcpSession {
 		for (const [, call] of this.pendingToolCalls)
 			call.resolve({ result: "kiro-cli exited", isError: true });
 		this.pendingToolCalls.clear();
+		this.abandonedToolCalls.clear();
 
 		for (const [, p] of this.rpcPending) {
 			if (p.timer) clearTimeout(p.timer);
@@ -720,6 +760,7 @@ export class AcpSession {
 		for (const [, call] of this.pendingToolCalls)
 			call.resolve({ result: "Shutting down", isError: true });
 		this.pendingToolCalls.clear();
+		this.abandonedToolCalls.clear();
 
 		if (this.proc) {
 			const p = this.proc;
@@ -781,6 +822,38 @@ export class AcpSession {
 		return toolResults.filter((tr) => this.findToolCallMatch(tr) !== null);
 	}
 
+	private rememberAbandonedToolCall(fingerprint: string, callId: string, toolName: string): void {
+		// Shutdown aborts every pending call at once; recording those would leave
+		// stale dedup entries that could suppress a legitimate call if this session
+		// object is restarted (e.g. for an effort change).
+		if (!this.started) return;
+		for (const [key, entry] of this.abandonedToolCalls) {
+			if (msSince(entry.abandonedAt) > ABANDONED_CALL_TTL_MS) this.abandonedToolCalls.delete(key);
+		}
+		this.abandonedToolCalls.set(fingerprint, { callId, toolName, abandonedAt: Date.now() });
+	}
+
+	/** Drop dedup records once pi's results for those tools have been recovered,
+	 * so a genuinely new call to the same tool is dispatched again. */
+	clearAbandonedToolCalls(toolResults: ToolResultInfo[]): void {
+		const recovered = new Set(toolResults.map((tr) => tr.toolName));
+		let cleared = 0;
+		for (const [key, entry] of this.abandonedToolCalls) {
+			if (recovered.has(entry.toolName)) {
+				this.abandonedToolCalls.delete(key);
+				cleared += 1;
+			}
+		}
+		if (cleared > 0) {
+			log("cleared abandoned tool call records", {
+				session: this.id,
+				cleared,
+				remaining: this.abandonedToolCalls.size,
+				tools: [...recovered],
+			});
+		}
+	}
+
 	deliverToolResults(toolResults: ToolResultInfo[]): void {
 		for (const tr of toolResults) {
 			const match = this.findToolCallMatch(tr);
@@ -835,8 +908,13 @@ export class AcpSession {
 	}
 
 	/**
-	 * Wait for the current activePromptDone to settle (with timeout), then start
-	 * a new follow-up prompt on the same ACP session with the given images attached.
+	 * Cancel the in-flight session/prompt (if any), wait for it to settle, then
+	 * start a new prompt on the same ACP session. Used for image follow-ups and
+	 * for handing an orphaned tool result back after Kiro abandoned its tools/call.
+	 *
+	 * Overlapping session/prompt without cancel is rejected by kiro-cli as
+	 * "Internal error" within ~1ms (measured 2026-08-26). The session stays
+	 * `busy` during the settle wait so routing cannot fork a parallel process.
 	 */
 	async cancelAndStartFollowUp(
 		modelId: string,
@@ -845,14 +923,14 @@ export class AcpSession {
 		images: { type: "image"; data: string; mimeType: string }[],
 		settleTimeoutMs = 15000,
 		beforeStart?: () => void,
+		logPrefix = "image FUP",
 	): Promise<void> {
 		const prevPromise = this.activePromptDone;
 		if (prevPromise) {
-			this.activePromptDone = null;
 			if (this.acpSessionId) {
 				this.rpcNotify("session/cancel", { sessionId: this.acpSessionId });
 			}
-			log("image FUP: cancel sent; waiting for old prompt to settle", {
+			log(`${logPrefix}: cancel sent; waiting for old prompt to settle`, {
 				session: this.id,
 				settleTimeoutMs,
 			});
@@ -861,18 +939,23 @@ export class AcpSession {
 				prevPromise.then(() => { settled = true; }, () => { settled = true; }),
 				new Promise<void>((r) => setTimeout(r, settleTimeoutMs)),
 			]);
-			log("image FUP: old prompt settle wait complete", { session: this.id, settled });
+			log(`${logPrefix}: old prompt settle wait complete`, { session: this.id, settled });
+			if (!settled) {
+				log(`${logPrefix}: old prompt still in flight; follow-up may collide`, {
+					session: this.id,
+				});
+			}
 		}
-		this.rejectPendingToolCalls("Cancelled old prompt during image follow-up handoff");
+		this.rejectPendingToolCalls(`Cancelled old prompt during ${logPrefix} handoff`);
 		beforeStart?.();
 
-		log("image FUP: starting follow-up prompt", {
+		log(`${logPrefix}: starting follow-up prompt`, {
 			session: this.id,
 			imageCount: images.length,
 			promptChars: followupText.length,
 		});
 		await this.startPrompt(modelId, systemPrompt, followupText, images);
-		log("image FUP: follow-up prompt started", { session: this.id });
+		log(`${logPrefix}: follow-up prompt started`, { session: this.id });
 	}
 
 	private rejectPendingToolCalls(reason: string): void {
@@ -901,8 +984,12 @@ export class AcpSession {
 			});
 			return null;
 		}
+		// Only a call pi was actually told about can be the origin of a pi result.
+		// Without this, a result whose own call was abandoned would name-match an
+		// unrelated pending call — observed delivering one subagent's report into a
+		// different, still-open request.
 		const nameMatches = [...this.pendingToolCalls.entries()].filter(
-			([, call]) => call.toolName === tr.toolName,
+			([, call]) => call.toolName === tr.toolName && call.emitted,
 		);
 		if (nameMatches.length > 1)
 			log("ambiguous tool name match", {
@@ -949,15 +1036,47 @@ export class AcpSession {
 	private handleBridgeToolCall(call: ToolBridgeCall): Promise<ToolBridgeResult> {
 		const publicCallId = `${this.id}-${++this.bridgeCallSeq}`;
 		const receivedAt = Date.now();
+		const fingerprint = callFingerprint(call.piName, call.arguments);
 		return new Promise<ToolBridgeResult>((resolveResult) => {
 			if (call.signal.aborted) {
 				resolveResult(errorToolResult("Kiro tool call aborted before dispatch"));
+				return;
+			}
+			// Kiro retries a tools/call it abandoned at its own deadline while pi is
+			// still executing the original. Running it twice is what produced the
+			// "same subagent launched over and over" loop, so answer the retry
+			// immediately instead of dispatching it.
+			const abandoned = this.abandonedToolCalls.get(fingerprint);
+			if (abandoned) {
+				log("bridge tool call DEDUPED (already running)", {
+					session: this.id,
+					toolName: call.piName,
+					abandonedCallId: abandoned.callId,
+					abandonedAgoMs: msSince(abandoned.abandonedAt),
+				});
+				resolveResult(errorToolResult(alreadyRunningNote(call.kiroName)));
 				return;
 			}
 			const onAbort = () => {
 				const aborted = this.pendingToolCalls.get(publicCallId);
 				if (!aborted) return;
 				this.pendingToolCalls.delete(publicCallId);
+				// Kiro's MCP client gave up on (or closed) its own tools/call while pi
+				// was still executing the tool. Pi will still produce a result, which
+				// then has nothing to resolve — routeSession recovers it as a
+				// follow-up prompt. Logged because it used to happen silently.
+				// Only an *emitted* call is actually running in pi; an unemitted one
+				// never reached pi (it missed its turn's batch), so it must stay
+				// retryable — claiming "already running" for it would deadlock.
+				if (aborted.emitted) this.rememberAbandonedToolCall(fingerprint, publicCallId, call.piName);
+				log("bridge tool call ABANDONED by kiro", {
+					session: this.id,
+					callId: publicCallId,
+					toolName: call.piName,
+					emitted: !!aborted.emitted,
+					waitedMs: msSince(receivedAt),
+					remainingPending: this.pendingToolCalls.size,
+				});
 				resolveResult(errorToolResult("Kiro tool call aborted"));
 			};
 			call.signal.addEventListener("abort", onAbort, { once: true });
@@ -979,7 +1098,18 @@ export class AcpSession {
 				kiroName: call.kiroName,
 				toolName: call.piName,
 				argsKeys: Object.keys(call.arguments),
+				streamAttached: !!this.onToolCallFromBridge,
 			});
+			if (!this.onToolCallFromBridge) {
+				// Arrived after this turn's stream already closed: pi cannot be told
+				// about it until the next turn, and Kiro will drop it at its deadline
+				// first. Raising the batch window is what prevents this.
+				log("bridge tool call STRANDED (no stream attached)", {
+					session: this.id,
+					callId: publicCallId,
+					toolName: call.piName,
+				});
+			}
 			this.onToolCallFromBridge?.(pending);
 		});
 	}
@@ -1005,6 +1135,37 @@ export class AcpSession {
 
 function errorToolResult(text: string): ToolBridgeResult {
 	return { content: [{ type: "text", text }], isError: true };
+}
+
+/** How long a dedup record survives if pi's result never comes back. */
+const ABANDONED_CALL_TTL_MS = 30 * 60 * 1000;
+
+function alreadyRunningNote(kiroName: string): string {
+	return (
+		`This exact \`${kiroName}\` call is already running. Your earlier call to it exceeded your ` +
+		"own MCP tool-call deadline, but pi is still executing it and the result will be delivered " +
+		"to you in a follow-up message. Do not call it again and do not start replacement work for " +
+		"it — end your turn now and wait for the result."
+	);
+}
+
+/** Identity of a tool call: same tool, same arguments, regardless of key order. */
+function callFingerprint(toolName: string, args: Record<string, unknown>): string {
+	return `${toolName}\u0000${stableJson(args)}`;
+}
+
+function stableJson(value: unknown): string {
+	return JSON.stringify(sortKeys(value));
+}
+
+function sortKeys(value: unknown): unknown {
+	if (value === null || typeof value !== "object") return value;
+	if (Array.isArray(value)) return value.map(sortKeys);
+	const sorted: Record<string, unknown> = {};
+	for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+		sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
+	}
+	return sorted;
 }
 
 function toToolBridgeResult(result: {

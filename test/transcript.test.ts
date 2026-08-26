@@ -10,7 +10,7 @@ import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 const dataHome = mkdtempSync(join(tmpdir(), "kiro-acp-transcript-"));
 process.env.XDG_DATA_HOME = dataHome;
 
-const { buildConversationPrompt, extractToolResults, lastUserMessage } = await import("../helpers.ts");
+const { buildConversationPrompt, buildToolResultRecoveryPrompt, extractToolResults, imagesFromToolResults, lastUserMessage } = await import("../helpers.ts");
 const {
 	clearPersistedKiroSession,
 	historyFingerprintAfterAssistantTurn,
@@ -78,6 +78,59 @@ const assistantText = (text: string) => ({ role: "assistant", content: [{ type: 
 		{ role: "user", content: [{ type: "text", text: "part1" }, { type: "image", data: "zz", mimeType: "image/png" }, { type: "text", text: "part2" }] },
 	])) === "part1\npart2", "lastUserMessage joins text blocks and skips images");
 	assert(lastUserMessage(ctx([])) === "", "lastUserMessage tolerates an empty context");
+}
+
+// --- replay must carry work already done for the current message ---
+// A fresh Kiro session is rebuilt purely from this transcript. Dropping the tool
+// calls made since the last user message made it redo them (relaunching the same
+// subagent over and over).
+{
+	const midTurn = buildConversationPrompt(ctx([
+		user("compare A and B"),
+		{ role: "assistant", content: [{ type: "toolCall", id: "c1", name: "herdr_agent", arguments: { task: "compare" } }] },
+		{ role: "toolResult", toolCallId: "c1", toolName: "herdr_agent", isError: false, content: [{ type: "text", text: "the report" }] },
+	]));
+	assert(midTurn.includes("<current_user_message>\ncompare A and B\n</current_user_message>"), "the current message is still present mid-turn");
+	assert(midTurn.includes("<work_already_done>"), "work performed for the current message is replayed");
+	assert(midTurn.includes('<tool_call id="c1" name="herdr_agent">'), "the already-issued tool call is replayed");
+	assert(midTurn.includes("the report"), "the already-received tool result is replayed");
+	assert(midTurn.indexOf("<current_user_message>") < midTurn.indexOf("<work_already_done>"), "completed work follows the current message");
+	assert(!midTurn.includes("<conversation_history>"), "a first-turn replay needs no history block");
+
+	const settled = buildConversationPrompt(ctx([user("a"), assistantText("b"), user("c")]));
+	assert(!settled.includes("<work_already_done>"), "a turn with nothing done yet omits the block");
+}
+
+// --- recovery prompt for a tools/call Kiro abandoned ---
+{
+	const recovery = buildToolResultRecoveryPrompt([
+		{ toolCallId: "c1", toolName: "herdr_agent", text: "report <body>", isError: false },
+		{ toolCallId: "c2", toolName: "web_search", text: "boom", isError: true },
+	]);
+	assert(recovery.includes("Do not call the tool again."), "the recovery prompt forbids re-running the tool");
+	assert(recovery.includes('<tool_result name="herdr_agent" is_error="false">'), "each recovered result is labelled");
+	assert(recovery.includes("report &lt;body&gt;"), "recovered result text is escaped");
+	assert(recovery.includes('is_error="true"'), "recovered errors stay marked as errors");
+
+	const long = buildToolResultRecoveryPrompt([
+		{ toolCallId: "c1", toolName: "t", text: "y".repeat(21000), isError: false },
+	]);
+	assert(long.includes("[...truncated 1000 chars...]"), "oversized recovered results are truncated");
+}
+
+// --- image blocks carried by tool results ---
+{
+	const images = imagesFromToolResults([
+		{ toolCallId: "c1", toolName: "a", text: "t", isError: false },
+		{
+			toolCallId: "c2",
+			toolName: "b",
+			text: "t",
+			isError: false,
+			content: [{ type: "text", text: "t" }, { type: "image", data: "AAA", mimeType: "image/png" }],
+		},
+	]);
+	assert(images.length === 1 && images[0].data === "AAA", "only image blocks are collected from tool results");
 }
 
 // --- tool-result extraction (drives resumption routing) ---

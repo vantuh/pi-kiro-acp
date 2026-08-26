@@ -6,7 +6,7 @@ import {
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendKiroMetadataDiagnostic, createOutputMessage, estimateUsage, lastUserMessage } from "./helpers.ts";
+import { appendKiroMetadataDiagnostic, buildToolResultRecoveryPrompt, createOutputMessage, estimateUsage, imagesFromToolResults, lastUserMessage } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import { createNativeToolMirror } from "./native-tool-mirror.ts";
 import {
@@ -33,11 +33,22 @@ type MirrorUi = { setWorkingMessage(message?: string): void };
 const MIRROR_NATIVE_TOOLS = process.env.PI_KIRO_ACP_MIRROR !== "0";
 
 /**
- * Delay before emitting pending tool calls to pi.
- * 0 = next timer tick: still batches tools that arrive in the same I/O wave
- * (kiro often fires parallel MCP calls within one ms), without the old 50ms stall.
+ * How long to keep collecting tool calls before handing the batch to pi.
+ *
+ * Kiro does not emit a parallel batch in one I/O tick: measured gaps are 0ms
+ * (several calls in the same millisecond) and 74ms. Flushing on the first call
+ * strands its siblings — they land in `pendingToolCalls` with no stream to emit
+ * them into, and Kiro drops them at its 120s deadline, which its model reports as
+ * a transport error and then retries forever while the first tool still runs.
+ *
+ * Cost is this delay once per turn, before the first tool starts (model TTFT is
+ * 5-10s for comparison). Override with PI_KIRO_ACP_TOOL_BATCH_MS; 0 restores the
+ * old flush-immediately behaviour.
  */
-const TOOL_CALL_DEBOUNCE_MS = 0;
+const TOOL_CALL_DEBOUNCE_MS = (() => {
+  const raw = Number(process.env.PI_KIRO_ACP_TOOL_BATCH_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 250;
+})();
 
 export function streamKiroAcp(
   pi: ExtensionAPI,
@@ -64,6 +75,9 @@ export function streamKiroAcp(
       const routed = await routeSession(context, options);
       const session = routed.session;
       session.lastUsedAt = Date.now();
+      // Capture before ensureStarted: a cold/parallel process gets an acpSessionId
+      // for an empty conversation, which must not look like in-place recovery.
+      const hadLiveConversation = !!session.acpSessionId;
       const catalogProvider = () => buildForwardedToolCatalog(pi.getAllTools(), pi.getActiveTools());
       await session.ensureStarted(catalogProvider, toKiroEffort(options?.reasoning));
       const ensuredAt = Date.now();
@@ -74,34 +88,70 @@ export function streamKiroAcp(
         toolResults: routed.toolResults.length,
         pendingToolCalls: session.pendingToolCalls.size,
         hasActivePrompt: !!session.activePromptDone,
+        hadLiveConversation,
         cwd: session.cwd,
         optionSessionId: options?.sessionId,
         ensureStartedMs: ensuredAt - turnStartedAt,
       });
 
       const prefixFingerprint = historyFingerprintBeforeCurrentUser(context);
+      let recoverInPlace = false;
 
       if (!routed.isResumption) {
         const currentPrompt = buildPromptParts(context, false);
         const replayPrompt = buildPromptParts(context, true);
+        // Kiro abandoned its own tools/call for these results, so they can no
+        // longer be answered into that MCP request. Re-asking the user's question
+        // would make Kiro redo whatever the tool just did (e.g. relaunch the same
+        // subagent), so hand the result back instead: as its own turn when the ACP
+        // session still holds the conversation, otherwise as a full replay that
+        // now carries the completed work.
+        recoverInPlace = routed.orphanedToolResults && hadLiveConversation;
+        const recoveryText = recoverInPlace
+          ? buildToolResultRecoveryPrompt(routed.toolResults)
+          : null;
         log("prompt parts", {
           session: session.id,
           promptChars: currentPrompt.userMessage.length,
           replayPromptChars: replayPrompt.userMessage.length,
+          orphanedToolResults: routed.orphanedToolResults,
+          recoverInPlace,
+          hadLiveConversation,
           sessionBusy: session.busy,
           hasActivePrompt: !!session.activePromptDone,
           persistenceKey: session.persistenceKey,
         });
-        await session.startPrompt(
-          model.id,
-          currentPrompt.systemPrompt,
-          currentPrompt.userMessage,
-          currentPrompt.images,
-          {
-            expectedHistoryFingerprint: prefixFingerprint,
-            replayUserMessage: replayPrompt.userMessage,
-          },
-        );
+        if (recoveryText) {
+          // Kiro is often still running the original session/prompt (it dropped
+          // only the tools/call). A second prompt without cancel is "Internal
+          // error" in ~1ms. Keep abandoned-call records until this turn lands
+          // so a retry of the same tool is answered, not dispatched again.
+          await session.cancelAndStartFollowUp(
+            model.id,
+            currentPrompt.systemPrompt,
+            recoveryText,
+            imagesFromToolResults(routed.toolResults),
+            30000,
+            undefined,
+            "orphaned tool result",
+          );
+        } else {
+          await session.startPrompt(
+            model.id,
+            currentPrompt.systemPrompt,
+            currentPrompt.userMessage,
+            currentPrompt.images,
+            routed.orphanedToolResults
+              // No live ACP session to recover into: force the replay path so the
+              // completed tool call cannot be dropped by resuming a persisted
+              // session from before it (the fingerprint ignores trailing results).
+              ? { replayUserMessage: replayPrompt.userMessage }
+              : {
+                expectedHistoryFingerprint: prefixFingerprint,
+                replayUserMessage: replayPrompt.userMessage,
+              },
+          );
+        }
       }
       const promptReadyAt = Date.now();
 
@@ -247,11 +297,7 @@ export function streamKiroAcp(
       };
 
       if (routed.isResumption) {
-        const imageBlocks = routed.toolResults.flatMap((tr) =>
-          (tr.content ?? []).filter(
-            (b): b is { type: "image"; data: string; mimeType: string } => b.type === "image",
-          )
-        );
+        const imageBlocks = imagesFromToolResults(routed.toolResults);
 
         if (imageBlocks.length > 0) {
           log("image FUP: detected images in tool results", {
@@ -424,6 +470,10 @@ export function streamKiroAcp(
           streamMs,
         },
       });
+
+      if (recoverInPlace && outcome !== "error") {
+        session.clearAbandonedToolCalls(routed.toolResults);
+      }
 
       if (outcome === "toolUse") {
         output.stopReason = "toolUse";

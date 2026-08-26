@@ -73,6 +73,7 @@ function pendingCall(session: AcpSession, seq: number, toolName: string): {
 		toolName,
 		args: {},
 		receivedAt: Date.now(),
+		emitted: true,
 		resolve: resolveFn,
 	};
 	session.pendingToolCalls.set(callId, call);

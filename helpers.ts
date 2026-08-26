@@ -24,13 +24,48 @@ export function buildConversationPrompt(context: Context): string {
 
   const history = msgs.slice(0, lastUserIdx);
   const current = messageText(msgs[lastUserIdx], Infinity);
+  // Everything after the current user message is work already performed for it
+  // (tool calls Kiro made plus their results). Replaying without it makes a
+  // fresh Kiro session redo that work — e.g. relaunching the same subagent.
+  const done = msgs.slice(lastUserIdx + 1);
+
   const historyText = history.map(formatHistoryMessage).filter(Boolean).join("\n\n");
+  const doneText = done.map(formatHistoryMessage).filter(Boolean).join("\n\n");
 
-  if (!historyText) {
-    return `<current_user_message>\n${escapeText(current)}\n</current_user_message>`;
-  }
+  const parts: string[] = [];
+  if (historyText) parts.push(`<conversation_history>\n${historyText}\n</conversation_history>`);
+  parts.push(`<current_user_message>\n${escapeText(current)}\n</current_user_message>`);
+  if (doneText) parts.push(`<work_already_done>\n${WORK_ALREADY_DONE_NOTE}\n\n${doneText}\n</work_already_done>`);
 
-  return `<conversation_history>\n${historyText}\n</conversation_history>\n\n<current_user_message>\n${escapeText(current)}\n</current_user_message>`;
+  return parts.join("\n\n");
+}
+
+const WORK_ALREADY_DONE_NOTE =
+  "You already ran the steps below while answering the current message, and their results are final. " +
+  "Continue from them instead of repeating any of them.";
+
+/**
+ * Prompt used when Kiro dropped an in-flight pi_host tools/call (its MCP client
+ * gave up before pi finished executing the tool) and the result therefore has to
+ * be handed back as a new turn on the same ACP session.
+ */
+export function buildToolResultRecoveryPrompt(toolResults: ToolResultInfo[]): string {
+  const blocks = toolResults
+    .map((tr) =>
+      `<tool_result name="${escapeAttr(tr.toolName)}" is_error="${tr.isError ? "true" : "false"}">\n` +
+      `${escapeText(truncate(tr.text, MAX_TOOL_RESULT_CHARS))}\n</tool_result>`,
+    )
+    .join("\n\n");
+
+  return (
+    "<dropped_tool_result>\n" +
+    "The tool call(s) you issued below did not return before your side of the connection gave up, " +
+    "so you never saw the result. The tool did run to completion — its output follows. " +
+    "Treat it exactly as the return value of your own tool call and continue the turn from there. " +
+    "Do not call the tool again.\n\n" +
+    `${blocks}\n` +
+    "</dropped_tool_result>"
+  );
 }
 
 function findLastUserIndex(context: Context): number {
@@ -120,6 +155,17 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
   }
 
   return results.reverse();
+}
+
+/** Image blocks carried by tool results, for prompts that must re-attach them. */
+export function imagesFromToolResults(
+  toolResults: ToolResultInfo[],
+): { type: "image"; data: string; mimeType: string }[] {
+  return toolResults.flatMap((tr) =>
+    (tr.content ?? []).filter(
+      (b): b is { type: "image"; data: string; mimeType: string } => b.type === "image",
+    )
+  );
 }
 
 function normalizeToolResultContent(content: any[]): ToolResultContentBlock[] {

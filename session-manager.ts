@@ -11,6 +11,22 @@ export interface RoutedSession {
 	session: AcpSession;
 	toolResults: ToolResultInfo[];
 	isResumption: boolean;
+	/**
+	 * True when the context carries tool results but no pending bridge call
+	 * matched them: Kiro abandoned its own tools/call before pi finished running
+	 * the tool. The result can no longer be answered into that MCP request, so it
+	 * has to be handed back as a follow-up prompt instead.
+	 */
+	orphanedToolResults: boolean;
+}
+
+/** Sessions that still hold a live Kiro conversation, most recently used first. */
+function liveSessionsForKey(keyPrefix: string, cwd: string): AcpSession[] {
+	return [...sessions.entries()]
+		.filter(([key]) => key === keyPrefix || key.startsWith(`${keyPrefix}:`))
+		.map(([, session]) => session)
+		.filter((session) => session.started && !!session.acpSessionId && session.cwd === cwd)
+		.sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
 
 export async function routeSession(
@@ -22,6 +38,8 @@ export async function routeSession(
 		typeof options?.sessionId === "string" && options.sessionId
 			? options.sessionId
 			: undefined;
+	const requestedCwd = (options as any)?.cwd || process.cwd();
+	let orphanedToolResults = false;
 
 	if (toolResults.length > 0) {
 		const matches = [...sessions.values()]
@@ -38,21 +56,48 @@ export async function routeSession(
 				matches: matches[0].matches,
 				toolResults: toolResults.length,
 			});
-			return { session: matches[0].session, toolResults, isResumption: true };
-		} else if (toolResults.length > 0) {
-			log("route: no resumption match found", {
-				toolResults: toolResults.length,
-				toolNames: toolResults.map((t) => t.toolName),
-				pendingSessions: [...sessions.entries()].map(([k, s]) => ({
-					key: k,
-					pending: s.pendingToolCalls.size,
-					busy: s.busy,
-				})),
-			});
+			return {
+				session: matches[0].session,
+				toolResults,
+				isResumption: true,
+				orphanedToolResults: false,
+			};
 		}
+
+		// No pending call to answer. Never fall through to "fresh session + replay"
+		// here: a brand-new Kiro session would redo the work the tool just did.
+		// Reuse the live session that still remembers the conversation and let the
+		// stream deliver the result as a follow-up prompt instead.
+		orphanedToolResults = true;
+		log("route: no resumption match found", {
+			toolResults: toolResults.length,
+			toolNames: toolResults.map((t) => t.toolName),
+			pendingSessions: [...sessions.entries()].map(([k, s]) => ({
+				key: k,
+				pending: s.pendingToolCalls.size,
+				busy: s.busy,
+				started: s.started,
+			})),
+		});
+
+		const reusable = sessionId
+			? liveSessionsForKey(`pi:${sessionId}`, requestedCwd)[0]
+			: undefined;
+		if (reusable) {
+			if (sessionId) reusable.persistenceKey = persistenceKeyForSession(sessionId, requestedCwd);
+			log("route orphaned tool result to live session", {
+				session: reusable.id,
+				acpSessionId: reusable.acpSessionId,
+				toolNames: toolResults.map((t) => t.toolName),
+			});
+			return { session: reusable, toolResults, isResumption: false, orphanedToolResults };
+		}
+		log("route orphaned tool result: no live session to recover into", {
+			sessionId,
+			cwd: requestedCwd,
+		});
 	}
 
-	const requestedCwd = (options as any)?.cwd || process.cwd();
 	const key = sessionId ? `pi:${sessionId}` : undefined;
 
 	if (key) {
@@ -72,7 +117,7 @@ export async function routeSession(
 				busy: existing.busy,
 				persistenceKey,
 			});
-			return { session: existing, toolResults, isResumption: false };
+			return { session: existing, toolResults, isResumption: false, orphanedToolResults };
 		}
 
 		const created = new AcpSession(requestedCwd);
@@ -87,7 +132,7 @@ export async function routeSession(
 			existingBusy: !!existing?.busy,
 			persistenceKey: created.persistenceKey,
 		});
-		return { session: created, toolResults, isResumption: false };
+		return { session: created, toolResults, isResumption: false, orphanedToolResults };
 	}
 
 	const idleSameCwd = [...sessions.values()].find(
@@ -99,7 +144,7 @@ export async function routeSession(
 			session: idleSameCwd.id,
 			cwd: requestedCwd,
 		});
-		return { session: idleSameCwd, toolResults, isResumption: false };
+		return { session: idleSameCwd, toolResults, isResumption: false, orphanedToolResults };
 	}
 
 	const created = new AcpSession(requestedCwd);
@@ -110,7 +155,7 @@ export async function routeSession(
 		cwd: requestedCwd,
 		activeSessions: sessions.size,
 	});
-	return { session: created, toolResults, isResumption: false };
+	return { session: created, toolResults, isResumption: false, orphanedToolResults };
 }
 
 export async function stopAllSessions(): Promise<void> {
