@@ -4,6 +4,8 @@ import type { ForwardedTool, ForwardedToolCatalog } from "./tool-catalog.ts";
 
 const MCP_PROTOCOL_VERSION = "2025-06-18";
 const MAX_BODY_BYTES = 64 * 1024;
+/** How often a still-running tool call gets a keepalive on the SSE response. */
+const DEFAULT_KEEPALIVE_MS = 20_000;
 
 type JsonRpcId = number | string | null;
 type JsonRpcMessage = {
@@ -41,6 +43,15 @@ export interface ToolBridgeOptions {
 	/** Exact Origin values accepted when a client sends an Origin header. */
 	allowedOrigins?: readonly string[];
 	maxBodyBytes?: number;
+	/**
+	 * Keepalive cadence for a tool call answered over SSE. Kiro's MCP client
+	 * abandons a tools/call that produces no bytes for long enough, which silently
+	 * loses the result of any slow pi tool; periodic traffic prevents that.
+	 * 0 disables keepalives.
+	 */
+	keepaliveMs?: number;
+	/** Optional sink for transport-level diagnostics (wired to the debug log). */
+	onDebug?: (message: string, data?: Record<string, unknown>) => void;
 }
 
 export interface ToolBridge {
@@ -54,6 +65,7 @@ interface PendingCall {
 	response: ServerResponse;
 	abort: AbortController;
 	reject: (error: Error) => void;
+	stopKeepalive: () => void;
 }
 
 function jsonRpcResult(id: JsonRpcId, result: unknown): Record<string, unknown> {
@@ -111,12 +123,38 @@ function validAccept(header: string | undefined): boolean {
 	});
 }
 
+/** Only stream when the client explicitly opted into SSE, per the MCP transport. */
+function acceptsEventStream(header: string | undefined): boolean {
+	if (!header) return false;
+	return header.split(",").some((part) => part.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream");
+}
+
+function progressTokenOf(params: unknown): string | number | undefined {
+	const token = (params as { _meta?: { progressToken?: unknown } } | undefined)?._meta?.progressToken;
+	return typeof token === "string" || typeof token === "number" ? token : undefined;
+}
+
+/** Open an SSE response and stream JSON-RPC messages over it. */
+function openEventStream(res: ServerResponse): (message: unknown) => void {
+	res.writeHead(200, {
+		"content-type": "text/event-stream",
+		"cache-control": "no-cache, no-transform",
+		connection: "keep-alive",
+	});
+	res.flushHeaders?.();
+	return (message: unknown) => {
+		if (res.writableEnded || res.destroyed) return;
+		res.write(`data: ${JSON.stringify(message)}\n\n`);
+	};
+}
+
 /** Start a minimal authenticated Streamable HTTP MCP server on loopback. */
 export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolBridge> {
 	const token = randomBytes(32).toString("hex");
 	const allowedOrigins = new Set(options.allowedOrigins ?? []);
 	const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
-	let pending: PendingCall | undefined;
+	const keepaliveMs = options.keepaliveMs ?? DEFAULT_KEEPALIVE_MS;
+	const pending = new Map<ServerResponse, PendingCall>();
 	let closed = false;
 
 	const server = createServer(async (req, res) => {
@@ -204,10 +242,6 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 				sendJson(res, 200, jsonRpcResult(id, { resources: [] }));
 				return;
 			case "tools/call": {
-				if (pending) {
-					sendJson(res, 200, jsonRpcError(id, -32000, "Another tool call is already pending"));
-					return;
-				}
 				const params = message.params as { name?: unknown; arguments?: unknown } | undefined;
 				if (typeof params?.name !== "string") {
 					sendJson(res, 200, jsonRpcError(id, -32602, "Tool name is required"));
@@ -224,9 +258,67 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 					sendJson(res, 200, jsonRpcError(id, -32602, "Tool arguments must be an object"));
 					return;
 				}
+
+				// Pi tools can run for many minutes (subagents, deep research). A plain
+				// JSON response means no bytes flow until the tool finishes, and Kiro's
+				// MCP client eventually abandons the request — losing the result. When
+				// the client accepts SSE, answer over a stream and keep it warm.
+				const streaming = acceptsEventStream(req.headers.accept);
+				const progressToken = progressTokenOf(message.params);
+				const startedAt = Date.now();
+				options.onDebug?.("bridge tools/call accepted", {
+					tool: params.name,
+					accept: req.headers.accept,
+					streaming,
+					hasProgressToken: progressToken !== undefined,
+					pendingCount: pending.size + 1,
+				});
+				const sendEvent = streaming ? openEventStream(res) : undefined;
+
+				let keepaliveTimer: ReturnType<typeof setInterval> | null = null;
+				let progress = 0;
+				const stopKeepalive = () => {
+					if (keepaliveTimer) clearInterval(keepaliveTimer);
+					keepaliveTimer = null;
+				};
+				if (sendEvent && keepaliveMs > 0) {
+					keepaliveTimer = setInterval(() => {
+						if (res.writableEnded || res.destroyed) {
+							stopKeepalive();
+							return;
+						}
+						// An SSE comment keeps the socket warm for clients with an idle
+						// read timeout; a progress notification is what resets an
+						// MCP-level request timeout, but only if a token was supplied.
+						res.write(`: keepalive ${Date.now() - startedAt}ms\n\n`);
+						if (progressToken !== undefined) {
+							sendEvent({
+								jsonrpc: "2.0",
+								method: "notifications/progress",
+								params: {
+									progressToken,
+									progress: ++progress,
+									message: `${params.name} still running (${Math.round((Date.now() - startedAt) / 1000)}s)`,
+								},
+							});
+						}
+					}, keepaliveMs);
+					keepaliveTimer.unref?.();
+				}
+
+				const respond = (body: unknown) => {
+					stopKeepalive();
+					if (sendEvent) {
+						sendEvent(body);
+						if (!res.writableEnded && !res.destroyed) res.end();
+						return;
+					}
+					if (!res.destroyed) sendJson(res, 200, body);
+				};
+
 				const abort = new AbortController();
 				const callPromise = new Promise<ToolBridgeResult>((resolve, reject) => {
-					pending = { response: res, abort, reject };
+					pending.set(res, { response: res, abort, reject, stopKeepalive });
 					void options.onToolCall({
 						requestId: id,
 						kiroName: params.name as string,
@@ -236,21 +328,29 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 					}).then(resolve, reject);
 				});
 				const clearPending = () => {
-					if (pending?.response === res) pending = undefined;
+					pending.delete(res);
 				};
 				res.once("close", () => {
-					if (res.writableEnded || pending?.response !== res) return;
+					const held = pending.get(res);
+					if (res.writableEnded || !held) return;
+					stopKeepalive();
 					abort.abort();
-					pending.reject(new Error("MCP client disconnected"));
+					options.onDebug?.("bridge tools/call disconnected by client", {
+						tool: params.name,
+						streaming,
+						waitedMs: Date.now() - startedAt,
+						remainingPending: pending.size - 1,
+					});
+					held.reject(new Error("MCP client disconnected"));
 					clearPending();
 				});
 				try {
 					const result = await callPromise;
 					clearPending();
-					sendJson(res, 200, jsonRpcResult(id, result));
+					respond(jsonRpcResult(id, result));
 				} catch (error) {
 					clearPending();
-					if (!res.destroyed) sendJson(res, 200, jsonRpcResult(id, textResult(error instanceof Error ? error.message : String(error), true)));
+					respond(jsonRpcResult(id, textResult(error instanceof Error ? error.message : String(error), true)));
 				}
 				return;
 			}
@@ -262,11 +362,13 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 	const closeBridge = async (): Promise<void> => {
 		if (closed) return;
 		closed = true;
-		if (pending) {
-			pending.abort.abort();
-			pending.reject(new Error("MCP adapter closed"));
-			pending.response.destroy();
-			pending = undefined;
+		const held = [...pending.values()];
+		pending.clear();
+		for (const call of held) {
+			call.abort.abort();
+			call.stopKeepalive();
+			call.reject(new Error("MCP adapter closed"));
+			call.response.destroy();
 		}
 		await new Promise<void>((resolve) => server.close(() => resolve()));
 	};

@@ -1005,6 +1005,7 @@ export class AcpSession {
 		this.toolBridge = await startToolBridge({
 			catalog: () => this.currentCatalog(),
 			onToolCall: (call) => this.handleBridgeToolCall(call),
+			onDebug: (message, data) => log(message, { session: this.id, ...data }),
 		});
 	}
 

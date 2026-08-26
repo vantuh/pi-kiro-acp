@@ -61,3 +61,14 @@ turn loop.
   `test/lifecycle-cleanup.test.ts`.
 - Reverting to "pi executes and gates everything" (B2) stays cheap: widen the catalog filter,
   drop the native tools from `allowedTools`, disable the mirror.
+
+## Amendment (2026-08-26) — concurrent `tools/call`
+
+The first `pi_host` implementation kept a single in-flight HTTP `tools/call`. A second POST
+while the first was open returned JSON-RPC `-32000 Another tool call is already pending`.
+Kiro does issue overlapping calls in one turn (two `herdr_agent`, or `herdr_agent` +
+`web_search`); the model then reported a transport error.
+
+Pending calls are keyed per HTTP response. Each keeps its own SSE/JSON stream, keepalive,
+and abort. Disconnect or `close()` only settles that call. Pi already tracks multiple
+`pendingToolCalls`; the stream debounce batches them into one turn.
