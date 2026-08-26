@@ -34,6 +34,8 @@ tail -f "$LOG" | grep '"session":"abc123"'
 | `PI_KIRO_ACP_DEBUG=1` | Enables the log file above (`0`/unset = no logging at all) |
 | `PI_KIRO_ACP_VERBOSE=1..3` | Passes `-v`/`-vv`/`-vvv` to `kiro-cli acp`; its own logs land in the same file as `kiro log` |
 | `PI_KIRO_ACP_MIRROR=0` | Disables mirroring Kiro's native tool calls into the transcript |
+| `PI_KIRO_ACP_DRAIN_MS` | Grace period between answering Kiro's outstanding `tools/call` and cancelling its turn (default 150) |
+| `PI_KIRO_ACP_REFUSAL_RETRY_MS` | Delay before re-sending a recovery prompt that came back as a contentless `refusal` (default 1500) |
 
 ### kiro-cli's own verbosity
 
@@ -160,6 +162,11 @@ blocks in the transcript.
 | `bridge tool call received` | `{ session, callId, kiroName, toolName, argsKeys }` | Kiro called a pi tool over `pi_host`; `callId` is `${session}-<n>` |
 | `bridge tools/call accepted` | `{ session, tool, accept, streaming, hasProgressToken, pendingCount }` | Transport setup for the call (`streaming` = answered over SSE with keepalives; `pendingCount` includes this call) |
 | `bridge tool call ABANDONED by kiro` | `{ session, callId, toolName, waitedMs, remainingPending }` | Kiro gave up on its own `tools/call` (measured: 120s on 2.19.1) while pi was still running the tool |
+| `bridge tool call STRANDED (no stream attached)` | `{ session, callId, toolName, answered, cancellingTurn, remainingPending }` | Kiro called a tool after pi's turn closed. Answered immediately with `strandedNote` (it can never be dispatched); `cancellingTurn` means Kiro held no other live pi call, so its now-unreadable turn was cancelled too |
+| `bridge tool call queued before stream attach` | `{ session, callId, toolName }` | Arrived between `session/prompt` and the stream attaching its handler — stays queued and is flushed on attach |
+| `empty refusal → resending recovery prompt` | `{ session, attempt, delayMs, promptChars }` | The recovery prompt came back as a contentless `refusal`; it is re-sent instead of ending the turn |
+| `empty refusal → stop` | `{ session, retried, recoverable }` | The retry was refused too (or there was nothing to re-send) — the turn ends |
+| `empty refusal retry failed → error` | `{ session, error }` | The re-sent prompt could not be delivered |
 | `bridge tools/call disconnected by client` | `{ session, tool, streaming, waitedMs }` | Same event seen from the HTTP side |
 | `bridge tool call DEDUPED (already running)` | `{ session, toolName, abandonedCallId, abandonedAgoMs }` | Kiro reissued an abandoned call; answered without running the tool twice |
 | `cleared abandoned tool call records` | `{ session, cleared, remaining, tools }` | Recovery turn landed; the tool may be called again |
@@ -265,3 +272,19 @@ while `hasActivePrompt: true` means the follow-up overlapped the original prompt
 did not run, or did not settle. A `route new keyed session` with `originalKey` at step 4
 instead means recovery failed and Kiro is being asked the original question again. See
 `docs/adr/0002-surviving-kiro-mcp-tool-call-deadline.md`.
+
+### The agent stops right after a subagent returns ("continue" restarts it)
+
+The recovery prompt was refused outright. Signature:
+
+```sh
+grep -E 'STRANDED|empty refusal|"stopReason":"refusal"' "$LOG"
+```
+
+`active prompt settled { stopReason: "refusal", elapsedMs: 4-20 }` with an `outcome` of
+`stop` and `thinkingChars: 0, textChars: 0` is kiro-cli rejecting a prompt sent while its
+conversation still held a `tool_use` with no `tool_result`. It only ever happened when a
+`STRANDED` call was still open at cancel time (7 of 14 recoveries on 2026-08-26; never with
+`pendingToolCalls: 0`). Stranded calls are now answered on arrival and refusals are retried
+once, so both the trigger and the silent stop should be gone — an `empty refusal → stop`
+line means the retry was refused too.

@@ -50,6 +50,14 @@ const TOOL_CALL_DEBOUNCE_MS = (() => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 250;
 })();
 
+/**
+ * A recovery prompt that kiro-cli refuses without producing any content is a
+ * broken handoff, not a finished turn. It is re-sent after this delay, at most
+ * REFUSAL_RETRIES times, before falling back to ending the turn.
+ */
+const REFUSAL_RETRY_DELAY_MS = Number(process.env.PI_KIRO_ACP_REFUSAL_RETRY_MS) || 1500;
+const REFUSAL_RETRIES = 1;
+
 export function streamKiroAcp(
   pi: ExtensionAPI,
   model: Model<any>,
@@ -96,6 +104,9 @@ export function streamKiroAcp(
 
       const prefixFingerprint = historyFingerprintBeforeCurrentUser(context);
       let recoverInPlace = false;
+      // Kept for the empty-refusal retry below: the exact recovery prompt that was
+      // sent, so it can be re-sent without rebuilding the routing decision.
+      let recoveryPrompt: { systemPrompt: string; text: string; images: ReturnType<typeof imagesFromToolResults> } | null = null;
 
       if (!routed.isResumption) {
         const currentPrompt = buildPromptParts(context, false);
@@ -126,11 +137,16 @@ export function streamKiroAcp(
           // only the tools/call). A second prompt without cancel is "Internal
           // error" in ~1ms. Keep abandoned-call records until this turn lands
           // so a retry of the same tool is answered, not dispatched again.
+          recoveryPrompt = {
+            systemPrompt: currentPrompt.systemPrompt,
+            text: recoveryText,
+            images: imagesFromToolResults(routed.toolResults),
+          };
           await session.cancelAndStartFollowUp(
             model.id,
-            currentPrompt.systemPrompt,
-            recoveryText,
-            imagesFromToolResults(routed.toolResults),
+            recoveryPrompt.systemPrompt,
+            recoveryPrompt.text,
+            recoveryPrompt.images,
             30000,
             undefined,
             "orphaned tool result",
@@ -356,6 +372,9 @@ export function streamKiroAcp(
           if (toolFlushTimer) clearTimeout(toolFlushTimer);
           toolFlushTimer = null;
           session.onToolCallFromBridge = null;
+          // From here on a tools/call from Kiro cannot reach pi, so the session
+          // answers it instead of letting it hang until Kiro's own deadline.
+          session.toolIntakeClosed = true;
           resolve(value);
         };
 
@@ -408,34 +427,83 @@ export function streamKiroAcp(
         };
         if (unemittedToolCalls().length > 0) scheduleToolFlush();
 
-        session.activePromptDone?.then(
-          () => {
-            if (gen === session.streamGen && !settled) {
-              if (!flushToolCalls()) {
-                log("prompt done → stop", { session: session.id });
-                finish("stop");
-              }
-            }
-          },
-          (e) => {
-            if (gen === session.streamGen && !settled) {
-              promptError = e;
-              if (!flushToolCalls()) {
-                log("prompt error → error", { session: session.id, error: e?.message });
-                finish("error");
-              }
-            }
-          },
-        );
+        // kiro-cli answers a prompt sent while its own conversation still holds an
+        // unanswered tool_use with an instant, contentless `refusal` (measured
+        // 4-20ms, 7 of 14 recoveries on 2026-08-26). Reporting that as a finished
+        // turn is what left the orchestrator stopped right after its subagent
+        // returned, waiting for the user to say "continue". A second prompt on the
+        // same session goes through — that is exactly what the manual nudge did.
+        const isEmptyRefusal = (stopReason: string | undefined) =>
+          stopReason === "refusal" && thinkingChars === 0 && textChars === 0 && output.content.length === 0;
 
-        // No prompt in flight: settle now instead of awaiting a promise that never arrives.
-        if (!session.activePromptDone && !settled) {
-          if (!flushToolCalls()) {
-            promptError = session.lastPromptError ?? new Error("Kiro ACP session has no active prompt");
-            log("no active prompt → error", { session: session.id, error: promptError.message });
-            finish("error");
+        let refusalRetries = 0;
+
+        const retryAfterRefusal = () => {
+          if (!recoveryPrompt || refusalRetries >= REFUSAL_RETRIES) {
+            log("empty refusal → stop", {
+              session: session.id,
+              retried: refusalRetries,
+              recoverable: !!recoveryPrompt,
+            });
+            finish("stop");
+            return;
+          }
+          refusalRetries += 1;
+          log("empty refusal → resending recovery prompt", {
+            session: session.id,
+            attempt: refusalRetries,
+            delayMs: REFUSAL_RETRY_DELAY_MS,
+            promptChars: recoveryPrompt.text.length,
+          });
+          setTimeout(() => {
+            if (settled || gen !== session.streamGen) return;
+            session
+              .startPrompt(model.id, recoveryPrompt!.systemPrompt, recoveryPrompt!.text, recoveryPrompt!.images)
+              .then(attachPromptSettle, (e: Error) => {
+                if (settled || gen !== session.streamGen) return;
+                promptError = e;
+                log("empty refusal retry failed → error", { session: session.id, error: e?.message });
+                finish("error");
+              });
+          }, REFUSAL_RETRY_DELAY_MS);
+        };
+
+        function attachPromptSettle(): void {
+          session.activePromptDone?.then(
+            (result) => {
+              if (gen === session.streamGen && !settled) {
+                if (!flushToolCalls()) {
+                  if (isEmptyRefusal(result?.stopReason)) {
+                    retryAfterRefusal();
+                    return;
+                  }
+                  log("prompt done → stop", { session: session.id });
+                  finish("stop");
+                }
+              }
+            },
+            (e) => {
+              if (gen === session.streamGen && !settled) {
+                promptError = e;
+                if (!flushToolCalls()) {
+                  log("prompt error → error", { session: session.id, error: e?.message });
+                  finish("error");
+                }
+              }
+            },
+          );
+
+          // No prompt in flight: settle now instead of awaiting a promise that never arrives.
+          if (!session.activePromptDone && !settled) {
+            if (!flushToolCalls()) {
+              promptError = session.lastPromptError ?? new Error("Kiro ACP session has no active prompt");
+              log("no active prompt → error", { session: session.id, error: promptError.message });
+              finish("error");
+            }
           }
         }
+
+        attachPromptSettle();
       });
 
       session.updateHandler = null;

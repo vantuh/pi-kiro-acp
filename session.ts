@@ -69,6 +69,11 @@ let mcpNoInteractiveTimeoutInFlight: Promise<void> | null = null;
  * keepalive instead (see tool-bridge.ts). */
 const MCP_NO_INTERACTIVE_TIMEOUT_MS = 120000;
 
+/** Grace period between answering Kiro's outstanding tools/call and cancelling
+ * its turn, so the tool_result is consumed while its agent still processes tools
+ * instead of being dropped once the cancel puts it in Idle. */
+const TOOL_RESULT_DRAIN_MS = Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150;
+
 export function toKiroEffort(reasoning: SimpleStreamOptions["reasoning"]): KiroEffort | null {
 	if (reasoning === "minimal") return "low";
 	if (
@@ -115,6 +120,10 @@ export class AcpSession {
 	/** Why the last prompt failed, for streams that attach after activePromptDone was cleared. */
 	lastPromptError: Error | null = null;
 	streamGen = 0;
+	/** Set by the stream when its turn closed. A tools/call arriving after that
+	 * can never be handed to pi, so it is answered immediately instead of being
+	 * left to hang until Kiro's own deadline. Cleared by every startPrompt. */
+	toolIntakeClosed = false;
 	lastUsedAt = Date.now();
 
 	constructor(cwd: string) {
@@ -635,6 +644,7 @@ export class AcpSession {
 		if (includeSystem && systemHash) this.systemPromptHash = systemHash;
 
 		this.lastPromptError = null;
+		this.toolIntakeClosed = false;
 		if (this.activePromptDone) {
 			log("startPrompt overlapping an in-flight prompt", {
 				session: this.id,
@@ -926,6 +936,13 @@ export class AcpSession {
 		logPrefix = "image FUP",
 	): Promise<void> {
 		const prevPromise = this.activePromptDone;
+		// Answer whatever tools/call Kiro still holds *before* cancelling. After the
+		// cancel its agent is Idle and discards the result ("received a tool execution
+		// event for an agent not processing tools"), leaving its conversation with a
+		// tool_use that has no tool_result — the state that made the follow-up prompt
+		// come back as a contentless `refusal` in 4-20ms.
+		const rejected = this.rejectPendingToolCalls(`Cancelled old prompt during ${logPrefix} handoff`);
+		if (rejected > 0) await new Promise<void>((r) => setTimeout(r, TOOL_RESULT_DRAIN_MS));
 		if (prevPromise) {
 			if (this.acpSessionId) {
 				this.rpcNotify("session/cancel", { sessionId: this.acpSessionId });
@@ -946,7 +963,6 @@ export class AcpSession {
 				});
 			}
 		}
-		this.rejectPendingToolCalls(`Cancelled old prompt during ${logPrefix} handoff`);
 		beforeStart?.();
 
 		log(`${logPrefix}: starting follow-up prompt`, {
@@ -958,9 +974,10 @@ export class AcpSession {
 		log(`${logPrefix}: follow-up prompt started`, { session: this.id });
 	}
 
-	private rejectPendingToolCalls(reason: string): void {
+	/** Answer every tools/call Kiro still holds. Returns how many were answered. */
+	private rejectPendingToolCalls(reason: string): number {
 		const calls = [...this.pendingToolCalls.values()];
-		if (calls.length === 0) return;
+		if (calls.length === 0) return 0;
 		this.pendingToolCalls.clear();
 		log("rejecting pending tool calls", {
 			session: this.id,
@@ -969,6 +986,7 @@ export class AcpSession {
 			callIds: calls.map((call) => call.callId),
 		});
 		for (const call of calls) call.resolve({ result: reason, isError: true });
+		return calls.length;
 	}
 
 	private findToolCallMatch(
@@ -1101,11 +1119,38 @@ export class AcpSession {
 				argsKeys: Object.keys(call.arguments),
 				streamAttached: !!this.onToolCallFromBridge,
 			});
-			if (!this.onToolCallFromBridge) {
-				// Arrived after this turn's stream already closed: pi cannot be told
-				// about it until the next turn, and Kiro will drop it at its deadline
-				// first. Raising the batch window is what prevents this.
+			if (!this.onToolCallFromBridge && this.toolIntakeClosed) {
+				// The pi stream for this turn already closed, so pi can never be told
+				// about this call. Leaving it to hang until Kiro's 120s deadline left
+				// Kiro's turn holding a tool_use with no tool_result; the recovery
+				// prompt sent after the cancel was then rejected outright (contentless
+				// `stopReason: "refusal"`, which pi reported as a finished turn — the
+				// orchestrator appeared to stop right after its subagent returned).
+				// Answer it now, while Kiro is still processing tools and can record
+				// the result.
+				this.pendingToolCalls.delete(publicCallId);
+				// Nothing Kiro produces for the rest of this prompt can reach pi. If it
+				// holds no other live pi tool call, end the turn instead of paying for
+				// output nobody reads and cancelling it later during recovery. A still
+				// open sibling call keeps the turn alive — it can beat Kiro's deadline
+				// and be delivered normally.
+				const cancellingTurn = this.pendingToolCalls.size === 0 && !!this.activePromptDone && !!this.acpSessionId;
 				log("bridge tool call STRANDED (no stream attached)", {
+					session: this.id,
+					callId: publicCallId,
+					toolName: call.piName,
+					answered: true,
+					cancellingTurn,
+					remainingPending: this.pendingToolCalls.size,
+				});
+				pending.resolve({ result: strandedNote(call.kiroName), isError: true });
+				if (cancellingTurn) this.rpcNotify("session/cancel", { sessionId: this.acpSessionId });
+				return;
+			}
+			if (!this.onToolCallFromBridge) {
+				// Between session/prompt and the stream attaching its handler: the call
+				// stays queued and the stream flushes it as soon as it attaches.
+				log("bridge tool call queued before stream attach", {
 					session: this.id,
 					callId: publicCallId,
 					toolName: call.piName,
@@ -1147,6 +1192,16 @@ function alreadyRunningNote(kiroName: string): string {
 		"own MCP tool-call deadline, but pi is still executing it and the result will be delivered " +
 		"to you in a follow-up message. Do not call it again and do not start replacement work for " +
 		"it — end your turn now and wait for the result."
+	);
+}
+
+/** Answer for a tools/call that arrived after pi's turn closed. */
+function strandedNote(kiroName: string): string {
+	return (
+		`\`${kiroName}\` was not executed: pi had already closed the turn in which you asked ` +
+		"for it, so this call could not be dispatched. Any result you are still waiting for " +
+		"will be delivered to you in a follow-up message. Do not call this or any other tool " +
+		"again in this turn — end your turn now."
 	);
 }
 

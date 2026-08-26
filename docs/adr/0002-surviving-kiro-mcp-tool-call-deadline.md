@@ -107,3 +107,40 @@ Then `clearAbandonedToolCalls` had already dropped the dedup record, so Kiro's r
   `<work_already_done>` replay) is the relaunch loop.
 - Abandoned-call records are cleared only after the recovery turn lands (`stop` /
   `toolUse`), not before the follow-up prompt is sent.
+
+## Amendment (2026-08-26, later) — no unanswered tool_use may survive into recovery
+
+The cancel-then-recover handoff still lost about half its turns. Of 21 recoveries in one
+afternoon, 7 had their follow-up prompt rejected outright:
+
+```
+active prompt settled { stopReason: "cancelled", pendingToolCalls: 1 }
+kiro log  WARN agent::agent: 4231: received a tool execution event for an agent
+          not processing tools ... active_state: Idle
+active prompt settled { stopReason: "refusal", pendingToolCalls: 0, elapsedMs: 4 }
+outcome   { outcome: "stop", thinkingChars: 0, textChars: 0, turnMs: 6 }
+```
+
+The correlation is exact: `refusal` happened only when a `tools/call` was still open at
+cancel time (7 of 14 such recoveries), never with `pendingToolCalls: 0` (0 of 8). Those open
+calls are Kiro's retries after its own deadline fired, arriving once pi's stream had already
+closed — pi could not dispatch them (`STRANDED`), so they hung until Kiro's next 120s
+deadline. Cancelling with one outstanding left Kiro's conversation holding a `tool_use` whose
+`tool_result` arrived a moment too late and was discarded, and the next prompt was refused.
+Because the stream mapped any settled prompt to `stop`, pi saw a finished, empty turn: the
+orchestrator appeared to stop the instant its subagent returned, and the user's "continue"
+was really just the retry Kiro would have accepted.
+
+- **Stranded calls are answered on arrival.** `toolIntakeClosed` (set by the stream's
+  `finish`, cleared by every `startPrompt`) distinguishes "the turn is over" from "the stream
+  has not attached yet"; the latter still queues, as the tool-batch window requires. An
+  answered stranded call also ends Kiro's turn (`session/cancel`) when Kiro holds no other
+  live pi call — nothing it produces afterwards can reach pi, so the alternative is paying
+  for output nobody reads. A still-open sibling keeps the turn alive: that one can beat the
+  deadline and be delivered normally.
+- **Results before the cancel.** `cancelAndStartFollowUp` answers outstanding calls first and
+  waits `PI_KIRO_ACP_DRAIN_MS` (150) before cancelling, so the result is consumed while Kiro
+  still processes tools rather than after it goes Idle.
+- **An empty refusal is a failed handoff, not a turn.** The stream re-sends the same recovery
+  prompt once after `PI_KIRO_ACP_REFUSAL_RETRY_MS` (1500) — empirically what the manual nudge
+  did — and ends the turn only if that is refused too.
