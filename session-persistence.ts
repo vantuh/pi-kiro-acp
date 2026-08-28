@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { log } from "./logging.ts";
+import { KIRO_TOOL_FRAME_PREFIX, stripNativeToolFrames } from "./native-tool-frame.ts";
 
 const APP_DIR = "pi-kiro-acp";
 const SESSION_TTL_MS = 24 * 60 * 60 * 1000;
@@ -131,7 +132,11 @@ function normalizeContent(content: unknown): unknown {
 	return content
 		.map((block: any) => {
 			if (block?.type === "thinking") return null;
-			if (block?.type === "text") return { type: "text", text: block.text || "" };
+			if (block?.type === "text") {
+				const raw = block.text || "";
+				const text = raw.includes(KIRO_TOOL_FRAME_PREFIX) ? stripNativeToolFrames(raw) : raw;
+				return text ? { type: "text", text } : null;
+			}
 			if (block?.type === "toolCall") return { type: "toolCall", name: block.name, arguments: stableValue(block.arguments) };
 			if (block?.type === "image") return { type: "image", mimeType: block.mimeType, dataHash: hashText(String(block.data || "")).slice(0, 16) };
 			return stableValue(block);

@@ -24,11 +24,11 @@ type MirrorUi = { setWorkingMessage(message?: string): void };
 
 /**
  * Phase 4: mirror Kiro's native (non-pi_host) tool activity into pi as
- * display-only thinking blocks so they interleave with assistant text.
- * Each finished tool is emitted as one self-contained ASCII frame (| and -),
- * never as a real toolcall_* (that would make pi execute it).
+ * display-only text blocks so they interleave with assistant text and remain
+ * visible when thinking is hidden. Each finished tool is emitted as one
+ * `<!--kiro-tool-->` marker block that the markdown transformer restyles inline.
+ * Never emits real toolcall_* (that would make pi execute it).
  * Disable with PI_KIRO_ACP_MIRROR=0.
- * Hidden if the user toggles hide-thinking.
  */
 const MIRROR_NATIVE_TOOLS = process.env.PI_KIRO_ACP_MIRROR !== "0";
 
@@ -234,8 +234,28 @@ export function streamKiroAcp(
         stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta, partial: output });
       };
 
+      const pushTextDelta = (delta: string, messageId?: string) => {
+        if (!delta) return;
+        if (thinkingStarted) endThinkingBlock();
+        if (textStarted && messageId && textMessageId && messageId !== textMessageId) {
+          endTextBlock();
+        }
+        if (!textStarted) {
+          output.content.push({ type: "text", text: "" });
+          textIdx = output.content.length - 1;
+          stream.push({ type: "text_start", contentIndex: textIdx, partial: output });
+          textStarted = true;
+          textMessageId = messageId;
+        } else if (!textMessageId && messageId) {
+          textMessageId = messageId;
+        }
+        (output.content[textIdx] as any).text += delta;
+        stream.push({ type: "text_delta", contentIndex: textIdx, delta, partial: output });
+      };
+
       const nativeToolMirror = createNativeToolMirror({
-        pushThinking: pushThinkingDelta,
+        pushText: (delta) => pushTextDelta(delta),
+        endText: endTextBlock,
         endThinking: endThinkingBlock,
         setWorkingMessage: (message) => mirrorUi?.setWorkingMessage(message),
       });
@@ -292,21 +312,7 @@ export function streamKiroAcp(
             }
             textChars += text.length;
             textChunks += 1;
-            if (thinkingStarted) endThinkingBlock();
-            if (textStarted && messageId && textMessageId && messageId !== textMessageId) {
-              endTextBlock();
-            }
-            if (!textStarted) {
-              output.content.push({ type: "text", text: "" });
-              textIdx = output.content.length - 1;
-              stream.push({ type: "text_start", contentIndex: textIdx, partial: output });
-              textStarted = true;
-              textMessageId = messageId;
-            } else if (!textMessageId && messageId) {
-              textMessageId = messageId;
-            }
-            (output.content[textIdx] as any).text += text;
-            stream.push({ type: "text_delta", contentIndex: textIdx, delta: text, partial: output });
+            pushTextDelta(text, messageId);
             emittedTextDeltas += 1;
           }
         }

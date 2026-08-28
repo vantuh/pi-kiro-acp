@@ -15,7 +15,8 @@ function assert(condition: unknown, label: string): void {
 function harness() {
 	const calls: string[] = [];
 	const mirror = createNativeToolMirror({
-		pushThinking: (delta) => calls.push(`push:${delta.replace(/\n/g, "\\n")}`),
+		pushText: (delta) => calls.push(`push:${delta.replace(/\n/g, "\\n")}`),
+		endText: () => calls.push("endText"),
 		endThinking: () => calls.push("endThinking"),
 		setWorkingMessage: (message) => calls.push(`work:${message ?? "(cleared)"}`),
 	});
@@ -44,8 +45,8 @@ const finish = (id: string, status: string) =>
 	assert(pushes.length === 1, "exactly one push per finished tool");
 	assert(pushes[0].includes("line one") && pushes[0].includes("line two"), "streamed chunks are concatenated");
 	assert(
-		calls[1] === "endThinking" && calls[3] === "endThinking",
-		"the block is wrapped in endThinking on both sides",
+		calls.slice(1, 5).join(",") === "endThinking,endText," + pushes[0] + ",endText",
+		"the card gets its own normal text block",
 	);
 	assert(calls[calls.length - 1] === "work:(cleared)", "working message is cleared when nothing is running");
 }

@@ -1,22 +1,35 @@
 /**
- * Rendered block for a display-only native Kiro tool.
+ * Marker block for a display-only native Kiro tool.
  *
- * Thinking content is rendered as markdown, so ASCII art built from `-` and `|`
- * gets eaten (a dashed line becomes an <hr> / setext heading underline). A fenced
- * code block is the only markdown-safe way to keep tool output preformatted.
- * `~~~~` is used so that ``` fences inside tool output cannot break out, and the
- * fence grows longer than any tilde run in the body so that cannot break out either.
+ * Assistant content is rendered as markdown, so tool output cannot keep its
+ * layout (ASCII art from `-` and `|` gets eaten: a dashed line becomes an
+ * <hr> / setext heading underline; ``` fences inside output would break out).
+ *
+ * HTML comments are used so a missed transformer does not look like a code
+ * fence (`:::…` previously rendered as a gray code-like paragraph).
+ * `createKiroToolFrameTransformer` rewrites the block into ANSI lines with
+ * `customMessageBg` so the frame renders inline, mid-response.
+ *
+ * If the transformer is absent or fails, the block degrades to an HTML
+ * comment in assistant text — no tool output is lost.
  */
+
+export const KIRO_TOOL_FRAME_PREFIX = "<!--kiro-tool-->";
+export const KIRO_TOOL_FRAME_SUFFIX = "<!--/kiro-tool-->";
+
+export function nativeToolFrameRegex(): RegExp {
+	return /^<!--kiro-tool-->\r?\n([\s\S]*?)\r?\n<!--\/kiro-tool-->[ \t]*\r?$/gm;
+}
+
+/** Remove display-only native tool cards before messages reach the model. */
+export function stripNativeToolFrames(text: string): string {
+	return text.replace(nativeToolFrameRegex(), "").replace(/\n{3,}/g, "\n\n").trim();
+}
 
 export function nativeToolFrame(title: string, body: string, status: string): string {
 	const lines = [`🔧 ${title}`];
 	const trimmed = body.trim();
 	if (trimmed) lines.push(trimmed);
 	if (status && status !== "completed") lines.push(`[${status}]`);
-	const content = lines.join("\n");
-	// A closing fence is any tilde-only line (indented up to 3 spaces) at least as
-	// long as the opening one, so open with one tilde more than the longest such line.
-	const longest = [...content.matchAll(/^ {0,3}(~+)[ \t]*$/gm)].reduce((max, m) => Math.max(max, m[1].length), 0);
-	const fence = "~".repeat(Math.max(4, longest + 1));
-	return `${fence}\n${content}\n${fence}\n`;
+	return `${KIRO_TOOL_FRAME_PREFIX}\n${lines.join("\n")}\n${KIRO_TOOL_FRAME_SUFFIX}\n`;
 }

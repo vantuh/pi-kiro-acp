@@ -232,13 +232,16 @@ See also `LATENCY-FIX-PLAN.md` (same directory).
 ### Native Kiro tool activity not visible in pi
 
 Kiro runs `fs_read`/`fs_write`/`execute_bash`/`glob`/`grep` itself, so they only appear as
-mirrored thinking blocks (`native-tool-mirror.ts`). If nothing shows up:
+mirrored text blocks (`native-tool-mirror.ts`). The mirror emits each finished tool as a
+`<!--kiro-tool-->` marker block, which `tool-frame-transformer.ts` restyles inline into a
+width-aware Unicode box with the `customMessageBg` background (purple in the dark theme) — rendered mid-response and
+still visible when thinking is hidden. The `context` hook strips these display-only blocks before
+messages reach the model. If nothing shows up:
 
 1. Confirm `PI_KIRO_ACP_MIRROR` is not `0`
-2. Confirm thinking blocks are not hidden in the TUI — the mirror renders as thinking
-3. The mirror only emits on `tool_call_update` with `status: completed|failed` (or on turn
+2. The mirror only emits on `tool_call_update` with `status: completed|failed` (or on turn
    end via `flush()`); a tool still running shows only the transient `🔧 <title>` indicator
-4. Tools carrying `_meta.kiro.mcpServerName` are skipped on purpose — those are `pi_host`
+3. Tools carrying `_meta.kiro.mcpServerName` are skipped on purpose — those are `pi_host`
    tools and already render as real pi tool calls
 
 ### Wrong session selected / unexpected resumption

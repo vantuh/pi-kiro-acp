@@ -2,24 +2,26 @@ import { nativeToolFrame } from "./native-tool-frame.ts";
 
 /** Stream-writing hooks the mirror needs, injected so the logic stays testable. */
 export type NativeToolMirrorHooks = {
-	pushThinking(delta: string): void;
+	pushText(delta: string): void;
+	endText(): void;
 	endThinking(): void;
 	setWorkingMessage(message?: string): void;
 };
 
 /**
- * Tracks Kiro's native (non-pi_host) tool calls and mirrors each finished one into
- * the stream as a self-contained thinking block. Display only — it never emits
+ * Tracks Kiro's native (non-pi_host) tool calls and mirrors each finished one
+ * into the stream as a self-contained text block. Display only — it never emits
  * toolcall_* events, which would make pi try to execute the tool itself.
  */
 export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
 	const tracked = new Map<string, { title: string; text: string }>();
 
-	/** Own thinking block per tool, so nothing can nest inside a rendered block. */
+	/** Own text block per tool, so hide-thinking never hides the rendered card. */
 	const emit = (title: string, body: string, status: string) => {
 		hooks.endThinking();
-		hooks.pushThinking(nativeToolFrame(title, body, status));
-		hooks.endThinking();
+		hooks.endText();
+		hooks.pushText(nativeToolFrame(title, body, status));
+		hooks.endText();
 	};
 
 	return {

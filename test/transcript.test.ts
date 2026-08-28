@@ -11,6 +11,7 @@ const dataHome = mkdtempSync(join(tmpdir(), "kiro-acp-transcript-"));
 process.env.XDG_DATA_HOME = dataHome;
 
 const { buildConversationPrompt, buildToolResultRecoveryPrompt, extractToolResults, imagesFromToolResults, lastUserMessage } = await import("../helpers.ts");
+const { nativeToolFrame } = await import("../native-tool-frame.ts");
 const {
 	clearPersistedKiroSession,
 	historyFingerprintAfterAssistantTurn,
@@ -173,6 +174,13 @@ const assistantText = (text: string) => ({ role: "assistant", content: [{ type: 
 		user("current"),
 	]);
 	assert(fp === historyFingerprintBeforeCurrentUser(withThinking), "thinking blocks are ignored (they are not replayed)");
+
+	const withDisplayCard = ctx([
+		user("first"),
+		{ role: "assistant", content: [{ type: "text", text: "answer" }, { type: "text", text: nativeToolFrame("ls", "file", "completed") }] },
+		user("current"),
+	]);
+	assert(fp === historyFingerprintBeforeCurrentUser(withDisplayCard), "display-only native tool cards are ignored");
 
 	const argsOrderA = ctx([user("q"), { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "t", arguments: { a: 1, b: 2 } }] }, user("c")]);
 	const argsOrderB = ctx([user("q"), { role: "assistant", content: [{ type: "toolCall", id: "c1", name: "t", arguments: { b: 2, a: 1 } }] }, user("c")]);

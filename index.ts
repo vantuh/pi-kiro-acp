@@ -3,6 +3,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { discoverKiroModels, KIRO_MODELS, type KiroModelConfig } from "./models.ts";
 import { LOG_FILE, log } from "./logging.ts";
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
+import { KIRO_TOOL_FRAME_PREFIX, stripNativeToolFrames } from "./native-tool-frame.ts";
+import { createKiroToolFrameTransformer } from "./tool-frame-transformer.ts";
 import { stopAllSessions } from "./session-manager.ts";
 import { streamKiroAcp } from "./stream.ts";
 
@@ -15,13 +17,50 @@ export default function (pi: ExtensionAPI) {
 	// model/context/options) can drive the transient working indicator when
 	// mirroring Kiro's native tool activity (Phase 4).
 	let latestUi: ExtensionContext["ui"] | undefined;
-	pi.on("turn_start", (_event, ctx) => {
-		latestUi = ctx.ui;
-	});
+	const grabUi = (_event: unknown, ctx: { ui?: ExtensionContext["ui"] }) => {
+		if (ctx.ui) latestUi = ctx.ui;
+	};
+	// session_start fires before historical thinking is painted; turn_start
+	// alone left getUi() empty, so the transformer passed markers through.
+	pi.on("session_start", grabUi);
+	pi.on("turn_start", grabUi);
+	pi.on("message_start", grabUi);
 	const getUi: UiGetter = () => latestUi;
 
 	registerKiroProvider(pi, KIRO_MODELS, getUi);
 	void refreshKiroModels(pi, getUi);
+
+	// Render mirrored native Kiro tool frames inline, styled like native tool rows.
+	pi.registerMarkdownTransformer(
+		createKiroToolFrameTransformer(() => {
+			try {
+				return getUi()?.theme;
+			} catch {
+				return undefined;
+			}
+		}),
+	);
+
+	// Cards are normal text blocks so hide-thinking does not hide them. Remove
+	// those display-only blocks from the copy sent to the model.
+	pi.on("context", (event) => {
+		let changed = false;
+		for (const message of event.messages as any[]) {
+			if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
+			const content = [];
+			for (const block of message.content) {
+				if (block?.type !== "text" || typeof block.text !== "string" || !block.text.includes(KIRO_TOOL_FRAME_PREFIX)) {
+					content.push(block);
+					continue;
+				}
+				changed = true;
+				const text = stripNativeToolFrames(block.text);
+				if (text) content.push({ ...block, text });
+			}
+			message.content = content;
+		}
+		return changed ? { messages: event.messages } : undefined;
+	});
 
 	pi.on("message_end", (event, ctx) => normalizeKiroContextOverflow(event.message, ctx));
 
