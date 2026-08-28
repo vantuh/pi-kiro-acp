@@ -6,7 +6,7 @@ import {
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendKiroMetadataDiagnostic, buildToolResultRecoveryPrompt, createOutputMessage, estimateUsage, imagesFromToolResults, lastUserMessage } from "./helpers.ts";
+import { appendKiroMetadataDiagnostic, buildPromptParts, buildToolResultRecoveryPrompt, createOutputMessage, estimateUsage, imagesFromToolResults, lastUserMessage } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import { createNativeToolMirror } from "./native-tool-mirror.ts";
 import {
@@ -15,7 +15,7 @@ import {
   loadPersistedKiroSession,
   savePersistedKiroSession,
 } from "./session-persistence.ts";
-import { buildPromptParts, toKiroEffort } from "./session.ts";
+import { toKiroEffort } from "./session.ts";
 import { buildForwardedToolCatalog } from "./tool-catalog.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
@@ -179,12 +179,6 @@ export function streamKiroAcp(
 
       stream.push({ type: "start", partial: output });
 
-      let textStarted = false;
-      let textIdx = -1;
-      let thinkingStarted = false;
-      let thinkingIdx = -1;
-      let textMessageId: string | undefined;
-      let thinkingMessageId: string | undefined;
       let suppressUpdates = false;
       let firstThinkingAt: number | null = null;
       let firstTextAt: number | null = null;
@@ -196,51 +190,66 @@ export function streamKiroAcp(
       let emittedThinkingDeltas = 0;
       let emittedTextDeltas = 0;
 
-      const endThinkingBlock = () => {
-        if (!thinkingStarted) return;
-        stream.push({
-          type: "thinking_end",
-          contentIndex: thinkingIdx,
-          content: (output.content[thinkingIdx] as any).thinking,
-          partial: output,
-        });
-        thinkingStarted = false;
-      };
-
-      const endTextBlock = () => {
-        if (!textStarted) return;
-        stream.push({
-          type: "text_end",
-          contentIndex: textIdx,
-          content: (output.content[textIdx] as any).text,
-          partial: output,
-        });
-        textStarted = false;
-      };
-
       const mirrorUi = MIRROR_NATIVE_TOOLS ? getUi?.() : undefined;
 
-      const pushTextDelta = (delta: string, messageId?: string) => {
-        if (!delta) return;
-        if (thinkingStarted) endThinkingBlock();
-        if (textStarted && messageId && textMessageId && messageId !== textMessageId) {
-          endTextBlock();
-        }
-        if (!textStarted) {
-          output.content.push({ type: "text", text: "" });
-          textIdx = output.content.length - 1;
-          stream.push({ type: "text_start", contentIndex: textIdx, partial: output });
-          textStarted = true;
-          textMessageId = messageId;
-        } else if (!textMessageId && messageId) {
-          textMessageId = messageId;
-        }
-        (output.content[textIdx] as any).text += delta;
-        stream.push({ type: "text_delta", contentIndex: textIdx, delta, partial: output });
+      /** Streams one kind of assistant content block (text or thinking): opens
+       * it on the first delta, appends, and closes it on demand. A changed
+       * messageId closes the block so the next delta opens a new one; a text
+       * delta always closes an open thinking block and vice versa. */
+      const createBlockWriter = (
+        kind: "text" | "thinking",
+        endOther: () => void,
+      ) => {
+        const startType = kind === "text" ? "text_start" : "thinking_start";
+        const deltaType = kind === "text" ? "text_delta" : "thinking_delta";
+        const endType = kind === "text" ? "text_end" : "thinking_end";
+        let started = false;
+        let idx = -1;
+        let messageId: string | undefined;
+
+        const end = () => {
+          if (!started) return;
+          const block = output.content[idx] as any;
+          stream.push({
+            type: endType,
+            contentIndex: idx,
+            content: kind === "text" ? block.text : block.thinking,
+            partial: output,
+          });
+          started = false;
+        };
+
+        const delta = (text: string, id?: string) => {
+          if (!text) return;
+          endOther();
+          if (started && id && messageId && id !== messageId) end();
+          if (!started) {
+            output.content.push(kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" } as any);
+            idx = output.content.length - 1;
+            stream.push({ type: startType, contentIndex: idx, partial: output });
+            started = true;
+            messageId = id;
+          } else if (!messageId && id) {
+            messageId = id;
+          }
+          const block = output.content[idx] as any;
+          if (kind === "text") block.text += text;
+          else block.thinking += text;
+          stream.push({ type: deltaType, contentIndex: idx, delta: text, partial: output });
+        };
+
+        return { end, delta };
       };
 
+      let endTextBlock: () => void = () => {};
+      let endThinkingBlock: () => void = () => {};
+      const textWriter = createBlockWriter("text", () => endThinkingBlock());
+      const thinkingWriter = createBlockWriter("thinking", () => endTextBlock());
+      endTextBlock = () => textWriter.end();
+      endThinkingBlock = () => thinkingWriter.end();
+
       const nativeToolMirror = createNativeToolMirror({
-        pushText: (delta) => pushTextDelta(delta),
+        pushText: (delta) => textWriter.delta(delta),
         endText: endTextBlock,
         endThinking: endThinkingBlock,
         setWorkingMessage: (message) => mirrorUi?.setWorkingMessage(message),
@@ -266,21 +275,7 @@ export function streamKiroAcp(
             }
             thinkingChars += text.length;
             thinkingChunks += 1;
-            if (textStarted) endTextBlock();
-            if (thinkingStarted && messageId && thinkingMessageId && messageId !== thinkingMessageId) {
-              endThinkingBlock();
-            }
-            if (!thinkingStarted) {
-              output.content.push({ type: "thinking", thinking: "" } as any);
-              thinkingIdx = output.content.length - 1;
-              stream.push({ type: "thinking_start", contentIndex: thinkingIdx, partial: output });
-              thinkingStarted = true;
-              thinkingMessageId = messageId;
-            } else if (!thinkingMessageId && messageId) {
-              thinkingMessageId = messageId;
-            }
-            (output.content[thinkingIdx] as any).thinking += text;
-            stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta: text, partial: output });
+            thinkingWriter.delta(text, messageId);
             emittedThinkingDeltas += 1;
           }
         } else if (update.sessionUpdate === "agent_message_chunk") {
@@ -298,7 +293,7 @@ export function streamKiroAcp(
             }
             textChars += text.length;
             textChunks += 1;
-            pushTextDelta(text, messageId);
+            textWriter.delta(text, messageId);
             emittedTextDeltas += 1;
           }
         }
@@ -535,23 +530,20 @@ export function streamKiroAcp(
         session.clearAbandonedToolCalls(routed.toolResults);
       }
 
+      output.usage = estimateUsage(output, model.contextWindow, session.metadata);
+      appendKiroMetadataDiagnostic(output, session.metadata);
+
       if (outcome === "toolUse") {
         output.stopReason = "toolUse";
-        output.usage = estimateUsage(output, model.contextWindow, session.metadata);
-        appendKiroMetadataDiagnostic(output, session.metadata);
         stream.push({ type: "done", reason: "toolUse", message: output });
       } else if (outcome === "error") {
         session.activePromptDone = null;
         output.stopReason = "error";
         output.errorMessage = promptError?.message || "Kiro ACP prompt failed";
-        output.usage = estimateUsage(output, model.contextWindow, session.metadata);
-        appendKiroMetadataDiagnostic(output, session.metadata);
         stream.push({ type: "error", reason: "error", error: output });
       } else {
         session.activePromptDone = null;
         output.stopReason = "stop";
-        output.usage = estimateUsage(output, model.contextWindow, session.metadata);
-        appendKiroMetadataDiagnostic(output, session.metadata);
         if (session.persistenceKey && session.acpSessionId) {
           const now = Date.now();
           const existingPersisted = loadPersistedKiroSession(session.persistenceKey);

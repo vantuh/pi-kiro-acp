@@ -64,7 +64,6 @@ export interface ToolBridge {
 interface PendingCall {
 	response: ServerResponse;
 	abort: AbortController;
-	reject: (error: Error) => void;
 	stopKeepalive: () => void;
 }
 
@@ -317,19 +316,12 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 				};
 
 				const abort = new AbortController();
-				const callPromise = new Promise<ToolBridgeResult>((resolve, reject) => {
-					pending.set(res, { response: res, abort, reject, stopKeepalive });
-					void options.onToolCall({
-						requestId: id,
-						kiroName: params.name as string,
-						piName,
-						arguments: args as Record<string, unknown>,
-						signal: abort.signal,
-					}).then(resolve, reject);
-				});
 				const clearPending = () => {
 					pending.delete(res);
 				};
+				pending.set(res, { response: res, abort, stopKeepalive });
+				// If the client disconnects mid-call, abort pi's execution. The response
+				// socket is destroyed either way, so nothing is written back to the client.
 				res.once("close", () => {
 					const held = pending.get(res);
 					if (res.writableEnded || !held) return;
@@ -341,17 +333,22 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 						waitedMs: Date.now() - startedAt,
 						remainingPending: pending.size - 1,
 					});
-					held.reject(new Error("MCP client disconnected"));
 					clearPending();
 				});
+				let result: ToolBridgeResult;
 				try {
-					const result = await callPromise;
-					clearPending();
-					respond(jsonRpcResult(id, result));
+					result = await options.onToolCall({
+						requestId: id,
+						kiroName: params.name as string,
+						piName,
+						arguments: args as Record<string, unknown>,
+						signal: abort.signal,
+					});
 				} catch (error) {
-					clearPending();
-					respond(jsonRpcResult(id, textResult(error instanceof Error ? error.message : String(error), true)));
+					result = textResult(error instanceof Error ? error.message : String(error), true);
 				}
+				clearPending();
+				respond(jsonRpcResult(id, result));
 				return;
 			}
 			default:
@@ -367,7 +364,6 @@ export async function startToolBridge(options: ToolBridgeOptions): Promise<ToolB
 		for (const call of held) {
 			call.abort.abort();
 			call.stopKeepalive();
-			call.reject(new Error("MCP adapter closed"));
 			call.response.destroy();
 		}
 		await new Promise<void>((resolve) => server.close(() => resolve()));

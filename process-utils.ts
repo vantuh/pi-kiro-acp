@@ -27,7 +27,7 @@ export async function terminateProcessTree(
   for (const pid of descendants) killProcessTree(pid);
 }
 
-export function killProcessTree(pid?: number): void {
+function killProcessTree(pid?: number): void {
   if (!pid) return;
   const children = getChildPids(pid);
   for (const child of children) killProcessTree(child);

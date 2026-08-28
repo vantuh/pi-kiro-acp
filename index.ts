@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 
-import { discoverKiroModels, KIRO_MODELS, type KiroModelConfig } from "./models.ts";
+import { KIRO_MODELS, type KiroModelConfig } from "./models/fallback.ts";
+import { discoverKiroModels } from "./models/discovery.ts";
 import { LOG_FILE, log } from "./logging.ts";
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
 import { stripAssistantContentFrames } from "./native-tool-frame.ts";

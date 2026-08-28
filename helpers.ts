@@ -6,14 +6,8 @@ const MAX_TOOL_RESULT_CHARS = 20000;
 
 export function lastUserMessage(context: Context): string {
   const msgs = context.messages || [];
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === "user") {
-      const content = msgs[i].content;
-      if (typeof content === "string") return content;
-      return (content as any[]).filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
-    }
-  }
-  return "";
+  const i = findLastUserIndex(context);
+  return i < 0 ? "" : messageText(msgs[i], Infinity);
 }
 
 export function buildConversationPrompt(context: Context): string {
@@ -98,6 +92,30 @@ function formatHistoryMessage(msg: Context["messages"][number]): string {
   }
 
   return "";
+}
+
+/** Image blocks in the latest user message, for prompts that re-attach them. */
+export type ImageBlock = { type: "image"; data: string; mimeType: string };
+
+export function buildPromptParts(
+  context: Context,
+  includeHistory: boolean,
+): { systemPrompt: string; userMessage: string; images: ImageBlock[] } {
+  const msgs = context.messages || [];
+  const lastUserIdx = findLastUserIndex(context);
+  const images: ImageBlock[] = [];
+  if (lastUserIdx >= 0 && Array.isArray(msgs[lastUserIdx].content)) {
+    for (const block of msgs[lastUserIdx].content as any[]) {
+      if (block.type === "image") images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+    }
+  }
+  return {
+    systemPrompt: context.systemPrompt || "",
+    userMessage: includeHistory
+      ? buildConversationPrompt(context)
+      : lastUserMessage(context),
+    images,
+  };
 }
 
 function messageText(msg: Context["messages"][number], maxChars = MAX_HISTORY_TEXT_CHARS): string {

@@ -7,9 +7,9 @@ import {
 	type Interface as ReadlineInterface,
 } from "node:readline";
 import { tmpdir } from "node:os";
-import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { KIRO_THINKING_LEVEL_MAP } from "./models/fallback.ts";
-import { buildConversationPrompt, lastUserMessage, stableJson } from "./helpers.ts";
+import { stableJson } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import { getDescendantPids, terminateProcessTree } from "./process-utils.ts";
 import {
@@ -718,15 +718,23 @@ export class AcpSession {
 			hadActivePrompt: !!this.activePromptDone,
 		});
 		this.settlePendingState("kiro-cli exited", "kiro-cli exited");
+		void this.teardownBridgeAndFiles().catch(() => {});
+	}
 
+	/** Close the readline/stdio handles, delete agent files, stop the bridge.
+	 * Shared by stop and process-exit teardown. File cleanup happens before the
+	 * awaited bridge close so the process-exit path removes them in the same
+	 * tick as the exit event — a same-tick restart rewrites the same id-derived
+	 * agent paths, and a deferred deletion would race it. */
+	private async teardownBridgeAndFiles(): Promise<void> {
 		this.rl?.close();
 		this.proc = null;
 		this.rl = null;
+		this.removeAgentFiles();
 
 		const bridge = this.toolBridge;
 		this.toolBridge = null;
-		if (bridge) void bridge.close().catch(() => {});
-		this.removeAgentFiles();
+		if (bridge) await bridge.close().catch(() => {});
 	}
 
 	async stop(): Promise<void> {
@@ -743,15 +751,9 @@ export class AcpSession {
 				descendants: knownDescendants,
 			});
 			await terminateProcessTree(p, 5000, knownDescendants);
-			this.rl?.close();
-			this.proc = null;
-			this.rl = null;
 		}
 
-		const bridge = this.toolBridge;
-		this.toolBridge = null;
-		if (bridge) await bridge.close().catch(() => {});
-		this.removeAgentFiles();
+		await this.teardownBridgeAndFiles();
 	}
 
 	/** Fail every pending rpc/tool call and drop session state so neither the
@@ -1167,25 +1169,4 @@ function toToolBridgeResult(result: {
 
 function hashSystemPrompt(systemPrompt: string): string {
 	return createHash("sha256").update(systemPrompt).digest("hex");
-}
-
-export function buildPromptParts(
-	context: Context,
-	includeHistory: boolean,
-): { systemPrompt: string; userMessage: string; images: { type: "image"; data: string; mimeType: string }[] } {
-	const msgs = context.messages || [];
-	const lastUser = [...msgs].reverse().find((m) => m.role === "user");
-	const images: { type: "image"; data: string; mimeType: string }[] = [];
-	if (lastUser && Array.isArray(lastUser.content)) {
-		for (const block of lastUser.content as any[]) {
-			if (block.type === "image") images.push({ type: "image", data: block.data, mimeType: block.mimeType });
-		}
-	}
-	return {
-		systemPrompt: context.systemPrompt || "",
-		userMessage: includeHistory
-			? buildConversationPrompt(context)
-			: lastUserMessage(context),
-		images,
-	};
 }
