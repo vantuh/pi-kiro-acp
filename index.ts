@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { discoverKiroModels, KIRO_MODELS, type KiroModelConfig } from "./models.ts";
 import { LOG_FILE, log } from "./logging.ts";
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
-import { KIRO_TOOL_FRAME_PREFIX, stripNativeToolFrames } from "./native-tool-frame.ts";
+import { stripAssistantContentFrames } from "./native-tool-frame.ts";
 import { createKiroToolFrameTransformer } from "./tool-frame-transformer.ts";
 import { stopAllSessions } from "./session-manager.ts";
 import { streamKiroAcp } from "./stream.ts";
@@ -47,17 +47,10 @@ export default function (pi: ExtensionAPI) {
 		let changed = false;
 		for (const message of event.messages as any[]) {
 			if (message.role !== "assistant" || !Array.isArray(message.content)) continue;
-			const content = [];
-			for (const block of message.content) {
-				if (block?.type !== "text" || typeof block.text !== "string" || !block.text.includes(KIRO_TOOL_FRAME_PREFIX)) {
-					content.push(block);
-					continue;
-				}
-				changed = true;
-				const text = stripNativeToolFrames(block.text);
-				if (text) content.push({ ...block, text });
-			}
-			message.content = content;
+			const stripped = stripAssistantContentFrames(message.content);
+			if (!stripped.changed) continue;
+			changed = true;
+			message.content = stripped.content;
 		}
 		return changed ? { messages: event.messages } : undefined;
 	});

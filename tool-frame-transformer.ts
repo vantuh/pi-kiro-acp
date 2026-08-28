@@ -2,24 +2,29 @@ import type { MarkdownTransformer, Theme, ThemeColor } from "@earendil-works/pi-
 import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { KIRO_TOOL_FRAME_PREFIX, nativeToolFrameRegex } from "./native-tool-frame.ts";
 
-const STATUS_LINE_RE = /^\[[a-z]+\]$/i;
-
 /** Escape markdown metacharacters so tool output renders verbatim. */
 function escapeMarkdown(text: string): string {
 	return text.replace(/([\\`*_{}\[\]()#+\-.!|>~<])/g, "\\$1");
 }
 
-function backgroundFor(lines: string[]): "customMessageBg" | "toolErrorBg" | "toolPendingBg" {
-	const status = lines.find((line) => STATUS_LINE_RE.test(line.trimEnd()))?.trim();
-	if (status === "[failed]") return "toolErrorBg";
-	if (status === "[aborted]") return "toolPendingBg";
+type FrameStatus = "failed" | "aborted" | undefined;
+
+function frameStatus(lines: string[]): FrameStatus {
+	const last = lines[lines.length - 1]?.trim();
+	if (last === "[failed]") return "failed";
+	if (last === "[aborted]") return "aborted";
+	return undefined;
+}
+
+function backgroundFor(status: FrameStatus): "customMessageBg" | "toolErrorBg" | "toolPendingBg" {
+	if (status === "failed") return "toolErrorBg";
+	if (status === "aborted") return "toolPendingBg";
 	return "customMessageBg";
 }
 
-function borderColorFor(lines: string[]): ThemeColor {
-	const status = lines.find((line) => STATUS_LINE_RE.test(line.trimEnd()))?.trim();
-	if (status === "[failed]") return "error";
-	if (status === "[aborted]") return "warning";
+function borderColorFor(status: FrameStatus): ThemeColor {
+	if (status === "failed") return "error";
+	if (status === "aborted") return "warning";
 	return "customMessageLabel";
 }
 
@@ -45,12 +50,43 @@ function paintBorder(theme: Theme | undefined, color: ThemeColor, text: string):
 	}
 }
 
-function paintContent(theme: Theme | undefined, raw: string, kind: "title" | "body" | "status"): string {
-	const text = escapeMarkdown(raw);
-	if (!theme) return text;
-	if (kind === "title") return theme.bold(theme.fg("toolTitle", text));
-	if (kind === "status") return theme.fg("error", text);
-	return theme.fg("toolOutput", text);
+function paintContent(theme: Theme | undefined, escaped: string, kind: "title" | "body" | "status", status: FrameStatus): string {
+	if (!theme) return escaped;
+	if (kind === "title") return theme.bold(theme.fg("toolTitle", escaped));
+	if (kind === "status") return theme.fg(status === "aborted" ? "warning" : "error", escaped);
+	return theme.fg("toolOutput", escaped);
+}
+
+function renderFrame(inner: string, theme: Theme | undefined, width: number): string {
+	const lines = inner.split(/\r?\n/).map((line) => line.replace(/\t/g, "   ").trimEnd());
+	const status = frameStatus(lines);
+	const bg = backgroundFor(status);
+	const borderColor = borderColorFor(status);
+	const innerWidth = Math.max(1, width - 4);
+	const horizontal = "─".repeat(width - 2);
+	const rendered = [
+		paintBackground(theme, bg, paintBorder(theme, borderColor, `╭${horizontal}╮`)),
+	];
+
+	for (let i = 0; i < lines.length; i++) {
+		const raw = lines[i];
+		const kind = i === 0 ? "title" : i === lines.length - 1 && status ? "status" : "body";
+		const escaped = escapeMarkdown(raw);
+		for (const wrapped of wrapTextWithAnsi(escaped, innerWidth)) {
+			const painted = paintContent(theme, wrapped, kind, status);
+			const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(painted)));
+			const row =
+				paintBorder(theme, borderColor, "│ ") +
+				painted +
+				pad +
+				paintBorder(theme, borderColor, " │");
+			rendered.push(paintBackground(theme, bg, row));
+		}
+	}
+
+	rendered.push(paintBackground(theme, bg, paintBorder(theme, borderColor, `╰${horizontal}╯`)));
+	// Hard break, not a blank paragraph: marked turns "  \n" into <br>.
+	return `\n\n${rendered.join("  \n")}\n\n`;
 }
 
 /**
@@ -59,7 +95,8 @@ function paintContent(theme: Theme | undefined, raw: string, kind: "title" | "bo
  * keeps the marker text while the context hook removes it before model calls.
  *
  * Theme is optional: without it the markers are still stripped so the
- * raw HTML comments never show as a gray paragraph.
+ * raw HTML comments never show as a gray paragraph. Inner title/body stay
+ * visible. If restyle throws, the inner lines are emitted as plain text.
  */
 export function createKiroToolFrameTransformer(getTheme: () => Theme | undefined): MarkdownTransformer {
 	return (markdown, context) => {
@@ -76,32 +113,11 @@ export function createKiroToolFrameTransformer(getTheme: () => Theme | undefined
 		const width = Math.max(8, context.availableWidth - 2);
 
 		return markdown.replace(nativeToolFrameRegex(), (_match, inner: string) => {
-			const lines = inner.split(/\r?\n/).map((line) => line.replace(/\t/g, "   ").trimEnd());
-			const bg = backgroundFor(lines);
-			const borderColor = borderColorFor(lines);
-			const innerWidth = Math.max(1, width - 4);
-			const horizontal = "─".repeat(width - 2);
-			const rendered = [
-				paintBackground(theme, bg, paintBorder(theme, borderColor, `╭${horizontal}╮`)),
-			];
-
-			for (let i = 0; i < lines.length; i++) {
-				const raw = lines[i];
-				const kind = i === 0 ? "title" : STATUS_LINE_RE.test(raw) ? "status" : "body";
-				for (const wrapped of wrapTextWithAnsi(raw, innerWidth)) {
-					const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(wrapped)));
-					const row =
-						paintBorder(theme, borderColor, "│ ") +
-						paintContent(theme, wrapped, kind) +
-						pad +
-						paintBorder(theme, borderColor, " │");
-					rendered.push(paintBackground(theme, bg, row));
-				}
+			try {
+				return renderFrame(inner, theme, width);
+			} catch {
+				return `\n${inner}\n`;
 			}
-
-			rendered.push(paintBackground(theme, bg, paintBorder(theme, borderColor, `╰${horizontal}╯`)));
-			// Hard break, not a blank paragraph: marked turns "  \n" into <br>.
-			return `\n\n${rendered.join("  \n")}\n\n`;
 		});
 	};
 }

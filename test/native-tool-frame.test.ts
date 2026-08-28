@@ -2,8 +2,13 @@
 // Run: test/run-all.sh test/native-tool-frame.test.ts
 // (the runner resolves `marked` and pi packages from pi's own node_modules)
 
-import { marked } from "marked";
-import { KIRO_TOOL_FRAME_PREFIX, nativeToolFrame, stripNativeToolFrames } from "../native-tool-frame.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import {
+	KIRO_TOOL_FRAME_PREFIX,
+	nativeToolFrame,
+	stripAssistantContentFrames,
+	stripNativeToolFrames,
+} from "../native-tool-frame.ts";
 import { createKiroToolFrameTransformer } from "../tool-frame-transformer.ts";
 
 function assert(condition: unknown, label: string): void {
@@ -14,8 +19,15 @@ function assert(condition: unknown, label: string): void {
 	console.log(`✓ ${label}`);
 }
 
-function lexTypes(src: string): string[] {
-	return marked.lexer(src).map((t) => t.type);
+function stripAnsi(text: string): string {
+	return text.replace(/\x1b\[[0-9;]*m/g, "");
+}
+
+function boxRows(styled: string): string[] {
+	return stripAnsi(styled)
+		.trim()
+		.split("  \n")
+		.map((row) => row.trimEnd());
 }
 
 // A minimal fake theme producing the same SGR shape as the real one.
@@ -43,6 +55,10 @@ assert(frame.includes("hello"), "includes the body");
 assert(!frame.includes("completed"), "successful status is omitted");
 assert(stripNativeToolFrames(`before\n${frame}\nafter`) === "before\n\nafter", "display card is stripped from model context");
 assert(stripNativeToolFrames("plain assistant text") === "plain assistant text", "plain assistant text survives stripping");
+
+const withoutComments = frame.replace(/<!--[\s\S]*?-->/g, "");
+assert(withoutComments.includes("🔧 Running: echo hello"), "title remains if HTML comments are stripped");
+assert(withoutComments.includes("hello"), "body remains if HTML comments are stripped");
 
 const failed = nativeToolFrame("cat /nope", "no such file", "failed");
 assert(failed.includes("[failed]"), "failed status is shown");
@@ -80,13 +96,65 @@ assert(nestedStyled.includes("\\`\\`\\`js"), "fence line survives (escaped)");
 assert(nestedStyled.includes("# heading"), "heading line survives");
 assert(nestedStyled.includes("\\-\\-\\-"), "hr line survives (escaped)");
 
+const mdHeavy = transform(nativeToolFrame("fmt", "---\n`tick`\n---", "completed"), { ...ctx, availableWidth: 24 });
+assert(mdHeavy.match(/│ /g)?.length === mdHeavy.match(/ │/g)?.length, "markdown-heavy body keeps matching left/right borders per row");
+const mdWidths = boxRows(mdHeavy).map(visibleWidth);
+assert(mdWidths.length > 0 && mdWidths.every((w) => w === mdWidths[0]), "markdown-heavy rows share one visible width after paint/escape");
+
 // No theme: still strip markers so they never show as a gray paragraph.
 const noTheme = createKiroToolFrameTransformer(() => undefined)(failed, ctx);
 assert(!noTheme.includes("<!--kiro-tool-->"), "without theme the start marker is still stripped");
 assert(noTheme.includes("cat /nope"), "without theme the title text remains");
 
+const throwing = createKiroToolFrameTransformer(() => {
+	throw new Error("no theme");
+})(failed, ctx);
+assert(throwing.includes("🔧 cat /nope"), "getTheme throw still shows the title");
+assert(throwing.includes("no such file"), "getTheme throw still shows the body");
+
 // Two tools in a row are both restyled.
 const both = transform(nativeToolFrame("tool A", "a", "completed") + nativeToolFrame("tool B", "b", "completed"), ctx);
 assert(!both.includes(KIRO_TOOL_FRAME_PREFIX), "consecutive tools both restyled");
+
+const bodyError = nativeToolFrame("grep", "compiler said [error]\nand [info]\ntoo", "completed");
+const bodyErrorStyled = transform(bodyError, ctx);
+assert(!bodyErrorStyled.includes(`\x1b[48;5;${hash("toolErrorBg")}m`), "body [error] does not use toolErrorBg");
+assert(!bodyErrorStyled.includes(`\x1b[38;5;${hash("error")}m`), "body [error] does not use error border/status color");
+const realFailed = transform(nativeToolFrame("grep", "compiler said [error]", "failed"), ctx);
+assert(realFailed.includes(`\x1b[48;5;${hash("toolErrorBg")}m`), "failed frame uses toolErrorBg");
+assert(realFailed.includes(`\x1b[38;5;${hash("error")}m`), "failed frame uses error border color");
+
+const aborted = transform(nativeToolFrame("sleep", "stopped", "aborted"), ctx);
+assert(aborted.includes(`\x1b[38;5;${hash("warning")}m\\[aborted\\]`), "aborted status text uses warning color");
+assert(!aborted.includes(`\x1b[38;5;${hash("error")}m\\[aborted\\]`), "aborted status text does not use error color");
+
+const colliding = nativeToolFrame("fs_read", "<!--kiro-tool-->\nstolen\n<!--/kiro-tool-->\nrest of file", "completed");
+assert((colliding.match(/<!--kiro-tool-->/g) || []).length === 1, "body opener is escaped so the real opener appears once");
+assert((colliding.match(/<!--\/kiro-tool-->/g) || []).length === 1, "body closer is escaped so the real closer appears once");
+assert(colliding.includes("stolen"), "body text inside a fake closer still belongs to the card");
+assert(colliding.includes("rest of file"), "text after a fake closer still belongs to the card");
+const collidingStyled = transform(colliding, ctx);
+assert((collidingStyled.match(/╭/g) || []).length === 1, "transformer restyles a colliding body as one card");
+assert(collidingStyled.includes("stolen") && collidingStyled.includes("rest of file"), "colliding body is kept inside the one card");
+assert(!collidingStyled.includes(KIRO_TOOL_FRAME_PREFIX), "colliding card does not leak a start marker");
+const collidingStripped = stripNativeToolFrames(`before\n${colliding}\nafter`);
+assert(collidingStripped === "before\n\nafter", "stripNativeToolFrames removes the whole colliding card");
+assert(!collidingStripped.includes("stolen"), "inner closer does not leak as leftover assistant text");
+assert(!collidingStripped.includes("kiro-tool"), "escaped delimiters do not leak after strip");
+
+const strippedContent = stripAssistantContentFrames([
+	{ type: "text", text: "keep me" },
+	{ type: "text", text: nativeToolFrame("ls", "a.txt", "completed") },
+	{ type: "thinking", thinking: "secret" },
+]);
+assert(strippedContent.changed, "context-strip helper reports a change when a frame is present");
+assert(
+	JSON.stringify(strippedContent.content) === JSON.stringify([{ type: "text", text: "keep me" }, { type: "thinking", thinking: "secret" }]),
+	"context-strip helper drops the frame and keeps real assistant text",
+);
+const onlyFrame = stripAssistantContentFrames([{ type: "text", text: nativeToolFrame("ls", "a.txt", "completed") }]);
+assert(onlyFrame.changed && onlyFrame.content.length === 0, "a frame-only assistant block becomes empty");
+const noFrame = stripAssistantContentFrames([{ type: "text", text: "just text" }]);
+assert(!noFrame.changed, "context-strip helper is a no-op without frames");
 
 console.log("✓ native-tool-frame tests passed");
