@@ -15,7 +15,11 @@ export interface PendingToolCall {
   rawCallId: string;
   toolName: string;
   args: Record<string, unknown>;
-  resolve: (result: { result: string; isError?: boolean; content?: ToolResultContentBlock[] }) => void;
+  resolve: (result: {
+    result: string;
+    isError?: boolean;
+    content?: ToolResultContentBlock[];
+  }) => void;
   emitted?: boolean;
   /** Date.now() when the pi_host bridge received Kiro's tools/call */
   receivedAt: number;
@@ -43,4 +47,3 @@ export interface ToolResultInfo {
   content?: ToolResultContentBlock[];
   isError: boolean;
 }
-

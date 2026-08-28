@@ -1,4 +1,9 @@
-import { ZERO_COST, KIRO_MODELS, KIRO_THINKING_LEVEL_MAP, type KiroModelConfig } from "./fallback.ts";
+import {
+  ZERO_COST,
+  KIRO_MODELS,
+  KIRO_THINKING_LEVEL_MAP,
+  type KiroModelConfig,
+} from "./fallback.ts";
 
 type AvailableKiroModel = {
   modelId?: string;
@@ -9,8 +14,15 @@ type AvailableKiroModel = {
 
 const FALLBACK_BY_ID = new Map(KIRO_MODELS.map((model) => [model.id, model]));
 
-export function normalizeDiscoveredModel(model: AvailableKiroModel): KiroModelConfig | null {
-  const id = typeof model.modelId === "string" ? model.modelId : typeof model.id === "string" ? model.id : undefined;
+export function normalizeDiscoveredModel(
+  model: AvailableKiroModel,
+): KiroModelConfig | null {
+  const id =
+    typeof model.modelId === "string"
+      ? model.modelId
+      : typeof model.id === "string"
+        ? model.id
+        : undefined;
   if (!id) return null;
 
   const fallback = FALLBACK_BY_ID.get(id);
@@ -23,7 +35,7 @@ export function normalizeDiscoveredModel(model: AvailableKiroModel): KiroModelCo
     name: formatModelName(model.name || id),
     reasoning: true,
     thinkingLevelMap: KIRO_THINKING_LEVEL_MAP,
-    input: supportsImages(id) ? ["text", "image"] as any : ["text"] as any,
+    input: supportsImages(id) ? (["text", "image"] as any) : (["text"] as any),
     cost: ZERO_COST,
     contextWindow: inferContextWindow(id),
     maxTokens: inferMaxTokens(id),

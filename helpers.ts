@@ -1,5 +1,9 @@
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import type { SessionMetadata, ToolResultContentBlock, ToolResultInfo } from "./types.ts";
+import type {
+  SessionMetadata,
+  ToolResultContentBlock,
+  ToolResultInfo,
+} from "./types.ts";
 
 const MAX_HISTORY_TEXT_CHARS = 12000;
 const MAX_TOOL_RESULT_CHARS = 20000;
@@ -23,13 +27,24 @@ export function buildConversationPrompt(context: Context): string {
   // fresh Kiro session redo that work — e.g. relaunching the same subagent.
   const done = msgs.slice(lastUserIdx + 1);
 
-  const historyText = history.map(formatHistoryMessage).filter(Boolean).join("\n\n");
+  const historyText = history
+    .map(formatHistoryMessage)
+    .filter(Boolean)
+    .join("\n\n");
   const doneText = done.map(formatHistoryMessage).filter(Boolean).join("\n\n");
 
   const parts: string[] = [];
-  if (historyText) parts.push(`<conversation_history>\n${historyText}\n</conversation_history>`);
-  parts.push(`<current_user_message>\n${escapeText(current)}\n</current_user_message>`);
-  if (doneText) parts.push(`<work_already_done>\n${WORK_ALREADY_DONE_NOTE}\n\n${doneText}\n</work_already_done>`);
+  if (historyText)
+    parts.push(
+      `<conversation_history>\n${historyText}\n</conversation_history>`,
+    );
+  parts.push(
+    `<current_user_message>\n${escapeText(current)}\n</current_user_message>`,
+  );
+  if (doneText)
+    parts.push(
+      `<work_already_done>\n${WORK_ALREADY_DONE_NOTE}\n\n${doneText}\n</work_already_done>`,
+    );
 
   return parts.join("\n\n");
 }
@@ -43,11 +58,14 @@ const WORK_ALREADY_DONE_NOTE =
  * gave up before pi finished executing the tool) and the result therefore has to
  * be handed back as a new turn on the same ACP session.
  */
-export function buildToolResultRecoveryPrompt(toolResults: ToolResultInfo[]): string {
+export function buildToolResultRecoveryPrompt(
+  toolResults: ToolResultInfo[],
+): string {
   const blocks = toolResults
-    .map((tr) =>
-      `<tool_result name="${escapeAttr(tr.toolName)}" is_error="${tr.isError ? "true" : "false"}">\n` +
-      `${escapeText(truncate(tr.text, MAX_TOOL_RESULT_CHARS))}\n</tool_result>`,
+    .map(
+      (tr) =>
+        `<tool_result name="${escapeAttr(tr.toolName)}" is_error="${tr.isError ? "true" : "false"}">\n` +
+        `${escapeText(truncate(tr.text, MAX_TOOL_RESULT_CHARS))}\n</tool_result>`,
     )
     .join("\n\n");
 
@@ -79,12 +97,18 @@ function formatHistoryMessage(msg: Context["messages"][number]): string {
     const parts: string[] = [];
     for (const block of msg.content) {
       if (block.type === "text") {
-        parts.push(`<text>\n${escapeText(truncate(block.text, MAX_HISTORY_TEXT_CHARS))}\n</text>`);
+        parts.push(
+          `<text>\n${escapeText(truncate(block.text, MAX_HISTORY_TEXT_CHARS))}\n</text>`,
+        );
       } else if (block.type === "toolCall") {
-        parts.push(`<tool_call id="${escapeAttr(block.id)}" name="${escapeAttr(block.name)}">\n${escapeText(safeJson(block.arguments))}\n</tool_call>`);
+        parts.push(
+          `<tool_call id="${escapeAttr(block.id)}" name="${escapeAttr(block.name)}">\n${escapeText(safeJson(block.arguments))}\n</tool_call>`,
+        );
       }
     }
-    return parts.length ? `<message role="assistant">\n${parts.join("\n")}\n</message>` : "";
+    return parts.length
+      ? `<message role="assistant">\n${parts.join("\n")}\n</message>`
+      : "";
   }
 
   if (msg.role === "toolResult") {
@@ -106,7 +130,12 @@ export function buildPromptParts(
   const images: ImageBlock[] = [];
   if (lastUserIdx >= 0 && Array.isArray(msgs[lastUserIdx].content)) {
     for (const block of msgs[lastUserIdx].content as any[]) {
-      if (block.type === "image") images.push({ type: "image", data: block.data, mimeType: block.mimeType });
+      if (block.type === "image")
+        images.push({
+          type: "image",
+          data: block.data,
+          mimeType: block.mimeType,
+        });
     }
   }
   return {
@@ -118,14 +147,18 @@ export function buildPromptParts(
   };
 }
 
-function messageText(msg: Context["messages"][number], maxChars = MAX_HISTORY_TEXT_CHARS): string {
+function messageText(
+  msg: Context["messages"][number],
+  maxChars = MAX_HISTORY_TEXT_CHARS,
+): string {
   const content = msg.content;
-  const text = typeof content === "string"
-    ? content
-    : (content as any[])
-      .filter((c: any) => c.type === "text")
-      .map((c: any) => c.text || "")
-      .join("\n");
+  const text =
+    typeof content === "string"
+      ? content
+      : (content as any[])
+          .filter((c: any) => c.type === "text")
+          .map((c: any) => c.text || "")
+          .join("\n");
   return truncate(text, maxChars);
 }
 
@@ -162,7 +195,10 @@ function escapeAttr(value: string): string {
 }
 
 function escapeText(value: string): string {
-  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 export function extractToolResults(context: Context): ToolResultInfo[] {
@@ -173,7 +209,10 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
     const msg = msgs[i];
     if (msg.role === "toolResult") {
       const content = normalizeToolResultContent(msg.content as any[]);
-      const text = content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      const text = content
+        .filter((c) => c.type === "text")
+        .map((c) => c.text)
+        .join("\n");
       const hasImages = content.some((c) => c.type === "image");
       results.push({
         toolCallId: msg.toolCallId,
@@ -196,8 +235,9 @@ export function imagesFromToolResults(
 ): { type: "image"; data: string; mimeType: string }[] {
   return toolResults.flatMap((tr) =>
     (tr.content ?? []).filter(
-      (b): b is { type: "image"; data: string; mimeType: string } => b.type === "image",
-    )
+      (b): b is { type: "image"; data: string; mimeType: string } =>
+        b.type === "image",
+    ),
   );
 }
 
@@ -211,7 +251,11 @@ function normalizeToolResultContent(content: any[]): ToolResultContentBlock[] {
       typeof block.data === "string" &&
       typeof block.mimeType === "string"
     ) {
-      blocks.push({ type: "image", data: block.data, mimeType: block.mimeType });
+      blocks.push({
+        type: "image",
+        data: block.data,
+        mimeType: block.mimeType,
+      });
     }
   }
   return blocks;
@@ -229,11 +273,15 @@ export function estimateUsage(
   }
 
   const outputTokens = Math.round(chars / 4);
-  const reportedContextTokens = typeof metadata?.contextUsed === "number"
-    ? Math.max(0, Math.round(metadata.contextUsed))
-    : typeof metadata?.contextUsagePercentage === "number" && contextWindow
-      ? Math.round((Math.max(0, metadata.contextUsagePercentage) / 100) * contextWindow)
-      : 0;
+  const reportedContextTokens =
+    typeof metadata?.contextUsed === "number"
+      ? Math.max(0, Math.round(metadata.contextUsed))
+      : typeof metadata?.contextUsagePercentage === "number" && contextWindow
+        ? Math.round(
+            (Math.max(0, metadata.contextUsagePercentage) / 100) *
+              contextWindow,
+          )
+        : 0;
   const totalTokens = Math.max(outputTokens, reportedContextTokens);
 
   return {
@@ -264,7 +312,8 @@ export function appendKiroMetadataDiagnostic(
         sessionCost: metadata.sessionCost,
         meteringUsage: metadata.meteringUsage,
         turnDurationMs: metadata.turnDurationMs,
-        credits: metadata.meteringUsage?.find((m) => m.unit === "credit")?.value,
+        credits: metadata.meteringUsage?.find((m) => m.unit === "credit")
+          ?.value,
       },
     },
   ];

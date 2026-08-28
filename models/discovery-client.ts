@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { createInterface, type Interface as ReadlineInterface } from "node:readline";
+import {
+  createInterface,
+  type Interface as ReadlineInterface,
+} from "node:readline";
 
 import { terminateProcessTree } from "../process-utils.ts";
 
@@ -14,11 +17,14 @@ export class DiscoveryClient {
   private rl: ReadlineInterface | null = null;
   private nextId = 1;
   private stderr = "";
-  private readonly pending = new Map<number, {
-    resolve: (value: unknown) => void;
-    reject: (error: Error) => void;
-    timer: ReturnType<typeof setTimeout> | null;
-  }>();
+  private readonly pending = new Map<
+    number,
+    {
+      resolve: (value: unknown) => void;
+      reject: (error: Error) => void;
+      timer: ReturnType<typeof setTimeout> | null;
+    }
+  >();
 
   constructor(private readonly cwd: string) {}
 
@@ -33,7 +39,9 @@ export class DiscoveryClient {
     });
 
     this.proc.on("exit", (code, signal) => {
-      const error = new Error(`kiro-cli exited during model discovery (code=${code}, signal=${signal})${this.stderr ? `: ${this.stderr.trim()}` : ""}`);
+      const error = new Error(
+        `kiro-cli exited during model discovery (code=${code}, signal=${signal})${this.stderr ? `: ${this.stderr.trim()}` : ""}`,
+      );
       for (const [id, pending] of this.pending) {
         if (pending.timer) clearTimeout(pending.timer);
         pending.reject(error);
@@ -53,18 +61,29 @@ export class DiscoveryClient {
     this.rl.on("line", (line) => this.handleLine(line));
   }
 
-  request(method: string, params: unknown, timeoutMs: number): Promise<unknown> {
+  request(
+    method: string,
+    params: unknown,
+    timeoutMs: number,
+  ): Promise<unknown> {
     return new Promise((resolve, reject) => {
-      if (!this.proc?.stdin?.writable) return reject(new Error("kiro-cli not running"));
+      if (!this.proc?.stdin?.writable)
+        return reject(new Error("kiro-cli not running"));
 
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new Error(`model discovery RPC timeout: ${method}${this.stderr ? `: ${this.stderr.trim()}` : ""}`));
+        reject(
+          new Error(
+            `model discovery RPC timeout: ${method}${this.stderr ? `: ${this.stderr.trim()}` : ""}`,
+          ),
+        );
       }, timeoutMs);
 
       this.pending.set(id, { resolve, reject, timer });
-      this.proc.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+      this.proc.stdin.write(
+        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+      );
     });
   }
 
@@ -94,7 +113,11 @@ export class DiscoveryClient {
     this.pending.delete(msg.id);
 
     if (msg.error) {
-      pending.reject(new Error(msg.error.message || `JSON-RPC error ${msg.error.code ?? "unknown"}`));
+      pending.reject(
+        new Error(
+          msg.error.message || `JSON-RPC error ${msg.error.code ?? "unknown"}`,
+        ),
+      );
     } else {
       pending.resolve(msg.result);
     }

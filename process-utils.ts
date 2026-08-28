@@ -11,7 +11,7 @@ export async function terminateProcessTree(
 ): Promise<void> {
   const rootPid = proc.pid;
   const descendants = rootPid
-    ? knownDescendants ?? getDescendantPids(rootPid)
+    ? (knownDescendants ?? getDescendantPids(rootPid))
     : [];
   proc.stdin?.end();
   await new Promise<void>((resolve) => {

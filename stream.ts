@@ -6,7 +6,15 @@ import {
   createAssistantMessageEventStream,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { appendKiroMetadataDiagnostic, buildPromptParts, buildToolResultRecoveryPrompt, createOutputMessage, estimateUsage, imagesFromToolResults, lastUserMessage } from "./helpers.ts";
+import {
+  appendKiroMetadataDiagnostic,
+  buildPromptParts,
+  buildToolResultRecoveryPrompt,
+  createOutputMessage,
+  estimateUsage,
+  imagesFromToolResults,
+  lastUserMessage,
+} from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import { createNativeToolMirror } from "./native-tool-mirror.ts";
 import {
@@ -55,7 +63,8 @@ const TOOL_CALL_DEBOUNCE_MS = (() => {
  * broken handoff, not a finished turn. It is re-sent after this delay, at most
  * REFUSAL_RETRIES times, before falling back to ending the turn.
  */
-const REFUSAL_RETRY_DELAY_MS = Number(process.env.PI_KIRO_ACP_REFUSAL_RETRY_MS) || 1500;
+const REFUSAL_RETRY_DELAY_MS =
+  Number(process.env.PI_KIRO_ACP_REFUSAL_RETRY_MS) || 1500;
 const REFUSAL_RETRIES = 1;
 
 export function streamKiroAcp(
@@ -86,8 +95,12 @@ export function streamKiroAcp(
       // Capture before ensureStarted: a cold/parallel process gets an acpSessionId
       // for an empty conversation, which must not look like in-place recovery.
       const hadLiveConversation = !!session.acpSessionId;
-      const catalogProvider = () => buildForwardedToolCatalog(pi.getAllTools(), pi.getActiveTools());
-      await session.ensureStarted(catalogProvider, toKiroEffort(options?.reasoning));
+      const catalogProvider = () =>
+        buildForwardedToolCatalog(pi.getAllTools(), pi.getActiveTools());
+      await session.ensureStarted(
+        catalogProvider,
+        toKiroEffort(options?.reasoning),
+      );
       const ensuredAt = Date.now();
 
       log("streamSimple called", {
@@ -106,7 +119,11 @@ export function streamKiroAcp(
       let recoverInPlace = false;
       // Kept for the empty-refusal retry below: the exact recovery prompt that was
       // sent, so it can be re-sent without rebuilding the routing decision.
-      let recoveryPrompt: { systemPrompt: string; text: string; images: ReturnType<typeof imagesFromToolResults> } | null = null;
+      let recoveryPrompt: {
+        systemPrompt: string;
+        text: string;
+        images: ReturnType<typeof imagesFromToolResults>;
+      } | null = null;
 
       if (!routed.isResumption) {
         const currentPrompt = buildPromptParts(context, false);
@@ -158,21 +175,24 @@ export function streamKiroAcp(
             currentPrompt.userMessage,
             currentPrompt.images,
             routed.orphanedToolResults
-              // No live ACP session to recover into: force the replay path so the
-              // completed tool call cannot be dropped by resuming a persisted
-              // session from before it (the fingerprint ignores trailing results).
-              ? { replayUserMessage: replayPrompt.userMessage }
+              ? // No live ACP session to recover into: force the replay path so the
+                // completed tool call cannot be dropped by resuming a persisted
+                // session from before it (the fingerprint ignores trailing results).
+                { replayUserMessage: replayPrompt.userMessage }
               : {
-                expectedHistoryFingerprint: prefixFingerprint,
-                replayUserMessage: replayPrompt.userMessage,
-              },
+                  expectedHistoryFingerprint: prefixFingerprint,
+                  replayUserMessage: replayPrompt.userMessage,
+                },
           );
         }
       }
       const promptReadyAt = Date.now();
 
       if (options?.signal) {
-        const handler = () => session.rpcNotify("session/cancel", { sessionId: session.acpSessionId });
+        const handler = () =>
+          session.rpcNotify("session/cancel", {
+            sessionId: session.acpSessionId,
+          });
         if (options.signal.aborted) handler();
         else options.signal.addEventListener("abort", handler, { once: true });
       }
@@ -224,9 +244,17 @@ export function streamKiroAcp(
           endOther();
           if (started && id && messageId && id !== messageId) end();
           if (!started) {
-            output.content.push(kind === "text" ? { type: "text", text: "" } : { type: "thinking", thinking: "" } as any);
+            output.content.push(
+              kind === "text"
+                ? { type: "text", text: "" }
+                : ({ type: "thinking", thinking: "" } as any),
+            );
             idx = output.content.length - 1;
-            stream.push({ type: startType, contentIndex: idx, partial: output });
+            stream.push({
+              type: startType,
+              contentIndex: idx,
+              partial: output,
+            });
             started = true;
             messageId = id;
           } else if (!messageId && id) {
@@ -235,7 +263,12 @@ export function streamKiroAcp(
           const block = output.content[idx] as any;
           if (kind === "text") block.text += text;
           else block.thinking += text;
-          stream.push({ type: deltaType, contentIndex: idx, delta: text, partial: output });
+          stream.push({
+            type: deltaType,
+            contentIndex: idx,
+            delta: text,
+            partial: output,
+          });
         };
 
         return { end, delta };
@@ -244,7 +277,9 @@ export function streamKiroAcp(
       let endTextBlock: () => void = () => {};
       let endThinkingBlock: () => void = () => {};
       const textWriter = createBlockWriter("text", () => endThinkingBlock());
-      const thinkingWriter = createBlockWriter("thinking", () => endTextBlock());
+      const thinkingWriter = createBlockWriter("thinking", () =>
+        endTextBlock(),
+      );
       endTextBlock = () => textWriter.end();
       endThinkingBlock = () => thinkingWriter.end();
 
@@ -257,13 +292,18 @@ export function streamKiroAcp(
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;
-        if (MIRROR_NATIVE_TOOLS && (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update")) {
+        if (
+          MIRROR_NATIVE_TOOLS &&
+          (update.sessionUpdate === "tool_call" ||
+            update.sessionUpdate === "tool_call_update")
+        ) {
           nativeToolMirror.update(update);
           return;
         }
         if (update.sessionUpdate === "agent_thought_chunk") {
           const text = (update.content as any)?.text;
-          const messageId = typeof update.messageId === "string" ? update.messageId : undefined;
+          const messageId =
+            typeof update.messageId === "string" ? update.messageId : undefined;
           if (text) {
             if (firstThinkingAt == null) {
               firstThinkingAt = Date.now();
@@ -280,7 +320,8 @@ export function streamKiroAcp(
           }
         } else if (update.sessionUpdate === "agent_message_chunk") {
           const text = (update.content as any)?.text;
-          const messageId = typeof update.messageId === "string" ? update.messageId : undefined;
+          const messageId =
+            typeof update.messageId === "string" ? update.messageId : undefined;
           if (text) {
             if (firstTextAt == null) {
               firstTextAt = Date.now();
@@ -288,7 +329,10 @@ export function streamKiroAcp(
                 session: session.id,
                 ttftMs: firstTextAt - turnStartedAt,
                 sincePromptMs: firstTextAt - promptReadyAt,
-                sinceThinkingMs: firstThinkingAt != null ? firstTextAt - firstThinkingAt : null,
+                sinceThinkingMs:
+                  firstThinkingAt != null
+                    ? firstTextAt - firstThinkingAt
+                    : null,
               });
             }
             textChars += text.length;
@@ -313,19 +357,25 @@ export function streamKiroAcp(
 
           const userQ = lastUserMessage(context);
           const imageTools = routed.toolResults.filter((tr) =>
-            (tr.content ?? []).some((b) => b.type === "image")
+            (tr.content ?? []).some((b) => b.type === "image"),
           );
-          const toolNames = [...new Set(imageTools.map((tr) => tr.toolName))].join(", ");
+          const toolNames = [
+            ...new Set(imageTools.map((tr) => tr.toolName)),
+          ].join(", ");
           const textSummaries = imageTools
             .map((tr) => {
               const txt = tr.text.trim();
-              return txt ? `[${tr.toolName}]: ${txt}` : `[${tr.toolName}]: (image result)`;
+              return txt
+                ? `[${tr.toolName}]: ${txt}`
+                : `[${tr.toolName}]: (image result)`;
             })
             .join("\n");
           const followupText =
             `The user asked: ${userQ}\n\n` +
             `Tool(s) ${toolNames} returned image(s) attached to this message.` +
-            (textSummaries ? `\n\nText summaries from tools:\n${textSummaries}` : "") +
+            (textSummaries
+              ? `\n\nText summaries from tools:\n${textSummaries}`
+              : "") +
             `\n\nPlease answer the user's question based on the attached image(s). ` +
             `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.`;
 
@@ -337,7 +387,9 @@ export function streamKiroAcp(
               followupText,
               imageBlocks,
               15000,
-              () => { suppressUpdates = false; },
+              () => {
+                suppressUpdates = false;
+              },
             );
           } finally {
             suppressUpdates = false;
@@ -351,147 +403,193 @@ export function streamKiroAcp(
       let promptError: Error | null = null;
       let toolFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const outcome = await new Promise<"toolUse" | "stop" | "error">((resolve) => {
-        let settled = false;
-        const finish = (value: "toolUse" | "stop" | "error") => {
-          if (settled) return;
-          settled = true;
-          if (toolFlushTimer) clearTimeout(toolFlushTimer);
-          toolFlushTimer = null;
-          session.onToolCallFromBridge = null;
-          // From here on a tools/call from Kiro cannot reach pi, so the session
-          // answers it instead of letting it hang until Kiro's own deadline.
-          session.toolIntakeClosed = true;
-          resolve(value);
-        };
-
-        const unemittedToolCalls = () => [...session.pendingToolCalls.values()].filter((call) => !call.emitted);
-        const closeOpenBlocks = () => {
-          endThinkingBlock();
-          endTextBlock();
-        };
-
-        const flushToolCalls = () => {
-          const calls = unemittedToolCalls();
-          if (calls.length === 0) return false;
-          log("tool calls → stream", { session: session.id, count: calls.length, callIds: calls.map((c) => c.callId) });
-
-          closeOpenBlocks();
-
-          for (const call of calls) {
-            call.emitted = true;
-            const tc = { type: "toolCall" as const, id: call.callId, name: call.toolName, arguments: call.args };
-            output.content.push(tc);
-            const idx = output.content.length - 1;
-            stream.push({ type: "toolcall_start", contentIndex: idx, partial: output });
-            stream.push({ type: "toolcall_end", contentIndex: idx, toolCall: tc, partial: output });
-          }
-
-          finish("toolUse");
-          return true;
-        };
-
-        const scheduleToolFlush = () => {
-          if (toolFlushTimer) clearTimeout(toolFlushTimer);
-          toolFlushTimer = setTimeout(() => {
+      const outcome = await new Promise<"toolUse" | "stop" | "error">(
+        (resolve) => {
+          let settled = false;
+          const finish = (value: "toolUse" | "stop" | "error") => {
+            if (settled) return;
+            settled = true;
+            if (toolFlushTimer) clearTimeout(toolFlushTimer);
             toolFlushTimer = null;
-            flushToolCalls();
-          }, TOOL_CALL_DEBOUNCE_MS);
-        };
+            session.onToolCallFromBridge = null;
+            // From here on a tools/call from Kiro cannot reach pi, so the session
+            // answers it instead of letting it hang until Kiro's own deadline.
+            session.toolIntakeClosed = true;
+            resolve(value);
+          };
 
-        session.onToolCallFromBridge = (call) => {
-          if (firstToolAt == null) {
-            firstToolAt = Date.now();
-            log("timing first tool", {
+          const unemittedToolCalls = () =>
+            [...session.pendingToolCalls.values()].filter(
+              (call) => !call.emitted,
+            );
+          const closeOpenBlocks = () => {
+            endThinkingBlock();
+            endTextBlock();
+          };
+
+          const flushToolCalls = () => {
+            const calls = unemittedToolCalls();
+            if (calls.length === 0) return false;
+            log("tool calls → stream", {
               session: session.id,
-              sinceTurnMs: firstToolAt - turnStartedAt,
-              sincePromptMs: firstToolAt - promptReadyAt,
+              count: calls.length,
+              callIds: calls.map((c) => c.callId),
+            });
+
+            closeOpenBlocks();
+
+            for (const call of calls) {
+              call.emitted = true;
+              const tc = {
+                type: "toolCall" as const,
+                id: call.callId,
+                name: call.toolName,
+                arguments: call.args,
+              };
+              output.content.push(tc);
+              const idx = output.content.length - 1;
+              stream.push({
+                type: "toolcall_start",
+                contentIndex: idx,
+                partial: output,
+              });
+              stream.push({
+                type: "toolcall_end",
+                contentIndex: idx,
+                toolCall: tc,
+                partial: output,
+              });
+            }
+
+            finish("toolUse");
+            return true;
+          };
+
+          const scheduleToolFlush = () => {
+            if (toolFlushTimer) clearTimeout(toolFlushTimer);
+            toolFlushTimer = setTimeout(() => {
+              toolFlushTimer = null;
+              flushToolCalls();
+            }, TOOL_CALL_DEBOUNCE_MS);
+          };
+
+          session.onToolCallFromBridge = (call) => {
+            if (firstToolAt == null) {
+              firstToolAt = Date.now();
+              log("timing first tool", {
+                session: session.id,
+                sinceTurnMs: firstToolAt - turnStartedAt,
+                sincePromptMs: firstToolAt - promptReadyAt,
+                toolName: call.toolName,
+              });
+            }
+            log("tool call queued", {
+              session: session.id,
+              callId: call.callId,
               toolName: call.toolName,
             });
-          }
-          log("tool call queued", { session: session.id, callId: call.callId, toolName: call.toolName });
-          scheduleToolFlush();
-        };
-        if (unemittedToolCalls().length > 0) scheduleToolFlush();
+            scheduleToolFlush();
+          };
+          if (unemittedToolCalls().length > 0) scheduleToolFlush();
 
-        // kiro-cli answers a prompt sent while its own conversation still holds an
-        // unanswered tool_use with an instant, contentless `refusal` (measured
-        // 4-20ms, 7 of 14 recoveries on 2026-08-26). Reporting that as a finished
-        // turn is what left the orchestrator stopped right after its subagent
-        // returned, waiting for the user to say "continue". A second prompt on the
-        // same session goes through — that is exactly what the manual nudge did.
-        const isEmptyRefusal = (stopReason: string | undefined) =>
-          stopReason === "refusal" && thinkingChars === 0 && textChars === 0 && output.content.length === 0;
+          // kiro-cli answers a prompt sent while its own conversation still holds an
+          // unanswered tool_use with an instant, contentless `refusal` (measured
+          // 4-20ms, 7 of 14 recoveries on 2026-08-26). Reporting that as a finished
+          // turn is what left the orchestrator stopped right after its subagent
+          // returned, waiting for the user to say "continue". A second prompt on the
+          // same session goes through — that is exactly what the manual nudge did.
+          const isEmptyRefusal = (stopReason: string | undefined) =>
+            stopReason === "refusal" &&
+            thinkingChars === 0 &&
+            textChars === 0 &&
+            output.content.length === 0;
 
-        let refusalRetries = 0;
+          let refusalRetries = 0;
 
-        const retryAfterRefusal = () => {
-          if (!recoveryPrompt || refusalRetries >= REFUSAL_RETRIES) {
-            log("empty refusal → stop", {
-              session: session.id,
-              retried: refusalRetries,
-              recoverable: !!recoveryPrompt,
-            });
-            finish("stop");
-            return;
-          }
-          refusalRetries += 1;
-          log("empty refusal → resending recovery prompt", {
-            session: session.id,
-            attempt: refusalRetries,
-            delayMs: REFUSAL_RETRY_DELAY_MS,
-            promptChars: recoveryPrompt.text.length,
-          });
-          setTimeout(() => {
-            if (settled || gen !== session.streamGen) return;
-            session
-              .startPrompt(model.id, recoveryPrompt!.systemPrompt, recoveryPrompt!.text, recoveryPrompt!.images)
-              .then(attachPromptSettle, (e: Error) => {
-                if (settled || gen !== session.streamGen) return;
-                promptError = e;
-                log("empty refusal retry failed → error", { session: session.id, error: e?.message });
-                finish("error");
+          const retryAfterRefusal = () => {
+            if (!recoveryPrompt || refusalRetries >= REFUSAL_RETRIES) {
+              log("empty refusal → stop", {
+                session: session.id,
+                retried: refusalRetries,
+                recoverable: !!recoveryPrompt,
               });
-          }, REFUSAL_RETRY_DELAY_MS);
-        };
-
-        function attachPromptSettle(): void {
-          session.activePromptDone?.then(
-            (result) => {
-              if (gen === session.streamGen && !settled) {
-                if (!flushToolCalls()) {
-                  if (isEmptyRefusal(result?.stopReason)) {
-                    retryAfterRefusal();
-                    return;
-                  }
-                  log("prompt done → stop", { session: session.id });
-                  finish("stop");
-                }
-              }
-            },
-            (e) => {
-              if (gen === session.streamGen && !settled) {
-                promptError = e;
-                if (!flushToolCalls()) {
-                  log("prompt error → error", { session: session.id, error: e?.message });
+              finish("stop");
+              return;
+            }
+            refusalRetries += 1;
+            log("empty refusal → resending recovery prompt", {
+              session: session.id,
+              attempt: refusalRetries,
+              delayMs: REFUSAL_RETRY_DELAY_MS,
+              promptChars: recoveryPrompt.text.length,
+            });
+            setTimeout(() => {
+              if (settled || gen !== session.streamGen) return;
+              session
+                .startPrompt(
+                  model.id,
+                  recoveryPrompt!.systemPrompt,
+                  recoveryPrompt!.text,
+                  recoveryPrompt!.images,
+                )
+                .then(attachPromptSettle, (e: Error) => {
+                  if (settled || gen !== session.streamGen) return;
+                  promptError = e;
+                  log("empty refusal retry failed → error", {
+                    session: session.id,
+                    error: e?.message,
+                  });
                   finish("error");
-                }
-              }
-            },
-          );
+                });
+            }, REFUSAL_RETRY_DELAY_MS);
+          };
 
-          // No prompt in flight: settle now instead of awaiting a promise that never arrives.
-          if (!session.activePromptDone && !settled) {
-            if (!flushToolCalls()) {
-              promptError = session.lastPromptError ?? new Error("Kiro ACP session has no active prompt");
-              log("no active prompt → error", { session: session.id, error: promptError.message });
-              finish("error");
+          function attachPromptSettle(): void {
+            session.activePromptDone?.then(
+              (result) => {
+                if (gen === session.streamGen && !settled) {
+                  if (!flushToolCalls()) {
+                    if (isEmptyRefusal(result?.stopReason)) {
+                      retryAfterRefusal();
+                      return;
+                    }
+                    log("prompt done → stop", { session: session.id });
+                    finish("stop");
+                  }
+                }
+              },
+              (e) => {
+                if (gen === session.streamGen && !settled) {
+                  promptError = e;
+                  if (!flushToolCalls()) {
+                    log("prompt error → error", {
+                      session: session.id,
+                      error: e?.message,
+                    });
+                    finish("error");
+                  }
+                }
+              },
+            );
+
+            // No prompt in flight: settle now instead of awaiting a promise that never arrives.
+            if (!session.activePromptDone && !settled) {
+              if (!flushToolCalls()) {
+                promptError =
+                  session.lastPromptError ??
+                  new Error("Kiro ACP session has no active prompt");
+                log("no active prompt → error", {
+                  session: session.id,
+                  error: promptError.message,
+                });
+                finish("error");
+              }
             }
           }
-        }
 
-        attachPromptSettle();
-      });
+          attachPromptSettle();
+        },
+      );
 
       session.updateHandler = null;
       if (MIRROR_NATIVE_TOOLS) {
@@ -511,7 +609,8 @@ export function streamKiroAcp(
           turnMs,
           ensureStartedMs: ensuredAt - turnStartedAt,
           promptReadyMs: promptReadyAt - turnStartedAt,
-          ttftThinkingMs: firstThinkingAt != null ? firstThinkingAt - turnStartedAt : null,
+          ttftThinkingMs:
+            firstThinkingAt != null ? firstThinkingAt - turnStartedAt : null,
           ttftTextMs: firstTextAt != null ? firstTextAt - turnStartedAt : null,
           firstToolMs: firstToolAt != null ? firstToolAt - turnStartedAt : null,
           thinkingChars,
@@ -520,8 +619,12 @@ export function streamKiroAcp(
           textChunks,
           emittedThinkingDeltas,
           emittedTextDeltas,
-          avgThinkingChunkChars: thinkingChunks ? Math.round(thinkingChars / thinkingChunks) : null,
-          avgTextChunkChars: textChunks ? Math.round(textChars / textChunks) : null,
+          avgThinkingChunkChars: thinkingChunks
+            ? Math.round(thinkingChars / thinkingChunks)
+            : null,
+          avgTextChunkChars: textChunks
+            ? Math.round(textChars / textChunks)
+            : null,
           streamMs,
         },
       });
@@ -530,7 +633,11 @@ export function streamKiroAcp(
         session.clearAbandonedToolCalls(routed.toolResults);
       }
 
-      output.usage = estimateUsage(output, model.contextWindow, session.metadata);
+      output.usage = estimateUsage(
+        output,
+        model.contextWindow,
+        session.metadata,
+      );
       appendKiroMetadataDiagnostic(output, session.metadata);
 
       if (outcome === "toolUse") {
@@ -546,11 +653,16 @@ export function streamKiroAcp(
         output.stopReason = "stop";
         if (session.persistenceKey && session.acpSessionId) {
           const now = Date.now();
-          const existingPersisted = loadPersistedKiroSession(session.persistenceKey);
+          const existingPersisted = loadPersistedKiroSession(
+            session.persistenceKey,
+          );
           savePersistedKiroSession(session.persistenceKey, {
             version: 1,
             kiroSessionId: session.acpSessionId,
-            historyFingerprint: historyFingerprintAfterAssistantTurn(context, output),
+            historyFingerprint: historyFingerprintAfterAssistantTurn(
+              context,
+              output,
+            ),
             modelId: session.currentModelId,
             createdAt: existingPersisted?.createdAt ?? now,
             lastUsed: now,
@@ -561,9 +673,13 @@ export function streamKiroAcp(
 
       stream.end();
     } catch (error) {
-      log("streamKiroAcp FATAL error", { error: error instanceof Error ? error.stack || error.message : String(error) });
+      log("streamKiroAcp FATAL error", {
+        error:
+          error instanceof Error ? error.stack || error.message : String(error),
+      });
       output.stopReason = "error";
-      output.errorMessage = error instanceof Error ? error.message : String(error);
+      output.errorMessage =
+        error instanceof Error ? error.message : String(error);
       stream.push({ type: "error", reason: "error", error: output });
       stream.end();
     }
