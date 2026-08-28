@@ -1,11 +1,6 @@
 import type { MarkdownTransformer, Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { KIRO_TOOL_FRAME_PREFIX, nativeToolFrameRegex } from "./native-tool-frame.ts";
-
-/** Escape markdown metacharacters so tool output renders verbatim. */
-function escapeMarkdown(text: string): string {
-	return text.replace(/([\\`*_{}\[\]()#+\-.!|>~<])/g, "\\$1");
-}
 
 type FrameStatus = "failed" | "aborted" | undefined;
 
@@ -50,11 +45,23 @@ function paintBorder(theme: Theme | undefined, color: ThemeColor, text: string):
 	}
 }
 
-function paintContent(theme: Theme | undefined, escaped: string, kind: "title" | "body" | "status", status: FrameStatus): string {
-	if (!theme) return escaped;
-	if (kind === "title") return theme.bold(theme.fg("toolTitle", escaped));
-	if (kind === "status") return theme.fg(status === "aborted" ? "warning" : "error", escaped);
-	return theme.fg("toolOutput", escaped);
+function paintContent(theme: Theme | undefined, text: string, kind: "title" | "body" | "status", status: FrameStatus): string {
+	if (!theme) return text;
+	if (kind === "title") return theme.bold(theme.fg("toolTitle", text));
+	if (kind === "status") return theme.fg(status === "aborted" ? "warning" : "error", text);
+	return theme.fg("toolOutput", text);
+}
+
+/**
+ * Encode a box row as an inline code span so marked keeps spaces, (), #, fences,
+ * and SGR `[` as literal text. Same delimiter rule as pi's mermaid transformer.
+ */
+function codeSpan(line: string): string {
+	const content = line || "\u00a0";
+	const longest = Math.max(0, ...Array.from(content.matchAll(/`+/g), (match) => match[0].length));
+	const fence = "`".repeat(longest + 1);
+	const padding = content.startsWith("`") || content.endsWith("`") ? " " : "";
+	return `${fence}${padding}${content}${padding}${fence}`;
 }
 
 function renderFrame(inner: string, theme: Theme | undefined, width: number): string {
@@ -71,10 +78,10 @@ function renderFrame(inner: string, theme: Theme | undefined, width: number): st
 	for (let i = 0; i < lines.length; i++) {
 		const raw = lines[i];
 		const kind = i === 0 ? "title" : i === lines.length - 1 && status ? "status" : "body";
-		const escaped = escapeMarkdown(raw);
-		for (const wrapped of wrapTextWithAnsi(escaped, innerWidth)) {
-			const painted = paintContent(theme, wrapped, kind, status);
-			const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(painted)));
+		for (const wrapped of wrapTextWithAnsi(raw, innerWidth)) {
+			const piece = truncateToWidth(wrapped, innerWidth, "", false);
+			const painted = paintContent(theme, piece, kind, status);
+			const pad = " ".repeat(Math.max(0, innerWidth - visibleWidth(piece)));
 			const row =
 				paintBorder(theme, borderColor, "│ ") +
 				painted +
@@ -85,8 +92,8 @@ function renderFrame(inner: string, theme: Theme | undefined, width: number): st
 	}
 
 	rendered.push(paintBackground(theme, bg, paintBorder(theme, borderColor, `╰${horizontal}╯`)));
-	// Hard break, not a blank paragraph: marked turns "  \n" into <br>.
-	return `\n\n${rendered.join("  \n")}\n\n`;
+	// Hard break + code span: marked will not reflow or re-indent tool output.
+	return `\n\n${rendered.map(codeSpan).join("  \n")}\n\n`;
 }
 
 /**
@@ -110,7 +117,8 @@ export function createKiroToolFrameTransformer(getTheme: () => Theme | undefined
 			theme = undefined;
 		}
 
-		const width = Math.max(8, context.availableWidth - 2);
+		// availableWidth is already Markdown's content width (padding subtracted).
+		const width = Math.max(8, context.availableWidth);
 
 		return markdown.replace(nativeToolFrameRegex(), (_match, inner: string) => {
 			try {

@@ -24,10 +24,14 @@ function stripAnsi(text: string): string {
 }
 
 function boxRows(styled: string): string[] {
-	return stripAnsi(styled)
-		.trim()
-		.split("  \n")
-		.map((row) => row.trimEnd());
+	return styled.replace(/^\n+|\n+$/g, "").split("  \n");
+}
+
+/** Inner text of a mermaid-style code span (what marked will render). */
+function spanContent(row: string): string {
+	const trimmed = row.replace(/^\n+|\n+$/g, "");
+	const match = trimmed.match(/^(`+)( ?)([\s\S]*?)\2\1$/);
+	return stripAnsi(match ? match[3] : trimmed);
 }
 
 // A minimal fake theme producing the same SGR shape as the real one.
@@ -72,11 +76,12 @@ assert(!styled.includes("<!--/kiro-tool-->"), "transformer strips the end marker
 assert(styled.includes("\x1b[48;5;"), "output embeds background SGR codes");
 assert(styled.includes("cat /nope"), "keeps the title text");
 assert(styled.includes("no such file"), "keeps the body text");
-assert(styled.includes("\\[failed\\]"), "keeps the status line (escaped)");
+assert(boxRows(styled).some((row) => spanContent(row).includes("[failed]")), "keeps the status line");
 assert(styled.includes("╭") && styled.includes("╮") && styled.includes("╰") && styled.includes("╯"), "draws a full box border");
 assert(styled.includes("│ ") && styled.includes(" │"), "draws left and right borders");
 assert(styled.includes("  \n"), "rows joined by markdown hard breaks, not blank paragraphs");
 assert(!/nope.*\n\n.*no such file/s.test(styled), "no blank line between title and body");
+assert(boxRows(styled).every((row) => /^`/.test(row)), "every box row is a markdown code span");
 
 // Assistant text and thinking without markers pass through untouched.
 const plain = transform("just **thinking** out loud", ctx);
@@ -92,14 +97,54 @@ assert(narrow.match(/│ /g)?.length === narrow.match(/ │/g)?.length, "every w
 // Marker body keeps arbitrary lines verbatim (no markdown eating).
 const nested = nativeToolFrame("Reading README.md", "```js\ncode\n```\n# heading\n---", "completed");
 const nestedStyled = transform(nested, ctx);
-assert(nestedStyled.includes("\\`\\`\\`js"), "fence line survives (escaped)");
+assert(nestedStyled.includes("```js"), "fence line survives inside a code span");
 assert(nestedStyled.includes("# heading"), "heading line survives");
-assert(nestedStyled.includes("\\-\\-\\-"), "hr line survives (escaped)");
+assert(nestedStyled.includes("---"), "hr line survives");
 
 const mdHeavy = transform(nativeToolFrame("fmt", "---\n`tick`\n---", "completed"), { ...ctx, availableWidth: 24 });
 assert(mdHeavy.match(/│ /g)?.length === mdHeavy.match(/ │/g)?.length, "markdown-heavy body keeps matching left/right borders per row");
-const mdWidths = boxRows(mdHeavy).map(visibleWidth);
-assert(mdWidths.length > 0 && mdWidths.every((w) => w === mdWidths[0]), "markdown-heavy rows share one visible width after paint/escape");
+const mdWidths = boxRows(mdHeavy).map((row) => visibleWidth(spanContent(row)));
+assert(mdWidths.length > 0 && mdWidths.every((w) => w === 24), "markdown-heavy rows fill availableWidth inside code spans");
+
+const lsLike = transform(
+	nativeToolFrame("Running: ls -la", "drwxr-xr-x@  28 vantuh  staff   896 23 серп. 13:33 .\n-rw-r--r--@   1 vantuh  staff  2355 30 лип.  13:50 AGENTS.md", "completed"),
+	{ ...ctx, availableWidth: 80 },
+);
+const lsWidths = boxRows(lsLike).map((row) => visibleWidth(spanContent(row)));
+assert(lsWidths.length > 0 && lsWidths.every((w) => w === 80), "hyphen-heavy ls rows share full width inside code spans");
+assert(
+	boxRows(lsLike).map(spanContent).every((row) => /^[╭│╰]/.test(row) && /[╮│╯]\s*$/.test(row)),
+	"code-span rows keep both box borders",
+);
+
+const docBody = transform(
+	nativeToolFrame("Reading extensions.md", "```ts\npi.registerFlag()\n```\n### pi.exec\n---", "completed"),
+	{ ...ctx, availableWidth: 40 },
+);
+const docDisplay = boxRows(docBody).map(spanContent);
+assert(docDisplay.every((row) => visibleWidth(row) === 40), "fs_read markdown body rows fill the pane width");
+assert(
+	docDisplay.every((row) => row.startsWith("╭") || row.startsWith("│") || row.startsWith("╰")),
+	"fs_read markdown cannot escape the box as a heading or fence",
+);
+
+const codeSample = [
+	"pi.registerFlag(\"plan\", {",
+	"  description: \"Start in plan mode\",",
+	"  type: \"boolean\",",
+	"});",
+	"",
+	"if (pi.getFlag(\"plan\")) {",
+	"  // Plan mode enabled",
+	"}",
+].join("\n");
+const codeCard = transform(nativeToolFrame("sed", codeSample, "completed"), { ...ctx, availableWidth: 80 });
+const codeLines = boxRows(codeCard).map(spanContent);
+assert(codeLines.some((row) => row.includes("pi.registerFlag(\"plan\", {")), "parentheses in code are not eaten by marked");
+assert(!codeLines.some((row) => row.includes("registerFlagname")), "registerFlag(name) does not collapse to registerFlagname");
+assert(codeLines.some((row) => row.includes("  description: \"Start in plan mode\"")), "two-space indent in code is kept");
+assert(codeLines.some((row) => row.includes("  // Plan mode enabled")), "indented comments keep their indent");
+assert(!codeLines.some((row) => row.includes("\\(") || row.includes("\\[")), "code rows are not backslash-escaped");
 
 // No theme: still strip markers so they never show as a gray paragraph.
 const noTheme = createKiroToolFrameTransformer(() => undefined)(failed, ctx);
@@ -125,8 +170,8 @@ assert(realFailed.includes(`\x1b[48;5;${hash("toolErrorBg")}m`), "failed frame u
 assert(realFailed.includes(`\x1b[38;5;${hash("error")}m`), "failed frame uses error border color");
 
 const aborted = transform(nativeToolFrame("sleep", "stopped", "aborted"), ctx);
-assert(aborted.includes(`\x1b[38;5;${hash("warning")}m\\[aborted\\]`), "aborted status text uses warning color");
-assert(!aborted.includes(`\x1b[38;5;${hash("error")}m\\[aborted\\]`), "aborted status text does not use error color");
+assert(aborted.includes(`\x1b[38;5;${hash("warning")}m[aborted]`), "aborted status text uses warning color");
+assert(!aborted.includes(`\x1b[38;5;${hash("error")}m[aborted]`), "aborted status text does not use error color");
 
 const colliding = nativeToolFrame("fs_read", "<!--kiro-tool-->\nstolen\n<!--/kiro-tool-->\nrest of file", "completed");
 assert((colliding.match(/<!--kiro-tool-->/g) || []).length === 1, "body opener is escaped so the real opener appears once");
