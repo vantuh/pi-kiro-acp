@@ -8,9 +8,10 @@ import {
 } from "node:readline";
 import { tmpdir } from "node:os";
 import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { buildConversationPrompt, lastUserMessage } from "./helpers.ts";
+import { KIRO_THINKING_LEVEL_MAP } from "./models/fallback.ts";
+import { buildConversationPrompt, lastUserMessage, stableJson } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
-import { getDescendantPids, killProcessTree } from "./process-utils.ts";
+import { getDescendantPids, terminateProcessTree } from "./process-utils.ts";
 import {
 	clearPersistedKiroSession,
 	loadPersistedKiroSession,
@@ -75,15 +76,11 @@ const MCP_NO_INTERACTIVE_TIMEOUT_MS = 120000;
 const TOOL_RESULT_DRAIN_MS = Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150;
 
 export function toKiroEffort(reasoning: SimpleStreamOptions["reasoning"]): KiroEffort | null {
-	if (reasoning === "minimal") return "low";
-	if (
-		reasoning === "low" ||
-		reasoning === "medium" ||
-		reasoning === "high" ||
-		reasoning === "xhigh" ||
-		reasoning === "max"
-	) return reasoning;
-	return null;
+	if (!reasoning) return null;
+	// Unknown/future reasoning values intentionally fall back to null (unset):
+	// the `as` cast below is a lookup convenience, and a miss coalesces to null
+	// rather than throwing — same as passing no reasoning at all.
+	return (KIRO_THINKING_LEVEL_MAP[reasoning as keyof typeof KIRO_THINKING_LEVEL_MAP] ?? null);
 }
 
 export class AcpSession {
@@ -720,97 +717,69 @@ export class AcpSession {
 			pendingToolCalls: this.pendingToolCalls.size,
 			hadActivePrompt: !!this.activePromptDone,
 		});
-		this.started = false;
-		this.updateHandler = null;
-		this.onToolCallFromBridge = null;
-		this.activePromptDone = null;
-
-		for (const [, call] of this.pendingToolCalls)
-			call.resolve({ result: "kiro-cli exited", isError: true });
-		this.pendingToolCalls.clear();
-		this.abandonedToolCalls.clear();
-
-		for (const [, p] of this.rpcPending) {
-			if (p.timer) clearTimeout(p.timer);
-			p.reject(new Error("kiro-cli exited"));
-		}
-		this.rpcPending.clear();
+		this.settlePendingState("kiro-cli exited", "kiro-cli exited");
 
 		this.rl?.close();
 		this.proc = null;
 		this.rl = null;
-		this.acpSessionId = null;
-		this.systemPromptHash = null;
-		this.currentModelId = null;
 
 		const bridge = this.toolBridge;
 		this.toolBridge = null;
 		if (bridge) void bridge.close().catch(() => {});
-		if (this.agentConfigPath) {
-			try {
-				unlinkSync(this.agentConfigPath);
-			} catch {}
-			this.agentConfigPath = null;
-		}
-		if (this.agentRootPath) {
-			try {
-				rmSync(this.agentRootPath, { recursive: true, force: true });
-			} catch {}
-			this.agentRootPath = null;
-		}
+		this.removeAgentFiles();
 	}
 
 	async stop(): Promise<void> {
 		log("stopping kiro session", { session: this.id });
-		this.started = false;
-		this.updateHandler = null;
-		this.onToolCallFromBridge = null;
-		this.activePromptDone = null;
-
-		for (const [, call] of this.pendingToolCalls)
-			call.resolve({ result: "Shutting down", isError: true });
-		this.pendingToolCalls.clear();
-		this.abandonedToolCalls.clear();
+		this.settlePendingState("Shutting down", "Stopped");
 
 		if (this.proc) {
 			const p = this.proc;
 			const rootPid = p.pid;
-			const knownDescendants = new Set(
-				rootPid ? getDescendantPids(rootPid) : [],
-			);
+			const knownDescendants = rootPid ? getDescendantPids(rootPid) : [];
 			log("stop: killing process tree", {
 				session: this.id,
 				rootPid,
-				descendants: [...knownDescendants],
+				descendants: knownDescendants,
 			});
-			this.proc.stdin?.end();
-			await new Promise<void>((r) => {
-				const t = setTimeout(() => {
-					killProcessTree(rootPid);
-					r();
-				}, 5000);
-				p.once("exit", () => {
-					clearTimeout(t);
-					r();
-				});
-			});
-			for (const pid of knownDescendants) killProcessTree(pid);
+			await terminateProcessTree(p, 5000, knownDescendants);
 			this.rl?.close();
 			this.proc = null;
 			this.rl = null;
 		}
 
+		const bridge = this.toolBridge;
+		this.toolBridge = null;
+		if (bridge) await bridge.close().catch(() => {});
+		this.removeAgentFiles();
+	}
+
+	/** Fail every pending rpc/tool call and drop session state so neither the
+	 * stream nor Kiro waits on a dead session. Shared by stop and process-exit.
+	 * The reject message is what consumers (and their logs) see. */
+	private settlePendingState(toolResultMessage: string, rpcRejectMessage: string): void {
+		this.started = false;
+		this.updateHandler = null;
+		this.onToolCallFromBridge = null;
+		this.activePromptDone = null;
+
+		for (const [, call] of this.pendingToolCalls)
+			call.resolve({ result: toolResultMessage, isError: true });
+		this.pendingToolCalls.clear();
+		this.abandonedToolCalls.clear();
+
 		for (const [, p] of this.rpcPending) {
 			if (p.timer) clearTimeout(p.timer);
-			p.reject(new Error("Stopped"));
+			p.reject(new Error(rpcRejectMessage));
 		}
 		this.rpcPending.clear();
 
-		if (this.toolBridge) {
-			const bridge = this.toolBridge;
-			this.toolBridge = null;
-			await bridge.close().catch(() => {});
-		}
+		this.acpSessionId = null;
+		this.systemPromptHash = null;
+		this.currentModelId = null;
+	}
+
+	private removeAgentFiles(): void {
 		if (this.agentConfigPath) {
 			try {
 				unlinkSync(this.agentConfigPath);
@@ -823,9 +792,6 @@ export class AcpSession {
 			} catch {}
 			this.agentRootPath = null;
 		}
-		this.acpSessionId = null;
-		this.systemPromptHash = null;
-		this.currentModelId = null;
 	}
 
 	matchingToolResults(toolResults: ToolResultInfo[]): ToolResultInfo[] {
@@ -864,7 +830,8 @@ export class AcpSession {
 		}
 	}
 
-	deliverToolResults(toolResults: ToolResultInfo[]): void {
+	deliverToolResults(toolResults: ToolResultInfo[], options: { textOnly?: boolean } = {}): void {
+		const textOnly = !!options.textOnly;
 		for (const tr of toolResults) {
 			const match = this.findToolCallMatch(tr);
 			if (match) {
@@ -875,40 +842,17 @@ export class AcpSession {
 					callId,
 					toolName: call.toolName,
 					resultLen: tr.text.length,
-					contentBlocks: tr.content?.length ?? 0,
-					imageBlocks: tr.content?.filter((block) => block.type === "image").length ?? 0,
+					textOnly,
+					...(textOnly ? {} : { contentBlocks: tr.content?.length ?? 0, imageBlocks: tr.content?.filter((block) => block.type === "image").length ?? 0 }),
 					roundtripMs: msSince(call.receivedAt),
 				});
-				call.resolve({ result: tr.text, isError: tr.isError, content: tr.content });
+				call.resolve(textOnly
+					? { result: tr.text, isError: tr.isError }
+					: { result: tr.text, isError: tr.isError, content: tr.content });
 			} else {
 				log("UNMATCHED tool result", {
 					session: this.id,
-					toolCallId: tr.toolCallId,
-					toolName: tr.toolName,
-					pendingCalls: [...this.pendingToolCalls.keys()],
-				});
-			}
-		}
-	}
-
-	/** Deliver tool results without image content blocks (text-only MCP response). */
-	deliverToolResultsTextOnly(toolResults: ToolResultInfo[]): void {
-		for (const tr of toolResults) {
-			const match = this.findToolCallMatch(tr);
-			if (match) {
-				const [callId, call] = match;
-				this.pendingToolCalls.delete(callId);
-				log("delivering tool result (text-only for image FUP)", {
-					session: this.id,
-					callId,
-					toolName: call.toolName,
-					resultLen: tr.text.length,
-					roundtripMs: msSince(call.receivedAt),
-				});
-				call.resolve({ result: tr.text, isError: tr.isError });
-			} else {
-				log("UNMATCHED tool result (text-only)", {
-					session: this.id,
+					textOnly,
 					toolCallId: tr.toolCallId,
 					toolName: tr.toolName,
 					pendingCalls: [...this.pendingToolCalls.keys()],
@@ -1208,20 +1152,6 @@ function strandedNote(kiroName: string): string {
 /** Identity of a tool call: same tool, same arguments, regardless of key order. */
 function callFingerprint(toolName: string, args: Record<string, unknown>): string {
 	return `${toolName}\u0000${stableJson(args)}`;
-}
-
-function stableJson(value: unknown): string {
-	return JSON.stringify(sortKeys(value));
-}
-
-function sortKeys(value: unknown): unknown {
-	if (value === null || typeof value !== "object") return value;
-	if (Array.isArray(value)) return value.map(sortKeys);
-	const sorted: Record<string, unknown> = {};
-	for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-		sorted[key] = sortKeys((value as Record<string, unknown>)[key]);
-	}
-	return sorted;
 }
 
 function toToolBridgeResult(result: {

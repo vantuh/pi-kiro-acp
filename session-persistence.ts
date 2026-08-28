@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { log } from "./logging.ts";
+import { stableValue } from "./helpers.ts";
 import { KIRO_TOOL_FRAME_PREFIX, stripNativeToolFrames } from "./native-tool-frame.ts";
 
 const APP_DIR = "pi-kiro-acp";
@@ -142,16 +143,6 @@ function normalizeContent(content: unknown): unknown {
 			return stableValue(block);
 		})
 		.filter((block) => block !== null);
-}
-
-function stableValue(value: unknown): unknown {
-	if (value === null || typeof value !== "object") return value;
-	if (Array.isArray(value)) return value.map(stableValue);
-	const sorted: Record<string, unknown> = {};
-	for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-		sorted[key] = stableValue((value as Record<string, unknown>)[key]);
-	}
-	return sorted;
 }
 
 function hashText(value: string): string {

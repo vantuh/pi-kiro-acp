@@ -111,6 +111,21 @@ function messageText(msg: Context["messages"][number], maxChars = MAX_HISTORY_TE
   return truncate(text, maxChars);
 }
 
+/** Deep-sort object keys so structurally equal values serialize identically. */
+export function stableValue(value: unknown): unknown {
+  if (value === null || typeof value !== "object") return value;
+  if (Array.isArray(value)) return value.map(stableValue);
+  const sorted: Record<string, unknown> = {};
+  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+    sorted[key] = stableValue((value as Record<string, unknown>)[key]);
+  }
+  return sorted;
+}
+
+export function stableJson(value: unknown): string {
+  return JSON.stringify(stableValue(value));
+}
+
 function truncate(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\n\n[...truncated ${text.length - maxChars} chars...]`;

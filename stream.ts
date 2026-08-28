@@ -220,20 +220,6 @@ export function streamKiroAcp(
 
       const mirrorUi = MIRROR_NATIVE_TOOLS ? getUi?.() : undefined;
 
-      const pushThinkingDelta = (delta: string) => {
-        if (!delta) return;
-        if (textStarted) endTextBlock();
-        if (!thinkingStarted) {
-          output.content.push({ type: "thinking", thinking: "" } as any);
-          thinkingIdx = output.content.length - 1;
-          stream.push({ type: "thinking_start", contentIndex: thinkingIdx, partial: output });
-          thinkingStarted = true;
-          thinkingMessageId = undefined;
-        }
-        (output.content[thinkingIdx] as any).thinking += delta;
-        stream.push({ type: "thinking_delta", contentIndex: thinkingIdx, delta, partial: output });
-      };
-
       const pushTextDelta = (delta: string, messageId?: string) => {
         if (!delta) return;
         if (thinkingStarted) endThinkingBlock();
@@ -328,7 +314,7 @@ export function streamKiroAcp(
             tools: routed.toolResults.map((tr) => tr.toolName),
           });
           suppressUpdates = true;
-          session.deliverToolResultsTextOnly(routed.toolResults);
+          session.deliverToolResults(routed.toolResults, { textOnly: true });
 
           const userQ = lastUserMessage(context);
           const imageTools = routed.toolResults.filter((tr) =>

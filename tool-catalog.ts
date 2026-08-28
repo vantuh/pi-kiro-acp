@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import { stableValue } from "./helpers.ts";
+
 export interface PiToolMetadata {
 	name: string;
 	description?: string;
@@ -30,18 +32,6 @@ export function isKiroToolName(name: string): boolean {
 	return name.length > 0 && name.length <= MAX_KIRO_NAME_LENGTH && KIRO_NAME.test(name);
 }
 
-function canonical(value: unknown): unknown {
-	if (Array.isArray(value)) return value.map(canonical);
-	if (value && typeof value === "object") {
-		return Object.fromEntries(
-			Object.entries(value as Record<string, unknown>)
-				.sort(([a], [b]) => a.localeCompare(b))
-				.map(([key, entry]) => [key, canonical(entry)]),
-		);
-	}
-	return value;
-}
-
 function digest(value: string): string {
 	return createHash("sha256").update(value).digest("hex");
 }
@@ -54,7 +44,7 @@ function fingerprint(tools: ForwardedTool[]): string {
 			piName: tool.piName,
 			kiroName: tool.kiroName,
 			description: tool.description,
-			parameters: canonical(tool.parameters),
+			parameters: stableValue(tool.parameters),
 		}));
 	return digest(JSON.stringify(stable));
 }

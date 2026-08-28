@@ -1,7 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 
-import { getDescendantPids, killProcessTree } from "../process-utils.ts";
+import { terminateProcessTree } from "../process-utils.ts";
 
 type JsonRpcResponse = {
   id?: number;
@@ -72,22 +72,7 @@ export class DiscoveryClient {
     const proc = this.proc;
     if (!proc) return;
 
-    const rootPid = proc.pid;
-    const descendants = rootPid ? getDescendantPids(rootPid) : [];
-    proc.stdin?.end();
-
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        killProcessTree(rootPid);
-        resolve();
-      }, 2000);
-      proc.once("exit", () => {
-        clearTimeout(timer);
-        resolve();
-      });
-    });
-
-    for (const pid of descendants) killProcessTree(pid);
+    await terminateProcessTree(proc, 2000);
     this.rl?.close();
     this.rl = null;
     this.proc = null;

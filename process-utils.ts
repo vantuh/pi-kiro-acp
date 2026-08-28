@@ -1,4 +1,31 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ChildProcess } from "node:child_process";
+
+/** Gracefully stop a spawned process tree: close stdin, wait for exit, SIGTERM
+ * the root and every known descendant. Resolves either way.
+ * `knownDescendants` lets callers that already walked the tree (for logging)
+ * reuse that snapshot instead of re-running pgrep. */
+export async function terminateProcessTree(
+  proc: ChildProcess,
+  timeoutMs: number,
+  knownDescendants?: number[],
+): Promise<void> {
+  const rootPid = proc.pid;
+  const descendants = rootPid
+    ? knownDescendants ?? getDescendantPids(rootPid)
+    : [];
+  proc.stdin?.end();
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      killProcessTree(rootPid);
+      resolve();
+    }, timeoutMs);
+    proc.once("exit", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+  for (const pid of descendants) killProcessTree(pid);
+}
 
 export function killProcessTree(pid?: number): void {
   if (!pid) return;
