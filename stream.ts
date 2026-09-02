@@ -28,13 +28,17 @@ import { buildForwardedToolCatalog } from "./tool-catalog.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
 /** Minimal structural view of the UI surface the native-tool mirror needs. */
-type MirrorUi = { setWorkingMessage(message?: string): void };
+type MirrorUi = { setStatus(key: string, text?: string): void };
 
 /**
  * Phase 4: mirror Kiro's native (non-pi_host) tool activity into pi as
  * display-only text blocks so they interleave with assistant text and remain
  * visible when thinking is hidden. Each finished tool is emitted as one
  * `<!--kiro-tool-->` marker block that the markdown transformer restyles inline.
+ * Live progress while a tool is running goes through `ui.setStatus` (a footer
+ * status slot) rather than `setWorkingMessage`, so pi's own "Working..." text
+ * is left untouched — external tools (e.g. Herdr) that pattern-match on it
+ * can still tell the agent is busy.
  * Never emits real toolcall_* (that would make pi execute it).
  * Disable with PI_KIRO_ACP_MIRROR=0.
  */
@@ -287,7 +291,7 @@ export function streamKiroAcp(
         pushText: (delta) => textWriter.delta(delta),
         endText: endTextBlock,
         endThinking: endThinkingBlock,
-        setWorkingMessage: (message) => mirrorUi?.setWorkingMessage(message),
+        setStatus: (text) => mirrorUi?.setStatus("kiro-tool", text),
       });
 
       session.updateHandler = (update) => {

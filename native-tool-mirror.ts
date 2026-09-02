@@ -5,13 +5,18 @@ export type NativeToolMirrorHooks = {
   pushText(delta: string): void;
   endText(): void;
   endThinking(): void;
-  setWorkingMessage(message?: string): void;
+  setStatus(text?: string): void;
 };
 
 /**
  * Tracks Kiro's native (non-pi_host) tool calls and mirrors each finished one
- * into the stream as a self-contained text block. Display only — it never emits
- * toolcall_* events, which would make pi try to execute the tool itself.
+ * into the stream as a self-contained text block. Display only — it never
+ * emits toolcall_* events, which would make pi try to execute the tool itself.
+ *
+ * Live progress while a tool is running goes through `setStatus` (a footer
+ * status slot), never `setWorkingMessage`/`setWorkingIndicator` — those
+ * overwrite pi's own "Working..." text, which external tools (e.g. Herdr)
+ * pattern-match on to detect whether the agent is still busy.
  */
 export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
   const tracked = new Map<string, { title: string; text: string }>();
@@ -38,7 +43,7 @@ export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
             ? update.title
             : (update._meta?.kiro?.toolName ?? "tool");
         tracked.set(toolCallId, { title, text: "" });
-        hooks.setWorkingMessage(`🔧 ${title}`);
+        hooks.setStatus(`🔧 ${title}`);
         return;
       }
 
@@ -55,7 +60,7 @@ export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
       if (update.status === "completed" || update.status === "failed") {
         tracked.delete(toolCallId);
         emit(entry.title, entry.text, update.status);
-        if (tracked.size === 0) hooks.setWorkingMessage();
+        if (tracked.size === 0) hooks.setStatus();
       }
     },
 
@@ -64,7 +69,9 @@ export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
       for (const entry of tracked.values())
         emit(entry.title, entry.text, "aborted");
       tracked.clear();
-      hooks.setWorkingMessage();
+      hooks.setStatus();
     },
   };
 }
+
+

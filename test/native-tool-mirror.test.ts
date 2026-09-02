@@ -18,8 +18,7 @@ function harness() {
     pushText: (delta) => calls.push(`push:${delta.replace(/\n/g, "\\n")}`),
     endText: () => calls.push("endText"),
     endThinking: () => calls.push("endThinking"),
-    setWorkingMessage: (message) =>
-      calls.push(`work:${message ?? "(cleared)"}`),
+    setStatus: (text) => calls.push(`status:${text ?? "(cleared)"}`),
   });
   return { calls, mirror };
 }
@@ -41,13 +40,13 @@ const finish = (id: string, status: string) => ({
   status,
 });
 
-// A finished tool: working message on start, one framed block on completion.
+// A finished tool: status set on start, one framed block on completion.
 {
   const { calls, mirror } = harness();
   mirror.update(start("t1", "Reading app.ts"));
   assert(
-    calls.length === 1 && calls[0] === "work:🔧 Reading app.ts",
-    "start only sets the working message",
+    calls.length === 1 && calls[0] === "status:🔧 Reading app.ts",
+    "start only sets the footer status",
   );
 
   mirror.update(chunk("t1", "line one\n"));
@@ -70,8 +69,8 @@ const finish = (id: string, status: string) => ({
     "the card gets its own normal text block",
   );
   assert(
-    calls[calls.length - 1] === "work:(cleared)",
-    "working message is cleared when nothing is running",
+    calls[calls.length - 1] === "status:(cleared)",
+    "footer status is cleared when nothing is running",
   );
 }
 
@@ -107,13 +106,13 @@ const finish = (id: string, status: string) => ({
     "block B carries only B's body",
   );
   assert(
-    calls.filter((c) => c === "work:(cleared)").length === 1,
-    "working message is cleared once, after the last tool",
+    calls.filter((c) => c === "status:(cleared)").length === 1,
+    "footer status is cleared once, after the last tool",
   );
-  const clearedAt = calls.indexOf("work:(cleared)");
+  const clearedAt = calls.indexOf("status:(cleared)");
   assert(
     clearedAt > calls.lastIndexOf(pushes[1]) - 2,
-    "working message survives while a tool is still running",
+    "footer status survives while a tool is still running",
   );
 }
 
@@ -136,15 +135,15 @@ const finish = (id: string, status: string) => ({
     "partial output collected so far is kept",
   );
   assert(
-    calls[calls.length - 1] === "work:(cleared)",
-    "flush clears the working message",
+    calls[calls.length - 1] === "status:(cleared)",
+    "flush clears the footer status",
   );
 
   const before = calls.length;
   mirror.flush();
   assert(
     calls.length === before + 1,
-    "a second flush emits no blocks, only the working-message clear",
+    "a second flush emits no blocks, only the footer-status clear",
   );
 }
 
@@ -180,9 +179,11 @@ const finish = (id: string, status: string) => ({
   });
   mirror.update(finish("t1", "completed"));
   assert(
-    calls[0] === "work:🔧 grepSearch",
+    calls[0] === "status:🔧 grepSearch",
     "toolName is used as the title fallback",
   );
 }
 
 console.log("✓ native-tool-mirror tests passed");
+
+
