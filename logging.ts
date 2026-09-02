@@ -2,10 +2,11 @@ import { appendFile } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
+import { loadKiroAcpConfig, resolveLoggerConfig } from "./config.ts";
+
 export const LOG_FILE = join(tmpdir(), "kiro-acp-debug.log");
 
-const DEBUG =
-  !!process.env.PI_KIRO_ACP_DEBUG && process.env.PI_KIRO_ACP_DEBUG !== "0";
+const DEBUG = resolveLoggerConfig(loadKiroAcpConfig()).debug;
 
 export function log(...args: any[]): void {
   if (!DEBUG) return;

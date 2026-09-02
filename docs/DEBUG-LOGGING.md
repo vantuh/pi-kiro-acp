@@ -31,8 +31,8 @@ tail -f "$LOG" | grep '"session":"abc123"'
 
 | Variable | Effect |
 |---|---|
-| `PI_KIRO_ACP_DEBUG=1` | Enables the log file above (`0`/unset = no logging at all) |
-| `PI_KIRO_ACP_VERBOSE=1..3` | Passes `-v`/`-vv`/`-vvv` to `kiro-cli acp`; its own logs land in the same file as `kiro log` |
+| `kiro-acp.json` → `logger.debug: true` | Enables the log file above (`false`/unset = no logging) |
+| `kiro-acp.json` → `logger.verbose: 1..3` | Passes `-v`/`-vv`/`-vvv` to `kiro-cli acp`; its own logs land in the same file as `kiro log` |
 | `PI_KIRO_ACP_MIRROR=0` | Disables mirroring Kiro's native tool calls into the transcript |
 | `PI_KIRO_ACP_DRAIN_MS` | Grace period between answering Kiro's outstanding `tools/call` and cancelling its turn (default 150) |
 | `PI_KIRO_ACP_REFUSAL_RETRY_MS` | Delay before re-sending a recovery prompt that came back as a contentless `refusal` (default 1500) |

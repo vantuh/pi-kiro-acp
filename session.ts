@@ -11,6 +11,7 @@ import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { KIRO_THINKING_LEVEL_MAP } from "./models/fallback.ts";
 import { stableJson } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
+import { loadKiroAcpConfig, resolveLoggerConfig } from "./config.ts";
 import { getDescendantPids, terminateProcessTree } from "./process-utils.ts";
 import {
   clearPersistedKiroSession,
@@ -54,13 +55,10 @@ const NATIVE_KIRO_TOOLS = [
   "grep",
 ];
 
-/** kiro-cli `-v` repeat count from PI_KIRO_ACP_VERBOSE (0 = off, max 3). Its
- * verbose output goes to stdout, the same pipe as JSON-RPC, so those lines are
+/** kiro-cli `-v` repeat count from kiro-acp.json logger.verbose (0 = off, max 3).
+ * Its verbose output goes to stdout, the same pipe as JSON-RPC, so those lines are
  * picked out of the framing path below. */
-const KIRO_VERBOSITY = Math.min(
-  3,
-  Math.max(0, Number(process.env.PI_KIRO_ACP_VERBOSE) || 0),
-);
+const KIRO_VERBOSITY = resolveLoggerConfig(loadKiroAcpConfig()).verbose;
 
 /** kiro-cli colours its verbose output; keep the debug log readable. */
 function stripAnsi(text: string): string {
@@ -215,7 +213,7 @@ export class AcpSession {
     try {
       msg = JSON.parse(s);
     } catch {
-      // With PI_KIRO_ACP_VERBOSE, kiro-cli's own -v logs land on this same
+      // With logger.verbose, kiro-cli's own -v logs land on this same
       // stdout pipe; keep them in full instead of as truncated parse errors.
       if (KIRO_VERBOSITY > 0)
         log("kiro log", { session: this.id, text: stripAnsi(s) });
