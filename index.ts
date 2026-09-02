@@ -3,6 +3,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
+import { loadKiroAcpConfig, resolveUsageFooterConfig } from "./config.ts";
 import { KIRO_MODELS, type KiroModelConfig } from "./models/fallback.ts";
 import { discoverKiroModels } from "./models/discovery.ts";
 import { LOG_FILE, log } from "./logging.ts";
@@ -11,6 +12,7 @@ import { stripAssistantContentFrames } from "./native-tool-frame.ts";
 import { createKiroToolFrameTransformer } from "./tool-frame-transformer.ts";
 import { stopAllSessions } from "./session-manager.ts";
 import { streamKiroAcp } from "./stream.ts";
+import { getKiroUsage, type KiroUsage } from "./usage.ts";
 
 type UiGetter = () => ExtensionContext["ui"] | undefined;
 
@@ -37,6 +39,87 @@ export default function (pi: ExtensionAPI) {
 
   registerKiroProvider(pi, KIRO_MODELS, getUi);
   void refreshKiroModels(pi, getUi);
+
+  // Kiro plan usage in the footer (via kiro-cli /usage). Shown only while a
+  // kiro-acp model is active; toggle + poll interval live in
+  // ~/.pi/agent/kiro-acp.json (defaults: off, poll every 10 minutes).
+  // /kiro-usage forces a refresh.
+  let usageTimer: ReturnType<typeof setInterval> | undefined;
+  // Guards against an in-flight kiro-cli fetch re-adding the status after the
+  // user switched away from a kiro-acp model while the fetch was running.
+  let usageFooterActive = false;
+
+  const getTheme = () => {
+    try {
+      return getUi()?.theme;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const refreshKiroUsageStatus = async () => {
+    const ui = getUi();
+    if (!ui) return;
+    try {
+      const usage = await getKiroUsage(0);
+      if (!usageFooterActive) return;
+      ui.setStatus("kiro", kiroUsageStatusText(usage, getTheme()));
+    } catch (error) {
+      log("usage status refresh failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const clearKiroUsageStatus = () => {
+    usageFooterActive = false;
+    clearInterval(usageTimer);
+    usageTimer = undefined;
+    getUi()?.setStatus("kiro", undefined);
+  };
+
+  const syncKiroUsageFooter = (model: { provider?: string } | undefined) => {
+    const config = resolveUsageFooterConfig(loadKiroAcpConfig());
+    if (!config.enabled || model?.provider !== KIRO_ACP_PROVIDER) {
+      clearKiroUsageStatus();
+      return;
+    }
+    clearInterval(usageTimer);
+    usageFooterActive = true;
+    void refreshKiroUsageStatus();
+    usageTimer = setInterval(() => {
+      void refreshKiroUsageStatus();
+    }, config.pollMinutes * 60_000);
+  };
+
+  pi.on("session_start", (_event, ctx) => syncKiroUsageFooter(ctx.model));
+  pi.on("model_select", (event) => syncKiroUsageFooter(event.model));
+
+  pi.registerCommand("kiro-usage", {
+    description: "Refresh Kiro plan usage shown in the footer",
+    handler: async (_args, ctx) => {
+      try {
+        const usage = await getKiroUsage(0);
+        if (usageFooterActive) {
+          ctx.ui.setStatus("kiro", kiroUsageStatusText(usage, getTheme()));
+        }
+        ctx.ui.notify(
+          `Kiro ${usage.plan}: ${usage.credits || `${usage.percent}% used`}, resets ${usage.resetDate}`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(
+          `Kiro usage unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          "warning",
+        );
+      }
+    },
+  });
+
+  pi.on("session_shutdown", () => {
+    usageFooterActive = false;
+    clearInterval(usageTimer);
+  });
 
   // Render mirrored native Kiro tool frames inline, styled like native tool rows.
   pi.registerMarkdownTransformer(
@@ -75,6 +158,22 @@ export default function (pi: ExtensionAPI) {
     });
     await stopAllSessions();
   });
+}
+
+function kiroUsageStatusText(usage: KiroUsage, theme?: any): string {
+  const pct = Math.round(usage.percent);
+  const text = `Kiro ${pct}% · resets ${usage.resetDate.slice(5)}`;
+  if (!theme) return text;
+  // "muted" (gray) — distinct from tokens-per-second's accent/dim; escalation
+  // colors kick in as the plan runs out.
+  try {
+    return theme.fg(
+      pct >= 80 ? "error" : pct >= 60 ? "warning" : "muted",
+      text,
+    );
+  } catch {
+    return text;
+  }
 }
 
 function registerKiroProvider(

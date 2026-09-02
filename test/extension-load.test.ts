@@ -15,10 +15,14 @@ function assert(condition: unknown, label: string): void {
 const events: string[] = [];
 const providers: Array<{ id: string; config: any }> = [];
 const transformers: unknown[] = [];
+const commands: string[] = [];
 
 const pi = {
   on(event: string, _handler: unknown) {
     events.push(event);
+  },
+  registerCommand(name: string, _options: unknown) {
+    commands.push(name);
   },
   registerProvider(id: string, config: any) {
     providers.push({ id, config });
@@ -71,6 +75,11 @@ assert(
 assert(
   typeof transformers[0] === "function",
   "the markdown transformer is a function",
+);
+
+assert(
+  commands.includes("kiro-usage"),
+  "the extension registers the kiro-usage command",
 );
 
 console.log("✓ all extension-load tests passed");
