@@ -1,3 +1,12 @@
+// Account-level plan usage (credits, % of plan, reset date) is NOT available
+// over ACP: kiro-cli exposes only session-scoped metrics (_kiro.dev/metadata
+// contextUsagePercentage, per-turn meteringUsage/sessionCost — see types.ts).
+// The /usage data comes from a direct AWS call (AmazonCodeWhispererService
+// .GetUsageLimits) that the CLI makes internally and never forwards to ACP
+// clients (verified against kiro-cli 2.19.1: all candidate usage/quota JSON-RPC
+// methods return -32601). So spawning `kiro-cli chat --no-interactive /usage`
+// is the only viable source.
+
 import { spawn } from "node:child_process";
 
 import { log } from "./logging.ts";

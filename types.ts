@@ -35,6 +35,9 @@ export interface SessionMetadata {
   contextUsagePercentage?: number;
   contextUsed?: number;
   contextSize?: number;
+  // NOTE: sessionCost / meteringUsage are per-turn session telemetry only —
+  // NOT the account plan quota (credits, % used, reset date). ACP does not
+  // expose plan usage; see usage.ts for how that is fetched.
   sessionCost?: { amount: number; currency: string };
   meteringUsage?: Array<{ unit: string; unitPlural?: string; value: number }>;
   turnDurationMs?: number;
