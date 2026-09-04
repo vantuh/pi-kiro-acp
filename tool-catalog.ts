@@ -85,7 +85,10 @@ function aliasFor(piName: string, used: Set<string>): string | undefined {
   return undefined;
 }
 
-/** Build the active, extension-only tool catalog exposed to Kiro. */
+/** Build the active tool catalog exposed to Kiro. Builtin (read/bash/…)
+ * and extension tools are forwarded over pi_host and executed by pi (forwarded
+ * transport, ADR 0001 amendment 2026-09-04), so Kiro must see pi's active set;
+ * only host-SDK custom tools stay out of the catalog. */
 export function buildForwardedToolCatalog(
   allTools: readonly PiToolMetadata[],
   activeToolNames: readonly string[],
@@ -96,11 +99,7 @@ export function buildForwardedToolCatalog(
 
   for (const tool of allTools) {
     if (!active.has(tool.name)) continue;
-    if (
-      tool.sourceInfo?.source === "builtin" ||
-      tool.sourceInfo?.source === "sdk"
-    )
-      continue;
+    if (tool.sourceInfo?.source === "sdk") continue;
     if (candidates.has(tool.name)) {
       diagnostics.push(`Skipping duplicate active tool name ${tool.name}.`);
       continue;

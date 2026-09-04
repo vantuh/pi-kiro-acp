@@ -72,3 +72,24 @@ Kiro does issue overlapping calls in one turn (two `herdr_agent`, or `herdr_agen
 Pending calls are keyed per HTTP response. Each keeps its own SSE/JSON stream, keepalive,
 and abort. Disconnect or `close()` only settles that call. Pi already tracks multiple
 `pendingToolCalls`; the stream debounce batches them into one turn.
+
+## Amendment (2026-09-04) — revert to full forwarding (B2)
+
+The execution split (B1) is reverted: **pi executes every tool.** Kiro's agent config
+now lists only `@pi_host` (`writeAgentCfg`), and the catalog filter is widened to
+include builtin tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) alongside
+extension tools; only host-SDK customs stay out. Every Kiro `tools/call` crosses the
+bridge into pi's pending-call flow, so pi emits real `tool_execution_start/end` events
+— child sessions (pi-subagents) get live FleetView activity and tool/token counters,
+which the display-only mirror could never provide.
+
+- The mirror (`native-tool-mirror.ts`) and the styled `<!--kiro-tool-->` transformer are
+  kept as a **dormant fallback**: with no native tools every `tool_call` update carries
+  `_meta.kiro.mcpServerName`, so the mirror no-ops and pi's standard tool rendering is
+  the primary display path. It still catches any update that arrives without the
+  discriminator (e.g. if kiro-cli re-introduces native tools). `PI_KIRO_ACP_MIRROR=0`
+  still disables it.
+- Cost, as in the pre-B1 transport: every fs/bash call round-trips through the bridge
+  and pi's turn loop (one debounce delay per turn, `TOOL_CALL_DEBOUNCE_MS`), and pi
+  gates fs/bash again — the `--trust-all-tools` security caveat above no longer applies
+  to Kiro; execution is back under pi's normal permission model.

@@ -35,10 +35,12 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     ],
     ["active_tool", "builtin_tool", "sdk_tool"],
   );
-  assert(catalog.tools.length === 1, "only active extension tools are exposed");
+  // Forwarded transport: builtin pi tools (read/bash/…) are forwarded too so
+  // pi executes every call; only host-SDK customs stay out.
+  const names = catalog.tools.map((tool) => tool.piName).sort();
   assert(
-    catalog.tools[0]?.piName === "active_tool",
-    "active tool keeps original Pi name",
+    JSON.stringify(names) === JSON.stringify(["active_tool", "builtin_tool"]),
+    `active builtin and extension tools are exposed, sdk excluded (got ${names.join(", ")})`,
   );
   assert(
     catalog.tools[0]?.parameters === schema,

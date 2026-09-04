@@ -44,6 +44,12 @@ type MirrorUi = { setStatus(key: string, text?: string): void };
  * can still tell the agent is busy.
  * Never emits real toolcall_* (that would make pi execute it).
  * Disable with PI_KIRO_ACP_MIRROR=0.
+ *
+ * Since the forwarded-transport revert (ADR 0001 amendment 2026-09-04) Kiro has
+ * no native tools: every call crosses pi_host, is executed by pi, and renders
+ * through pi's standard tool display. The mirror is kept as a dormant fallback
+ * for any tool_call update that still arrives without _meta.kiro.mcpServerName
+ * (e.g. if kiro-cli re-introduces native tools); on the normal path it no-ops.
  */
 const MIRROR_NATIVE_TOOLS = process.env.PI_KIRO_ACP_MIRROR !== "0";
 

@@ -41,19 +41,8 @@ interface StartPromptOptions {
 
 type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
-/** Builds the current extension-only tool catalog exposed to Kiro via pi_host. */
+/** Builds the current tool catalog exposed to Kiro via pi_host. */
 export type CatalogProvider = () => ForwardedToolCatalog;
-
-/** Native Kiro tools Kiro executes directly (the fast path). Pi extension tools
- * are forwarded through the pi_host MCP bridge instead. Kiro's native
- * web_search / web_fetch are intentionally excluded so pi's web tools win. */
-const NATIVE_KIRO_TOOLS = [
-  "fs_read",
-  "fs_write",
-  "execute_bash",
-  "glob",
-  "grep",
-];
 
 /** kiro-cli `-v` repeat count from kiro-acp.json logger.verbose (0 = off, max 3).
  * Its verbose output goes to stdout, the same pipe as JSON-RPC, so those lines are
@@ -1224,10 +1213,13 @@ export class AcpSession {
   }
 
   private writeAgentCfg(): void {
+    // Forwarded transport (ADR 0001 amendment 2026-09-04): Kiro has no native
+    // tools — every call crosses the pi_host bridge and is executed by pi, so
+    // pi emits real tool_execution_* events (visible to FleetView and meters).
     const config = {
       name: this.agentName,
-      tools: [...NATIVE_KIRO_TOOLS, "@pi_host"],
-      allowedTools: [...NATIVE_KIRO_TOOLS, "@pi_host"],
+      tools: ["@pi_host"],
+      allowedTools: ["@pi_host"],
       includeMcpJson: false,
       mcpServers: {},
       prompt:
