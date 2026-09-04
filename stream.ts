@@ -16,7 +16,10 @@ import {
   lastUserMessage,
 } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
-import { createNativeToolMirror } from "./native-tool-mirror.ts";
+import {
+  createNativeToolMirror,
+} from "./native-tool-mirror.ts";
+import { nativeToolTextFrame } from "./native-tool-frame.ts";
 import {
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
@@ -292,7 +295,23 @@ export function streamKiroAcp(
         endText: endTextBlock,
         endThinking: endThinkingBlock,
         setStatus: (text) => mirrorUi?.setStatus("kiro-tool", text),
+        // Child/headless sessions have no TUI transformer to paint the
+        // HTML-comment card, so it would render as nothing — emit the visible
+        // one-liner there instead.
+        ...(typeof getUi === "function" && getUi()
+          ? {}
+          : {
+              frame: (title: string, _body: string, status: string) =>
+                nativeToolTextFrame(title, status),
+            }),
       });
+
+      // Streaming usage: Kiro reports metadata periodically, so refresh the
+      // estimate on each update instead of only at stream end — partial
+      // frames carry it and live counters (e.g. the subagent fleet) tick.
+      session.onMetadata = (m) => {
+        output.usage = estimateUsage(output, model.contextWindow, m);
+      };
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;

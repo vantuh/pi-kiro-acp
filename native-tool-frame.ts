@@ -40,6 +40,21 @@ export function stripNativeToolFrames(text: string): string {
     .trim();
 }
 
+/**
+ * Visible one-liner for sessions without a markdown transformer that paints
+ * kiro-tool comment cards (subagent children, headless runs). The HTML-comment
+ * frame is invisible there, so the plain line is the only trace of activity.
+ */
+export function nativeToolTextFrame(title: string, status: string): string {
+  const suffix = status && status !== "completed" ? ` [${status}]` : " ✓";
+  return `🔧 ${title.replace(/\r?\n/g, " ")}${suffix}\n`;
+}
+
+/** A whole text block carrying only a plain text frame. */
+export function nativeToolTextFrameRegex(): RegExp {
+  return /^🔧 .+ (?:✓|\[failed\]|\[aborted\])\n?$/;
+}
+
 /** Same strip the context hook applies to assistant content arrays. */
 export function stripAssistantContentFrames(content: unknown): {
   content: unknown[];
@@ -52,12 +67,14 @@ export function stripAssistantContentFrames(content: unknown): {
     if (
       block?.type !== "text" ||
       typeof block.text !== "string" ||
-      !block.text.includes(KIRO_TOOL_FRAME_PREFIX)
+      (!block.text.includes(KIRO_TOOL_FRAME_PREFIX) &&
+        !nativeToolTextFrameRegex().test(block.text))
     ) {
       next.push(block);
       continue;
     }
     changed = true;
+    if (!block.text.includes(KIRO_TOOL_FRAME_PREFIX)) continue;
     const text = stripNativeToolFrames(block.text);
     if (text) next.push({ ...block, text });
   }

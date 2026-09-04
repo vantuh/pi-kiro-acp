@@ -187,3 +187,26 @@ const finish = (id: string, status: string) => ({
 console.log("✓ native-tool-mirror tests passed");
 
 
+
+// frame hook: child/headless sessions swap the HTML-comment card for a plain
+// visible one-liner.
+{
+  const calls: string[] = [];
+  const mirror = createNativeToolMirror({
+    pushText: (delta) => calls.push(`push:${delta.replace(/\n/g, "\\n")}`),
+    endText: () => calls.push("endText"),
+    endThinking: () => calls.push("endThinking"),
+    setStatus: () => {},
+    frame: (title, _body, status) =>
+      `🔧 ${title}${status === "completed" ? " ✓" : ` [${status}]`}`,
+  });
+  mirror.update(start("t9", "Reading auth.ts"));
+  mirror.update(chunk("t9", "export const x = 1"));
+  mirror.update(finish("t9", "completed"));
+  const pushed = calls.filter((c) => c.startsWith("push:"));
+  assert(
+    pushed.length === 1 && pushed[0] === "push:🔧 Reading auth.ts ✓",
+    `frame hook renders a visible one-liner, got: ${pushed[0]}`,
+  );
+  assert(!pushed[0].includes("export const x"), "body is omitted in plain mode");
+}

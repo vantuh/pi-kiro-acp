@@ -116,6 +116,8 @@ export class AcpSession {
   readonly agentName = `pi-kiro-${randomBytes(4).toString("hex")}`;
   started = false;
   updateHandler: ((u: SessionUpdate) => void) | null = null;
+  /** Fires on _kiro.dev/metadata updates so streamers can refresh usage. */
+  onMetadata: ((m: SessionMetadata) => void) | null = null;
   metadata: SessionMetadata | null = null;
   agentCapabilities: any = null;
   persistenceKey: string | null = null;
@@ -381,6 +383,14 @@ export class AcpSession {
       turnDurationMs,
       credits: meteringUsage?.find((m) => m.unit === "credit")?.value,
     });
+    try {
+      this.onMetadata?.(this.metadata);
+    } catch (error) {
+      log("onMetadata handler failed", {
+        session: this.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async ensureStarted(

@@ -6,6 +6,8 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   KIRO_TOOL_FRAME_PREFIX,
   nativeToolFrame,
+  nativeToolTextFrame,
+  nativeToolTextFrameRegex,
   stripAssistantContentFrames,
   stripNativeToolFrames,
 } from "../native-tool-frame.ts";
@@ -417,3 +419,58 @@ const noFrame = stripAssistantContentFrames([
 assert(!noFrame.changed, "context-strip helper is a no-op without frames");
 
 console.log("✓ native-tool-frame tests passed");
+
+// --- Plain text frames (subagent children / headless sessions) ---
+{
+  const ok = nativeToolTextFrame("Reading app.ts", "completed");
+  assert(ok === "🔧 Reading app.ts ✓\n", "completed text frame is a visible one-liner");
+  assert(
+    nativeToolTextFrameRegex().test(ok),
+    "text frame matches its strip regex",
+  );
+
+  const failedText = nativeToolTextFrame("cat /nope", "failed");
+  assert(
+    failedText === "🔧 cat /nope [failed]\n",
+    "failed text frame keeps a status suffix",
+  );
+  assert(nativeToolTextFrameRegex().test(failedText), "failed frame matches");
+
+  const abortedText = nativeToolTextFrame("sleep 30", "aborted");
+  assert(nativeToolTextFrameRegex().test(abortedText), "aborted frame matches");
+
+  const multiline = nativeToolTextFrame("weird\ntitle", "completed");
+  assert(
+    multiline === "🔧 weird title ✓\n",
+    "newlines in the title collapse to spaces",
+  );
+
+  // Strip: a text-block frame is removed entirely from assistant content.
+  const strippedText = stripAssistantContentFrames([
+    { type: "text", text: "real answer" },
+    { type: "text", text: ok },
+    { type: "text", text: failedText },
+  ]);
+  assert(strippedText.changed, "text frames are detected for stripping");
+  assert(
+    JSON.stringify(strippedText.content) ===
+      JSON.stringify([{ type: "text", text: "real answer" }]),
+    "text frames are dropped while real text survives",
+  );
+
+  // Real assistant text starting with 🔧 but not matching the frame shape stays.
+  const notAFrame = stripAssistantContentFrames([
+    { type: "text", text: "🔧 is my favorite emoji" },
+  ]);
+  assert(
+    !notAFrame.changed,
+    "prose mentioning 🔧 is not stripped as a frame",
+  );
+
+  // stripNativeToolFrames (text-level) leaves one-liners alone: they are
+  // block-scoped, stripped via stripAssistantContentFrames.
+  assert(
+    stripNativeToolFrames(`before\n${ok}after`) === `before\n${ok}after`,
+    "text-level strip does not touch one-liner frames",
+  );
+}

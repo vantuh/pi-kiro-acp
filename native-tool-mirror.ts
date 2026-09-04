@@ -1,4 +1,7 @@
-import { nativeToolFrame } from "./native-tool-frame.ts";
+import {
+  nativeToolFrame,
+  nativeToolTextFrame,
+} from "./native-tool-frame.ts";
 
 /** Stream-writing hooks the mirror needs, injected so the logic stays testable. */
 export type NativeToolMirrorHooks = {
@@ -6,6 +9,13 @@ export type NativeToolMirrorHooks = {
   endText(): void;
   endThinking(): void;
   setStatus(text?: string): void;
+  /**
+   * Frame renderer override. Default paints the HTML-comment card that the
+   * main TUI transformer restyles; sessions without that transformer
+   * (subagent children, headless) supply nativeToolTextFrame instead, since
+   * markdown hides comments and the card would be invisible there.
+   */
+  frame?(title: string, body: string, status: string): string;
 };
 
 /**
@@ -25,7 +35,9 @@ export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
   const emit = (title: string, body: string, status: string) => {
     hooks.endThinking();
     hooks.endText();
-    hooks.pushText(nativeToolFrame(title, body, status));
+    hooks.pushText(
+      hooks.frame ? hooks.frame(title, body, status) : nativeToolFrame(title, body, status),
+    );
     hooks.endText();
   };
 
