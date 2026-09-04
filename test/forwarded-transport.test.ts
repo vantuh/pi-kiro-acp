@@ -6,6 +6,7 @@
 
 import { readFileSync } from "node:fs";
 import { AcpSession } from "../session.ts";
+import { stableJson } from "../helpers.ts";
 import type { ToolBridgeCall } from "../tool-bridge.ts";
 
 let failed = false;
@@ -86,9 +87,17 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
 }
 
 {
-  // Aborted before dispatch: answered as an MCP error, never queued.
+  // Aborted before dispatch: answered as an MCP error, never queued. A fresh
+  // dispatch spy is attached (replacing the previous block's handler) so a
+  // regression of the abort-before-dispatch guard fails these assertions
+  // instead of being masked by a stale handler or a map clear().
   const controller = new AbortController();
   controller.abort();
+  const delivered: any[] = [];
+  session.onToolCallFromBridge = (pending) => {
+    delivered.push(pending);
+    pending.resolve({ result: "", isError: false });
+  };
   const result = await (session as any).handleBridgeToolCall({
     requestId: 8,
     kiroName: "read",
@@ -96,11 +105,54 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     arguments: { path: "/tmp/x" },
     signal: controller.signal,
   } satisfies ToolBridgeCall);
-  session.pendingToolCalls.clear(); // isolate from the block above
+  assert(
+    delivered.length === 0,
+    "aborted call is never handed to the pi stream",
+  );
   assert(result.isError === true, "aborted call resolves as an MCP error");
   assert(
     session.pendingToolCalls.size === 0,
     "aborted call never enters pendingToolCalls",
+  );
+}
+
+{
+  // Abandoned-call dedup is single-use: after one repeat has been answered
+  // with the already-running note, the record is dropped so the next
+  // identical call is dispatched normally instead of suppressed for the
+  // whole TTL (matters for builtin calls like read/ls/bash that repeat).
+  // Mirrors the module-private callFingerprint(toolName, args).
+  const fingerprint = `ls\u0000${stableJson({ path: "." })}`;
+  // rememberAbandonedToolCall only records on a started session.
+  (session as any).started = true;
+  (session as any).rememberAbandonedToolCall(fingerprint, "old-id", "ls");
+  const makeCall = () =>
+    (session as any).handleBridgeToolCall({
+      requestId: 0,
+      kiroName: "ls",
+      piName: "ls",
+      arguments: { path: "." },
+      signal: new AbortController().signal,
+    } satisfies ToolBridgeCall);
+  const firstRepeat = await makeCall();
+  assert(
+    firstRepeat.isError === true &&
+      firstRepeat.content[0]?.text.includes("already running"),
+    "repeat of an abandoned call is answered with the already-running note",
+  );
+  assert(
+    (session as any).abandonedToolCalls.size === 0,
+    "answering the repeat consumes the dedup record",
+  );
+  const dispatched: any[] = [];
+  session.onToolCallFromBridge = (pending) => {
+    dispatched.push(pending);
+    pending.resolve({ result: "ok", isError: false });
+  };
+  await makeCall();
+  assert(
+    dispatched.length === 1,
+    "next identical call after the note is dispatched normally",
   );
 }
 

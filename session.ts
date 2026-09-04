@@ -118,6 +118,8 @@ export class AcpSession {
     { callId: string; toolName: string; abandonedAt: number }
   >();
   onToolCallFromBridge: ((call: PendingToolCall) => void) | null = null;
+  /** Fingerprint of the last forwarded catalog logged, to log once per change. */
+  private lastCatalogFingerprint: string | null = null;
   activePromptDone: Promise<{ stopReason: string }> | null = null;
   /** Bumped per session/prompt so a late-settling prompt only clears its own. */
   private promptSeq = 0;
@@ -1066,7 +1068,25 @@ export class AcpSession {
   private currentCatalog(): ForwardedToolCatalog {
     if (!this.catalogProvider)
       throw new Error("kiro-acp: catalog provider not set");
-    return this.catalogProvider();
+    const catalog = this.catalogProvider();
+    if (catalog.fingerprint !== this.lastCatalogFingerprint) {
+      this.lastCatalogFingerprint = catalog.fingerprint;
+      // With tools: ["@pi_host"] an empty catalog leaves Kiro with zero tools
+      // (e.g. a subagent child whose plan activates nothing forwardable) —
+      // previously the native tools masked this. Surface it loudly.
+      log(
+        catalog.tools.length === 0
+          ? "forwarded tool catalog is EMPTY — kiro has no tools"
+          : "forwarded tool catalog updated",
+        {
+          session: this.id,
+          tools: catalog.tools.length,
+          names: catalog.tools.map((tool) => tool.piName),
+          diagnostics: catalog.diagnostics,
+        },
+      );
+    }
+    return catalog;
   }
 
   private mcpServersConfig(): Array<{
@@ -1110,6 +1130,11 @@ export class AcpSession {
       // immediately instead of dispatching it.
       const abandoned = this.abandonedToolCalls.get(fingerprint);
       if (abandoned) {
+        // Single-use: the note already tells Kiro to stop retrying, so one
+        // answer is enough. Keeping the record would suppress a legitimate
+        // repeat of a common builtin call (read/ls/bash with the same args)
+        // for the rest of the TTL.
+        this.abandonedToolCalls.delete(fingerprint);
         log("bridge tool call DEDUPED (already running)", {
           session: this.id,
           toolName: call.piName,

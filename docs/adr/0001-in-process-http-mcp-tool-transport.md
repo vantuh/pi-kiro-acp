@@ -77,8 +77,9 @@ and abort. Disconnect or `close()` only settles that call. Pi already tracks mul
 
 The execution split (B1) is reverted: **pi executes every tool.** Kiro's agent config
 now lists only `@pi_host` (`writeAgentCfg`), and the catalog filter is widened to
-include builtin tools (`read`, `bash`, `edit`, `write`, `grep`, `find`, `ls`) alongside
-extension tools; only host-SDK customs stay out. Every Kiro `tools/call` crosses the
+include builtin tools alongside extension tools — pi's **active** builtin set, which
+defaults to `read`, `bash`, `edit`, `write` (`grep`/`find`/`ls` are forwarded only when
+a session or subagent tool plan activates them); only host-SDK customs stay out. Every Kiro `tools/call` crosses the
 bridge into pi's pending-call flow, so pi emits real `tool_execution_start/end` events
 — child sessions (pi-subagents) get live FleetView activity and tool/token counters,
 which the display-only mirror could never provide.
@@ -91,5 +92,7 @@ which the display-only mirror could never provide.
   still disables it.
 - Cost, as in the pre-B1 transport: every fs/bash call round-trips through the bridge
   and pi's turn loop (one debounce delay per turn, `TOOL_CALL_DEBOUNCE_MS`), and pi
-  gates fs/bash again — the `--trust-all-tools` security caveat above no longer applies
-  to Kiro; execution is back under pi's normal permission model.
+  gates fs/bash again — the `--trust-all-tools` caveat above narrows rather than
+  disappears: the flag is still passed (`session.ts` spawn args) and is what
+  auto-approves the `pi_host` MCP tools inside Kiro, but nothing executes outside
+  pi's normal permission model anymore.

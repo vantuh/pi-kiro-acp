@@ -68,10 +68,13 @@ Pi extension tools reach Kiro through an in-process Streamable HTTP MCP server
   to the waiting MCP request.
 - `bridge tool call ABANDONED by kiro` → Kiro dropped the call at its 120s deadline; the
   result is recovered on the next turn instead (ADR 0002).
+- `forwarded tool catalog updated` / `forwarded tool catalog is EMPTY` → the set of
+  tools exposed to Kiro via pi_host changed (logged once per fingerprint). Empty means
+  Kiro has zero tools — usually a session or subagent plan that deactivated everything.
 
-Kiro's *native* tools (`fs_read`, `fs_write`, `execute_bash`, `glob`, `grep`) never
-touch the bridge — they run inside kiro-cli and only surface as mirrored thinking
-blocks in the transcript.
+All Kiro tools — builtins and extension tools alike — cross the pi_host bridge and are
+executed by pi (ADR 0001 amendment 2026-09-04); there are no native Kiro tools on this
+path anymore.
 
 ---
 
@@ -231,18 +234,22 @@ See also `LATENCY-FIX-PLAN.md` (same directory).
 
 ### Native Kiro tool activity not visible in pi
 
-Kiro runs `fs_read`/`fs_write`/`execute_bash`/`glob`/`grep` itself, so they only appear as
-mirrored text blocks (`native-tool-mirror.ts`). The mirror emits each finished tool as a
-`<!--kiro-tool-->` marker block, which `tool-frame-transformer.ts` restyles inline into a
-width-aware Unicode box with the `customMessageBg` background (purple in the dark theme) — rendered mid-response and
-still visible when thinking is hidden. The `context` hook strips these display-only blocks before
-messages reach the model. If nothing shows up:
+Since the forwarded transport (ADR 0001 amendment 2026-09-04) Kiro has no native tools:
+every tool call — `read`, `bash`, `edit`, `write`, extension tools — crosses the pi_host
+bridge and renders as a real pi tool call (`toolCall`/`toolResult` pair), so there is
+nothing separate to "see". The native-tool mirror (`native-tool-mirror.ts` +
+`tool-frame-transformer.ts`) is a **dormant fallback**: it emits a `<!--kiro-tool-->
+marker block only for a `tool_call_update` that arrives *without*
+`_meta.kiro.mcpServerName` (i.e. if kiro-cli ever re-introduces native tools). On the
+normal path such an emission would be a *duplicate* render next to pi's real tool card,
+so it appearing is itself a signal worth investigating. The `context` hook strips these
+display-only blocks before messages reach the model. If the mirror fires unexpectedly:
 
-1. Confirm `PI_KIRO_ACP_MIRROR` is not `0`
-2. The mirror only emits on `tool_call_update` with `status: completed|failed` (or on turn
-   end via `flush()`); a tool still running shows only the transient `🔧 <title>` indicator
-3. Tools carrying `_meta.kiro.mcpServerName` are skipped on purpose — those are `pi_host`
-   tools and already render as real pi tool calls
+1. Check the update's `_meta` — a missing `kiro.mcpServerName` is what activates the
+   mirror
+2. `PI_KIRO_ACP_MIRROR=0` disables it entirely
+3. The mirror only emits on `status: completed|failed` (or on turn end via `flush()`);
+   a tool still running shows only the transient `🔧 <title>` indicator
 
 ### Wrong session selected / unexpected resumption
 
