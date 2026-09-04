@@ -302,7 +302,7 @@ export function streamKiroAcp(
         // Child/headless sessions have no TUI transformer to paint the
         // HTML-comment card, so it would render as nothing — emit the visible
         // one-liner there instead.
-        ...(typeof getUi === "function" && getUi()
+        ...(typeof getUi === "function" && mirrorUi
           ? {}
           : {
               frame: (title: string, _body: string, status: string) =>
