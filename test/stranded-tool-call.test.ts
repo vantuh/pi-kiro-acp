@@ -48,7 +48,7 @@ function fakeSession(): { session: AcpSession; written: any[] } {
 function bridgeCall(
   session: AcpSession,
   args: Record<string, unknown>,
-  tool = "herdr_agent",
+  tool = "probe_tool",
 ) {
   const abort = new AbortController();
   const result = (session as any).handleBridgeToolCall({

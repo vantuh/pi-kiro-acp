@@ -183,7 +183,7 @@ const assistantText = (text: string) => ({
           {
             type: "toolCall",
             id: "c1",
-            name: "herdr_agent",
+            name: "probe_tool",
             arguments: { task: "compare" },
           },
         ],
@@ -191,7 +191,7 @@ const assistantText = (text: string) => ({
       {
         role: "toolResult",
         toolCallId: "c1",
-        toolName: "herdr_agent",
+        toolName: "probe_tool",
         isError: false,
         content: [{ type: "text", text: "the report" }],
       },
@@ -208,7 +208,7 @@ const assistantText = (text: string) => ({
     "work performed for the current message is replayed",
   );
   assert(
-    midTurn.includes('<tool_call id="c1" name="herdr_agent">'),
+    midTurn.includes('<tool_call id="c1" name="probe_tool">'),
     "the already-issued tool call is replayed",
   );
   assert(
@@ -239,7 +239,7 @@ const assistantText = (text: string) => ({
   const recovery = buildToolResultRecoveryPrompt([
     {
       toolCallId: "c1",
-      toolName: "herdr_agent",
+      toolName: "probe_tool",
       text: "report <body>",
       isError: false,
     },
@@ -250,7 +250,7 @@ const assistantText = (text: string) => ({
     "the recovery prompt forbids re-running the tool",
   );
   assert(
-    recovery.includes('<tool_result name="herdr_agent" is_error="false">'),
+    recovery.includes('<tool_result name="probe_tool" is_error="false">'),
     "each recovered result is labelled",
   );
   assert(

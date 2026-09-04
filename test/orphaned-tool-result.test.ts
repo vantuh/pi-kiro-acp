@@ -38,13 +38,13 @@ const toolResultContext = (): Context =>
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "c1", name: "herdr_agent", arguments: {} },
+          { type: "toolCall", id: "c1", name: "probe_tool", arguments: {} },
         ],
       },
       {
         role: "toolResult",
         toolCallId: "c1",
-        toolName: "herdr_agent",
+        toolName: "probe_tool",
         isError: false,
         content: [{ type: "text", text: "the report" }],
       },
@@ -103,7 +103,7 @@ async function main(): Promise<void> {
     markLive(routed.session, "acp-2");
     routed.session.pendingToolCalls.set("c1", {
       callId: "c1",
-      toolName: "herdr_agent",
+      toolName: "probe_tool",
       args: {},
       receivedAt: Date.now(),
       resolve: () => {},
@@ -162,8 +162,8 @@ async function main(): Promise<void> {
       const abort = new AbortController();
       const result = (session as any).handleBridgeToolCall({
         requestId: 1,
-        kiroName: "herdr_agent",
-        piName: "herdr_agent",
+        kiroName: "probe_tool",
+        piName: "probe_tool",
         arguments: args,
         signal: abort.signal,
       }) as Promise<{ content: { text?: string }[]; isError?: boolean }>;
@@ -209,7 +209,7 @@ async function main(): Promise<void> {
     session.clearAbandonedToolCalls([
       {
         toolCallId: "x",
-        toolName: "herdr_agent",
+        toolName: "probe_tool",
         text: "done",
         isError: false,
       },

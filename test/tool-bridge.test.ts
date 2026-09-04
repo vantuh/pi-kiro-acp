@@ -397,8 +397,8 @@ async function main(): Promise<void> {
   await staleTestDone;
   console.log("✓ stale disconnect cannot affect the next pending call");
 
-  // Kiro issues overlapping pi_host POSTs in one turn (two herdr_agent, or
-  // herdr_agent + web_search). A single-slot pending rejected the second with
+  // Kiro issues overlapping pi_host POSTs in one turn (two probe_tool, or
+  // probe_tool + web_search). A single-slot pending rejected the second with
   // -32000 and the model reported a transport error.
   {
     const resolvers = new Map<string, () => void>();

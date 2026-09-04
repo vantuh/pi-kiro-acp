@@ -44,13 +44,13 @@ const toolResultContext = () =>
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "c1", name: "herdr_agent", arguments: {} },
+          { type: "toolCall", id: "c1", name: "probe_tool", arguments: {} },
         ],
       },
       {
         role: "toolResult",
         toolCallId: "c1",
-        toolName: "herdr_agent",
+        toolName: "probe_tool",
         isError: false,
         content: [{ type: "text", text: "the report" }],
       },
