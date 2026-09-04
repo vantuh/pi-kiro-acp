@@ -17,7 +17,9 @@ const {
   imagesFromToolResults,
   lastUserMessage,
 } = await import("../helpers.ts");
-const { nativeToolFrame } = await import("../native-tool-frame.ts");
+const { nativeToolFrame, nativeToolTextFrame } = await import(
+  "../native-tool-frame.ts"
+);
 const {
   clearPersistedKiroSession,
   historyFingerprintAfterAssistantTurn,
@@ -426,6 +428,22 @@ const assistantText = (text: string) => ({
   assert(
     fp === historyFingerprintBeforeCurrentUser(withDisplayCard),
     "display-only native tool cards are ignored",
+  );
+
+  const withDisplayTextFrame = ctx([
+    user("first"),
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "answer" },
+        { type: "text", text: nativeToolTextFrame("read foo", "completed") },
+      ],
+    },
+    user("current"),
+  ]);
+  assert(
+    fp === historyFingerprintBeforeCurrentUser(withDisplayTextFrame),
+    "display-only native tool text frames are ignored",
   );
 
   const argsOrderA = ctx([
