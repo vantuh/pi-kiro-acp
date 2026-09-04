@@ -90,7 +90,6 @@ function pendingCall(
   });
   const call: PendingToolCall = {
     callId,
-    rawCallId: String(seq),
     toolName,
     args: {},
     receivedAt: Date.now(),

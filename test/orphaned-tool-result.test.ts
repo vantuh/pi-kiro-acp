@@ -103,7 +103,6 @@ async function main(): Promise<void> {
     markLive(routed.session, "acp-2");
     routed.session.pendingToolCalls.set("c1", {
       callId: "c1",
-      rawCallId: "1",
       toolName: "herdr_agent",
       args: {},
       receivedAt: Date.now(),

@@ -60,7 +60,7 @@ export default function (pi: ExtensionAPI) {
     const ui = getUi();
     if (!ui) return;
     try {
-      const usage = await getKiroUsage(0);
+      const usage = await getKiroUsage();
       if (!usageFooterActive) return;
       ui.setStatus("kiro", kiroUsageStatusText(usage, getTheme()));
     } catch (error) {
@@ -98,7 +98,7 @@ export default function (pi: ExtensionAPI) {
     description: "Refresh Kiro plan usage shown in the footer",
     handler: async (_args, ctx) => {
       try {
-        const usage = await getKiroUsage(0);
+        const usage = await getKiroUsage();
         if (usageFooterActive) {
           ctx.ui.setStatus("kiro", kiroUsageStatusText(usage, getTheme()));
         }

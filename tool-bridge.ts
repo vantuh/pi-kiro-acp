@@ -70,7 +70,6 @@ export interface ToolBridge {
 }
 
 interface PendingCall {
-  response: ServerResponse;
   abort: AbortController;
   stopKeepalive: () => void;
 }
@@ -401,7 +400,7 @@ export async function startToolBridge(
         const clearPending = () => {
           pending.delete(res);
         };
-        pending.set(res, { response: res, abort, stopKeepalive });
+        pending.set(res, { abort, stopKeepalive });
         // If the client disconnects mid-call, abort pi's execution. The response
         // socket is destroyed either way, so nothing is written back to the client.
         res.once("close", () => {
@@ -444,12 +443,12 @@ export async function startToolBridge(
   const closeBridge = async (): Promise<void> => {
     if (closed) return;
     closed = true;
-    const held = [...pending.values()];
+    const held = [...pending.entries()];
     pending.clear();
-    for (const call of held) {
+    for (const [res, call] of held) {
       call.abort.abort();
       call.stopKeepalive();
-      call.response.destroy();
+      res.destroy();
     }
     await new Promise<void>((resolve) => server.close(() => resolve()));
   };

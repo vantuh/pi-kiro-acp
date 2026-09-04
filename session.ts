@@ -1174,7 +1174,6 @@ export class AcpSession {
       call.signal.addEventListener("abort", onAbort, { once: true });
       const pending: PendingToolCall = {
         callId: publicCallId,
-        rawCallId: String(call.requestId),
         toolName: call.piName,
         args: call.arguments,
         receivedAt,

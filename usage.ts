@@ -91,19 +91,13 @@ export async function fetchKiroUsage(): Promise<KiroUsage> {
   return usage;
 }
 
-let cache: { usage: KiroUsage; fetchedAt: number } | null = null;
 let inflight: Promise<KiroUsage> | null = null;
 
-/**
- * Returns cached usage when younger than maxAgeMs, otherwise fetches fresh
- * data. Concurrent callers share one in-flight fetch.
- */
-export async function getKiroUsage(maxAgeMs: number): Promise<KiroUsage> {
-  if (cache && Date.now() - cache.fetchedAt <= maxAgeMs) return cache.usage;
+/** Fetches fresh usage data. Concurrent callers share one in-flight fetch. */
+export async function getKiroUsage(): Promise<KiroUsage> {
   if (!inflight) {
     inflight = fetchKiroUsage()
       .then((usage) => {
-        cache = { usage, fetchedAt: Date.now() };
         log("usage fetched", { percent: usage.percent, plan: usage.plan });
         return usage;
       })

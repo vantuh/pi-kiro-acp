@@ -12,7 +12,6 @@ export type ToolResultContentBlock =
 
 export interface PendingToolCall {
   callId: string;
-  rawCallId: string;
   toolName: string;
   args: Record<string, unknown>;
   resolve: (result: {
