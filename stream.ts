@@ -17,10 +17,6 @@ import {
 } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import {
-  createNativeToolMirror,
-} from "./native-tool-mirror.ts";
-import { nativeToolTextFrame } from "./native-tool-frame.ts";
-import {
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
   loadPersistedKiroSession,
@@ -29,29 +25,6 @@ import {
 import { toKiroEffort, type AcpSession } from "./session.ts";
 import { buildForwardedToolCatalog } from "./tool-catalog.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
-
-/** Minimal structural view of the UI surface the native-tool mirror needs. */
-type MirrorUi = { setStatus(key: string, text?: string): void };
-
-/**
- * Phase 4: mirror Kiro's native (non-pi_host) tool activity into pi as
- * display-only text blocks so they interleave with assistant text and remain
- * visible when thinking is hidden. Each finished tool is emitted as one
- * `<!--kiro-tool-->` marker block that the markdown transformer restyles inline.
- * Live progress while a tool is running goes through `ui.setStatus` (a footer
- * status slot) rather than `setWorkingMessage`, so pi's own "Working..." text
- * is left untouched — external tools (e.g. Herdr) that pattern-match on it
- * can still tell the agent is busy.
- * Never emits real toolcall_* (that would make pi execute it).
- * Disable with PI_KIRO_ACP_MIRROR=0.
- *
- * Since the forwarded-transport revert (ADR 0001 amendment 2026-09-04) Kiro has
- * no native tools: every call crosses pi_host, is executed by pi, and renders
- * through pi's standard tool display. The mirror is kept as a dormant fallback
- * for any tool_call update that still arrives without _meta.kiro.mcpServerName
- * (e.g. if kiro-cli re-introduces native tools); on the normal path it no-ops.
- */
-const MIRROR_NATIVE_TOOLS = process.env.PI_KIRO_ACP_MIRROR !== "0";
 
 /**
  * How long to keep collecting tool calls before handing the batch to pi.
@@ -85,7 +58,6 @@ export function streamKiroAcp(
   model: Model<any>,
   context: Context,
   options?: SimpleStreamOptions,
-  getUi?: () => MirrorUi | undefined,
 ): AssistantMessageEventStream {
   const turnStartedAt = Date.now();
   log("streamKiroAcp entry", {
@@ -224,10 +196,6 @@ export function streamKiroAcp(
       let textChars = 0;
       let thinkingChunks = 0;
       let textChunks = 0;
-      let emittedThinkingDeltas = 0;
-      let emittedTextDeltas = 0;
-
-      const mirrorUi = MIRROR_NATIVE_TOOLS ? getUi?.() : undefined;
 
       /** Streams one kind of assistant content block (text or thinking): opens
        * it on the first delta, appends, and closes it on demand. A changed
@@ -300,22 +268,6 @@ export function streamKiroAcp(
       endTextBlock = () => textWriter.end();
       endThinkingBlock = () => thinkingWriter.end();
 
-      const nativeToolMirror = createNativeToolMirror({
-        pushText: (delta) => textWriter.delta(delta),
-        endText: endTextBlock,
-        endThinking: endThinkingBlock,
-        setStatus: (text) => mirrorUi?.setStatus("kiro-tool", text),
-        // Child/headless sessions have no TUI transformer to paint the
-        // HTML-comment card, so it would render as nothing — emit the visible
-        // one-liner there instead.
-        ...(typeof getUi === "function" && mirrorUi
-          ? {}
-          : {
-              frame: (title: string, _body: string, status: string) =>
-                nativeToolTextFrame(title, status),
-            }),
-      });
-
       // Streaming usage: Kiro reports metadata periodically, so refresh the
       // estimate on each update instead of only at stream end — partial
       // frames carry it and live counters (e.g. the subagent fleet) tick.
@@ -326,14 +278,6 @@ export function streamKiroAcp(
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;
-        if (
-          MIRROR_NATIVE_TOOLS &&
-          (update.sessionUpdate === "tool_call" ||
-            update.sessionUpdate === "tool_call_update")
-        ) {
-          nativeToolMirror.update(update);
-          return;
-        }
         if (update.sessionUpdate === "agent_thought_chunk") {
           const text = (update.content as any)?.text;
           const messageId =
@@ -350,7 +294,6 @@ export function streamKiroAcp(
             thinkingChars += text.length;
             thinkingChunks += 1;
             thinkingWriter.delta(text, messageId);
-            emittedThinkingDeltas += 1;
           }
         } else if (update.sessionUpdate === "agent_message_chunk") {
           const text = (update.content as any)?.text;
@@ -372,7 +315,6 @@ export function streamKiroAcp(
             textChars += text.length;
             textChunks += 1;
             textWriter.delta(text, messageId);
-            emittedTextDeltas += 1;
           }
         }
       };
@@ -626,9 +568,6 @@ export function streamKiroAcp(
         },
       );
 
-      if (MIRROR_NATIVE_TOOLS) {
-        nativeToolMirror.flush();
-      }
       endThinkingBlock();
       endTextBlock();
 
@@ -651,8 +590,6 @@ export function streamKiroAcp(
           textChars,
           thinkingChunks,
           textChunks,
-          emittedThinkingDeltas,
-          emittedTextDeltas,
           avgThinkingChunkChars: thinkingChunks
             ? Math.round(thinkingChars / thinkingChunks)
             : null,

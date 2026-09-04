@@ -17,9 +17,6 @@ const {
   imagesFromToolResults,
   lastUserMessage,
 } = await import("../helpers.ts");
-const { nativeToolFrame, nativeToolTextFrame } = await import(
-  "../native-tool-frame.ts"
-);
 const {
   clearPersistedKiroSession,
   historyFingerprintAfterAssistantTurn,
@@ -420,7 +417,11 @@ const assistantText = (text: string) => ({
       role: "assistant",
       content: [
         { type: "text", text: "answer" },
-        { type: "text", text: nativeToolFrame("ls", "file", "completed") },
+        // Legacy native-tool card, as emitted by the removed mirror.
+        {
+          type: "text",
+          text: "<!--kiro-tool-->\n🔧 ls\nfile\n<!--/kiro-tool-->\n",
+        },
       ],
     },
     user("current"),
@@ -436,7 +437,8 @@ const assistantText = (text: string) => ({
       role: "assistant",
       content: [
         { type: "text", text: "answer" },
-        { type: "text", text: nativeToolTextFrame("read foo", "completed") },
+        // Legacy one-liner frame, as emitted by the removed mirror.
+        { type: "text", text: "🔧 read foo ✓\n" },
       ],
     },
     user("current"),

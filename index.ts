@@ -9,7 +9,6 @@ import { discoverKiroModels } from "./models/discovery.ts";
 import { LOG_FILE, log } from "./logging.ts";
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
 import { stripAssistantContentFrames } from "./native-tool-frame.ts";
-import { createKiroToolFrameTransformer } from "./tool-frame-transformer.ts";
 import { stopAllSessions } from "./session-manager.ts";
 import { streamKiroAcp } from "./stream.ts";
 import { getKiroUsage, type KiroUsage } from "./usage.ts";
@@ -23,22 +22,22 @@ export default function (pi: ExtensionAPI) {
     logFile: LOG_FILE,
   });
 
-  // Capture the mode's UI surface so the streaming provider (which only gets
-  // model/context/options) can drive the transient working indicator when
-  // mirroring Kiro's native tool activity (Phase 4).
+  // Capture the mode's UI surface so the usage footer can drive the transient
+  // status slot (the streaming provider only gets model/context/options).
   let latestUi: ExtensionContext["ui"] | undefined;
   const grabUi = (_event: unknown, ctx: { ui?: ExtensionContext["ui"] }) => {
     if (ctx.ui) latestUi = ctx.ui;
   };
-  // session_start fires before historical thinking is painted; turn_start
-  // alone left getUi() empty, so the transformer passed markers through.
+  // session_start fires before the first turn; subscribing here too keeps the
+  // usage footer working from the very start of a session (the footer needs
+  // `ui` captured as early as possible).
   pi.on("session_start", grabUi);
   pi.on("turn_start", grabUi);
   pi.on("message_start", grabUi);
   const getUi: UiGetter = () => latestUi;
 
-  registerKiroProvider(pi, KIRO_MODELS, getUi);
-  void refreshKiroModels(pi, getUi);
+  registerKiroProvider(pi, KIRO_MODELS);
+  void refreshKiroModels(pi);
 
   // Kiro plan usage in the footer (via kiro-cli /usage). Shown only while a
   // kiro-acp model is active; toggle + poll interval live in
@@ -121,19 +120,9 @@ export default function (pi: ExtensionAPI) {
     clearInterval(usageTimer);
   });
 
-  // Render mirrored native Kiro tool frames inline, styled like native tool rows.
-  pi.registerMarkdownTransformer(
-    createKiroToolFrameTransformer(() => {
-      try {
-        return getUi()?.theme;
-      } catch {
-        return undefined;
-      }
-    }),
-  );
-
-  // Cards are normal text blocks so hide-thinking does not hide them. Remove
-  // those display-only blocks from the copy sent to the model.
+  // Legacy native-tool frames (see native-tool-frame.ts) are normal text
+  // blocks so hide-thinking did not hide them. Remove those display-only
+  // blocks from the copy sent to the model.
   pi.on("context", (event) => {
     let changed = false;
     for (const message of event.messages as any[]) {
@@ -179,7 +168,6 @@ function kiroUsageStatusText(usage: KiroUsage, theme?: any): string {
 function registerKiroProvider(
   pi: ExtensionAPI,
   models: KiroModelConfig[],
-  getUi: UiGetter,
 ): void {
   pi.registerProvider(KIRO_ACP_PROVIDER, {
     name: "Kiro ACP",
@@ -188,17 +176,14 @@ function registerKiroProvider(
     api: "kiro-acp-api" as any,
     models,
     streamSimple: (model, context, options) =>
-      streamKiroAcp(pi, model, context, options, getUi),
+      streamKiroAcp(pi, model, context, options),
   });
 }
 
-async function refreshKiroModels(
-  pi: ExtensionAPI,
-  getUi: UiGetter,
-): Promise<void> {
+async function refreshKiroModels(pi: ExtensionAPI): Promise<void> {
   try {
     const models = await discoverKiroModels();
-    registerKiroProvider(pi, models, getUi);
+    registerKiroProvider(pi, models);
     log("dynamic models registered", {
       models: models.length,
       ids: models.map((model) => model.id),

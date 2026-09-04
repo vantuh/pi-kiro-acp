@@ -14,7 +14,6 @@ function assert(condition: unknown, label: string): void {
 
 const events: string[] = [];
 const providers: Array<{ id: string; config: any }> = [];
-const transformers: unknown[] = [];
 const commands: string[] = [];
 
 const pi = {
@@ -26,9 +25,6 @@ const pi = {
   },
   registerProvider(id: string, config: any) {
     providers.push({ id, config });
-  },
-  registerMarkdownTransformer(transformer: unknown) {
-    transformers.push(transformer);
   },
 } as any;
 
@@ -67,15 +63,6 @@ for (const event of [
 ]) {
   assert(events.includes(event), `the extension subscribes to ${event}`);
 }
-
-assert(
-  transformers.length === 1,
-  "the extension registers a markdown transformer",
-);
-assert(
-  typeof transformers[0] === "function",
-  "the markdown transformer is a function",
-);
 
 assert(
   commands.includes("kiro-usage"),

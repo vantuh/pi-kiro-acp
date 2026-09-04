@@ -13,7 +13,7 @@ import { log } from "./logging.ts";
 import { stableValue } from "./helpers.ts";
 import {
   KIRO_TOOL_FRAME_PREFIX,
-  nativeToolTextFrameRegex,
+  isNativeToolTextFrameLine,
   stripNativeToolFrames,
 } from "./native-tool-frame.ts";
 
@@ -161,7 +161,7 @@ function normalizeContent(content: unknown): unknown {
       if (block?.type === "thinking") return null;
       if (block?.type === "text") {
         const raw = block.text || "";
-        if (nativeToolTextFrameRegex().test(raw)) return null;
+        if (isNativeToolTextFrameLine(raw)) return null;
         const text = raw.includes(KIRO_TOOL_FRAME_PREFIX)
           ? stripNativeToolFrames(raw)
           : raw;
