@@ -60,10 +60,12 @@ Consequence = the previously chosen **B1 + mirror** (see Decision B): fast nativ
 
 Forwarded to Kiro and executed by pi:
 - `web_search`, `source_check`, `fetch_content`, `get_search_content` — the `pi-web-access` package
-- `herdr_agent` — local `herdr-agents` extension
+
+(Historical note: `herdr_agent` from the local `herdr-agents` extension used to be in
+this set; herdr-agents is archived and no longer loaded.)
 
 Rules:
-- The catalog filter is **dynamic** (`active && source ∉ {builtin, sdk}`) — these 5 pass,
+- The catalog filter is **dynamic** (`active && source ∉ {builtin, sdk}`) — these 4 pass,
   future extension tools are picked up automatically, no hardcoding.
 - **Native dedup:** remove Kiro-native `web_search`/`web_fetch` from `allowedTools`
   (they would beat the pi web tools); keep native `fs_*`/`execute_bash`/`glob`/`grep` in Kiro.

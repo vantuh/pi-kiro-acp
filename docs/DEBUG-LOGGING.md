@@ -33,7 +33,6 @@ tail -f "$LOG" | grep '"session":"abc123"'
 |---|---|
 | `kiro-acp.json` → `logger.debug: true` | Enables the log file above (`false`/unset = no logging) |
 | `kiro-acp.json` → `logger.verbose: 1..3` | Passes `-v`/`-vv`/`-vvv` to `kiro-cli acp`; its own logs land in the same file as `kiro log` |
-| `PI_KIRO_ACP_MIRROR=0` | Disables mirroring Kiro's native tool calls into the transcript |
 | `PI_KIRO_ACP_DRAIN_MS` | Grace period between answering Kiro's outstanding `tools/call` and cancelling its turn (default 150) |
 | `PI_KIRO_ACP_REFUSAL_RETRY_MS` | Delay before re-sending a recovery prompt that came back as a contentless `refusal` (default 1500) |
 
@@ -122,7 +121,6 @@ path anymore.
 | `thinkingChars` / `textChars` | Total chars received |
 | `thinkingChunks` / `textChunks` | ACP update count |
 | `avgThinkingChunkChars` / `avgTextChunkChars` | Mean chars per ACP chunk |
-| `emittedThinkingDeltas` / `emittedTextDeltas` | Deltas pushed to pi (1:1 with ACP chunks since coalescing was removed) |
 
 ### session-manager.ts — routing
 
@@ -237,19 +235,12 @@ See also `LATENCY-FIX-PLAN.md` (same directory).
 Since the forwarded transport (ADR 0001 amendment 2026-09-04) Kiro has no native tools:
 every tool call — `read`, `bash`, `edit`, `write`, extension tools — crosses the pi_host
 bridge and renders as a real pi tool call (`toolCall`/`toolResult` pair), so there is
-nothing separate to "see". The native-tool mirror (`native-tool-mirror.ts` +
-`tool-frame-transformer.ts`) is a **dormant fallback**: it emits a `<!--kiro-tool-->
-marker block only for a `tool_call_update` that arrives *without*
-`_meta.kiro.mcpServerName` (i.e. if kiro-cli ever re-introduces native tools). On the
-normal path such an emission would be a *duplicate* render next to pi's real tool card,
-so it appearing is itself a signal worth investigating. The `context` hook strips these
-display-only blocks before messages reach the model. If the mirror fires unexpectedly:
-
-1. Check the update's `_meta` — a missing `kiro.mcpServerName` is what activates the
-   mirror
-2. `PI_KIRO_ACP_MIRROR=0` disables it entirely
-3. The mirror only emits on `status: completed|failed` (or on turn end via `flush()`);
-   a tool still running shows only the transient `🔧 <title>` indicator
+nothing separate to "see". The mirror that once rendered Kiro's native tools as
+`<!--kiro-tool-->` marker blocks was removed along with its markdown transformer (ADR
+0001 amendment 3); the only remaining trace is the strip readers in
+`native-tool-frame.ts`, which clean legacy marker blocks and one-liner frames out of
+historical persisted transcripts before they reach the model. New frames are never
+created.
 
 ### Wrong session selected / unexpected resumption
 

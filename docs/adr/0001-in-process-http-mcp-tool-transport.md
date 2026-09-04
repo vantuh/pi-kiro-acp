@@ -89,10 +89,24 @@ which the display-only mirror could never provide.
   `_meta.kiro.mcpServerName`, so the mirror no-ops and pi's standard tool rendering is
   the primary display path. It still catches any update that arrives without the
   discriminator (e.g. if kiro-cli re-introduces native tools). `PI_KIRO_ACP_MIRROR=0`
-  still disables it.
+  still disables it. **(Superseded by Amendment 3: the mirror, transformer, and toggle
+  were removed.)**
 - Cost, as in the pre-B1 transport: every fs/bash call round-trips through the bridge
   and pi's turn loop (one debounce delay per turn, `TOOL_CALL_DEBOUNCE_MS`), and pi
   gates fs/bash again — the `--trust-all-tools` caveat above narrows rather than
   disappears: the flag is still passed (`session.ts` spawn args) and is what
   auto-approves the `pi_host` MCP tools inside Kiro, but nothing executes outside
   pi's normal permission model anymore.
+
+## Amendment 3 — 2026-09-04: dormant mirror removed
+
+After a week of live B2 usage the native-tool mirror (`native-tool-mirror.ts`),
+its markdown transformer (`tool-frame-transformer.ts`), and the
+`PI_KIRO_ACP_MIRROR` toggle were removed as dead code: with
+`tools: ["@pi_host"]` every tool_call carries `_meta.kiro.mcpServerName`, so the
+mirror could never emit. The strip readers in `native-tool-frame.ts` remain to
+clean `<!--kiro-tool-->` blocks and one-liner frames out of historical
+transcripts before they reach the model or persistence. Note that legacy
+`<!--kiro-tool-->` blocks in resumed sessions now render as plain text
+(`🔧 title` / body / `[status]`) instead of styled boxes, since the
+transformer no longer exists; model-facing behavior is unchanged.
