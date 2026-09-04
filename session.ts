@@ -828,6 +828,7 @@ export class AcpSession {
   ): void {
     this.started = false;
     this.updateHandler = null;
+    this.onMetadata = null;
     this.onToolCallFromBridge = null;
     this.activePromptDone = null;
 

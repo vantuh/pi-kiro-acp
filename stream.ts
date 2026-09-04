@@ -26,7 +26,7 @@ import {
   loadPersistedKiroSession,
   savePersistedKiroSession,
 } from "./session-persistence.ts";
-import { toKiroEffort } from "./session.ts";
+import { toKiroEffort, type AcpSession } from "./session.ts";
 import { buildForwardedToolCatalog } from "./tool-catalog.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
@@ -93,11 +93,15 @@ export function streamKiroAcp(
 
   (async () => {
     const output = createOutputMessage(model);
+    // Set once the turn bumps streamGen so the finally below can clear the
+    // turn's handlers without clobbering a newer turn's assignments.
+    let turnGen: number | null = null;
+    let session: AcpSession | null = null;
 
     try {
       pruneIdleSessions();
       const routed = await routeSession(context, options);
-      const session = routed.session;
+      session = routed.session;
       session.lastUsedAt = Date.now();
       // Capture before ensureStarted: a cold/parallel process gets an acpSessionId
       // for an empty conversation, which must not look like in-place recovery.
@@ -310,6 +314,7 @@ export function streamKiroAcp(
       // estimate on each update instead of only at stream end — partial
       // frames carry it and live counters (e.g. the subagent fleet) tick.
       session.onMetadata = (m) => {
+        if (suppressUpdates) return;
         output.usage = estimateUsage(output, model.contextWindow, m);
       };
 
@@ -423,6 +428,7 @@ export function streamKiroAcp(
       }
 
       const gen = ++session.streamGen;
+      turnGen = gen;
       let promptError: Error | null = null;
       let toolFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -614,7 +620,6 @@ export function streamKiroAcp(
         },
       );
 
-      session.updateHandler = null;
       if (MIRROR_NATIVE_TOOLS) {
         nativeToolMirror.flush();
       }
@@ -705,6 +710,13 @@ export function streamKiroAcp(
         error instanceof Error ? error.message : String(error);
       stream.push({ type: "error", reason: "error", error: output });
       stream.end();
+    } finally {
+      // Clear the handlers on every exit path (normal end and fatal catch),
+      // but only if no newer turn has already reassigned them.
+      if (session && turnGen !== null && turnGen === session.streamGen) {
+        session.updateHandler = null;
+        session.onMetadata = null;
+      }
     }
   })();
 
