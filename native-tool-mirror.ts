@@ -1,7 +1,4 @@
-import {
-  nativeToolFrame,
-  nativeToolTextFrame,
-} from "./native-tool-frame.ts";
+import { nativeToolFrame } from "./native-tool-frame.ts";
 
 /** Stream-writing hooks the mirror needs, injected so the logic stays testable. */
 export type NativeToolMirrorHooks = {
@@ -50,10 +47,15 @@ export function createNativeToolMirror(hooks: NativeToolMirrorHooks) {
         // pi_host-forwarded tools already render via real pi execution; only
         // mirror Kiro's native tools, which carry no mcpServerName.
         if (update._meta?.kiro?.mcpServerName) return;
-        const title =
-          typeof update.title === "string"
+        // Resolve the raw candidate first, then guard once: an empty or
+        // non-string toolName must still fall back, or the emitted frame
+        // ("🔧  ✓") would not match the strip regex.
+        const rawTitle =
+          typeof update.title === "string" && update.title.trim()
             ? update.title
-            : (update._meta?.kiro?.toolName ?? "tool");
+            : update._meta?.kiro?.toolName;
+        const title =
+          typeof rawTitle === "string" && rawTitle.trim() ? rawTitle : "tool";
         tracked.set(toolCallId, { title, text: "" });
         hooks.setStatus(`🔧 ${title}`);
         return;

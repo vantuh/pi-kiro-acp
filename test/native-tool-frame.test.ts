@@ -11,6 +11,7 @@ import {
   stripAssistantContentFrames,
   stripNativeToolFrames,
 } from "../native-tool-frame.ts";
+import { createNativeToolMirror } from "../native-tool-mirror.ts";
 import { createKiroToolFrameTransformer } from "../tool-frame-transformer.ts";
 
 function assert(condition: unknown, label: string): void {
@@ -438,6 +439,73 @@ console.log("✓ native-tool-frame tests passed");
 
   const abortedText = nativeToolTextFrame("sleep 30", "aborted");
   assert(nativeToolTextFrameRegex().test(abortedText), "aborted frame matches");
+
+  const cancelledText = nativeToolTextFrame("read foo", "cancelled");
+  assert(
+    cancelledText === "🔧 read foo [cancelled]\n",
+    "cancelled text frame keeps a status suffix",
+  );
+  assert(
+    nativeToolTextFrameRegex().test(cancelledText),
+    "cancelled frame matches the strip regex",
+  );
+
+  const inProgressText = nativeToolTextFrame("read foo", "in_progress");
+  assert(
+    inProgressText === "🔧 read foo [in_progress]\n",
+    "in_progress text frame keeps a status suffix",
+  );
+  assert(
+    nativeToolTextFrameRegex().test(inProgressText),
+    "in_progress frame matches the strip regex",
+  );
+
+  // Empty titles skip the "tool" fallback on a bare typeof check. Guard at
+  // the mirror so we never emit "🔧  ✓", which the strip regex cannot match.
+  {
+    const chunks: string[] = [];
+    const mirror = createNativeToolMirror({
+      pushText: (delta) => chunks.push(delta),
+      endText: () => {},
+      endThinking: () => {},
+      setStatus: () => {},
+      frame: (title, _body, status) => nativeToolTextFrame(title, status),
+    });
+    mirror.update({
+      sessionUpdate: "tool_call",
+      toolCallId: "empty",
+      title: "",
+    });
+    mirror.update({
+      sessionUpdate: "tool_call_update",
+      toolCallId: "empty",
+      status: "completed",
+    });
+    assert(chunks.length === 1, "empty title still emits one text frame");
+    assert(chunks[0] === "🔧 tool ✓\n", "empty title falls back to tool");
+    assert(
+      nativeToolTextFrameRegex().test(chunks[0]),
+      "fallback empty-title frame matches the strip regex",
+    );
+  }
+
+  // A frame plus following prose in the SAME block does not match: the regex
+  // is anchored to a whole block. Isolation (endText / pushText / endText)
+  // is what keeps the one-liner strippable; mixed blocks leak wholesale.
+  const mixedBlock = "🔧 read foo ✓\nHere is the answer";
+  assert(
+    !nativeToolTextFrameRegex().test(mixedBlock),
+    "frame plus prose in one block does not match the strip regex",
+  );
+  const mixedStripped = stripAssistantContentFrames([
+    { type: "text", text: mixedBlock },
+  ]);
+  assert(
+    !mixedStripped.changed &&
+      JSON.stringify(mixedStripped.content) ===
+        JSON.stringify([{ type: "text", text: mixedBlock }]),
+    "mixed frame+prose block leaks wholesale without block isolation",
+  );
 
   const multiline = nativeToolTextFrame("weird\ntitle", "completed");
   assert(

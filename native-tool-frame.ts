@@ -52,7 +52,9 @@ export function nativeToolTextFrame(title: string, status: string): string {
 
 /** A whole text block carrying only a plain text frame. */
 export function nativeToolTextFrameRegex(): RegExp {
-  return /^🔧 .+ (?:✓|\[failed\]|\[aborted\])\n?$/;
+  // Deliberately defensive: the mirror only emits completed/failed/aborted,
+  // but any future status must strip too, so match every bracket token.
+  return /^🔧 .+ (?:✓|\[[a-z_]+\])\n?$/;
 }
 
 /** Same strip the context hook applies to assistant content arrays. */
