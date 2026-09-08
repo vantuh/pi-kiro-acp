@@ -154,6 +154,13 @@ export class AcpSession {
    * tainted, so stream.ts must not persist it (it would be re-resumed with a
    * matching config fingerprint, resurrecting the leak every turn). */
   backendQuarantined = false;
+  /** True once kiro-cli reported _kiro.dev/agent/not_found for this backend
+   * (fell back to kiro_default: all builtins, wrong prompt). */
+  agentFallback = false;
+  /** Bounded self-recovery: leak/fallback restarts per session instance. Two
+   * attempts heal transient discovery failures; a deterministic fallback
+   * (e.g. an invalid agent name) gives up and stays loud instead of looping. */
+  private recoveryRestarts = 0;
   /** Fingerprint of the last model-visible tools list logged. */
   private lastToolsListFingerprint: string | null = null;
 
@@ -304,10 +311,12 @@ export class AcpSession {
       } else if (msg.method === "_kiro.dev/commands/available") {
         this.handleCommandsAvailable(msg.params || {});
       } else if (msg.method === "_kiro.dev/agent/not_found") {
-        // The requested --agent was not found and kiro-cli fell back to
-        // kiro_default (all builtins, wrong prompt). Silently ignoring this
-        // used to make fallback invisible; nothing here can fix it, but the
-        // log must scream.
+        // kiro-cli fell back to kiro_default (all builtins, wrong prompt).
+        // The tools-list handler will quarantine the backend; a bounded
+        // restart heals transient discovery failures (the config is
+        // rewritten before every spawn), deterministic ones give up after
+        // two attempts and stay loud.
+        this.agentFallback = true;
         log("KIRO AGENT NOT FOUND — kiro-cli fell back", {
           session: this.id,
           requestedAgent: msg.params?.requestedAgent ?? null,
@@ -386,7 +395,19 @@ export class AcpSession {
           }))
         : undefined,
     });
-    if (builtins.length > 0) this.handleBuiltinLeak(builtins);
+    if (builtins.length > 0) {
+      this.handleBuiltinLeak(builtins);
+    } else if (this.builtinsLeaked || this.backendQuarantined || this.agentFallback) {
+      // A clean list on the same process (e.g. a fresh session/new after a
+      // leaked restore) means the current backend is sound again — lift the
+      // quarantine so persistence resumes for the new snapshot.
+      log("model-visible tools clean — leak quarantine lifted", {
+        session: this.id,
+      });
+      this.builtinsLeaked = false;
+      this.backendQuarantined = false;
+      this.agentFallback = false;
+    }
   }
 
   /** A leaked built-in is model-visible. The stale snapshot must never be
@@ -526,18 +547,37 @@ export class AcpSession {
         await this.stop();
       }
     }
-    if (this.started && this.builtinsLeaked && this.restoredFromPersistence) {
-      // A restored snapshot leaked Kiro builtins into the model's tool list.
-      // The current turn still runs (the permission gate blocks execution);
-      // the next turn must start from a fresh process and session.
+    if (this.started && (this.agentFallback || (this.builtinsLeaked && this.restoredFromPersistence))) {
+      // The model's tool list is tainted (leaked restored snapshot or agent
+      // fallback). The current turn still runs (the permission gate blocks
+      // execution); the next turn must start from a fresh process.
       if (this.busy) {
         log("deferring leaked-builtins restart while session is busy", {
           session: this.id,
+          agentFallback: this.agentFallback,
         });
+      } else if (this.recoveryRestarts >= 2) {
+        // Deterministic failure (e.g. the agent name never resolves):
+        // stop looping, keep the session degraded but visible. Persistence
+        // stays suppressed via the quarantine flags.
+        log(
+          "GIVING UP on leak/fallback recovery after two restarts — session degraded",
+          {
+            session: this.id,
+            agentFallback: this.agentFallback,
+            builtinsLeaked: this.builtinsLeaked,
+          },
+        );
+        this.agentFallback = false;
+        this.builtinsLeaked = false;
       } else {
-        log("restarting Kiro: restored session leaked builtins", {
+        log("restarting Kiro: leaked builtins or agent fallback", {
           session: this.id,
+          agentFallback: this.agentFallback,
+          restoredFromPersistence: this.restoredFromPersistence,
+          attempt: this.recoveryRestarts + 1,
         });
+        this.recoveryRestarts++;
         await this.stop();
       }
     }
@@ -733,10 +773,13 @@ export class AcpSession {
   private async tryRestorePersistedSession(
     kiroSessionId: string,
   ): Promise<boolean> {
-    // Mark the restore origin before awaiting: leak notifications
-    // (`_kiro.dev/commands/available`) can arrive while the RPC is in flight,
-    // and the restart decision needs to know the session came from a
-    // persisted snapshot.
+    // Mark the restore origin BEFORE awaiting — leak notifications
+    // (_kiro.dev/commands/available) arrive while the RPC is in flight, and
+    // the restart decision needs to know the session came from a persisted
+    // snapshot. This is the only place the flag is set: the pre-await value
+    // survives a successful RPC, and every failure path drops it (the
+    // last-attempt path via restartAfterRestoreFailure -> stop ->
+    // settlePendingState, the unsupported path explicitly).
     this.restoredFromPersistence = true;
     const attempts = [
       {
@@ -761,7 +804,6 @@ export class AcpSession {
         this.acpSessionId = kiroSessionId;
         // Re-bind current pi instructions after resume/load.
         this.systemPromptHash = null;
-        this.restoredFromPersistence = true;
         log("restored persisted kiro session", {
           session: this.id,
           method: attempt.method,
@@ -992,9 +1034,12 @@ export class AcpSession {
     this.currentModelId = null;
     // The backend is gone: restore origin, leak state and the tools-list
     // fingerprint belong to it and must not leak into a replacement process.
+    // recoveryRestarts is deliberately kept — the restart bound is per
+    // session instance, not per backend.
     this.restoredFromPersistence = false;
     this.builtinsLeaked = false;
     this.backendQuarantined = false;
+    this.agentFallback = false;
     this.lastToolsListFingerprint = null;
   }
 

@@ -132,9 +132,11 @@ Mitigations, in order:
    (`KIRO BUILTINS LEAKED`) the backend is quarantined (its snapshot is not
    persisted again — otherwise the leaked session would be re-resumed with a
    matching config fingerprint), the persisted snapshot is cleared, and for
-   restored-session leaks the process restarts before the next turn. An
-   agent-fallback leak is only logged: `_kiro.dev/agent/not_found`
-   (kiro_default fallback) is reported loudly.
+   restored-session or agent-fallback leaks the process restarts before the
+   next turn — bounded at two attempts, after which the session stays
+   degraded-but-loud. A clean tools list on the same process lifts the
+   quarantine. `_kiro.dev/agent/not_found` (kiro_default fallback) is
+   reported and feeds the same recovery.
 3. **Execution gate.** `--trust-tools=@pi_host` + deny-by-default permission
    RPC stays as the backstop; verified live: a pi_host tool executes with zero
    permission RPCs, so the gate costs nothing on the happy path.

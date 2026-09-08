@@ -160,10 +160,12 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 | `failed to configure mcp.noInteractiveTimeout` | `{ session, error }` | Settings call failed; will retry next cold start |
 | `acp session/new` | `{ session, acpSessionId }` | New ACP session ID allocated |
 | `model-visible tools` | `{ session, count, builtins, mcpServers }` | `_kiro.dev/commands/available` — the model's actual tool list, logged once per change. Non-empty `builtins` means the agent config was not applied or a restored snapshot leaked builtins |
-| `KIRO BUILTINS LEAKED into the model tool list` | `{ session, builtins, restoredFromPersistence, willRestartNextTurn }` | Built-in tools detected in the model-visible list; backend quarantined (persist suppressed), persisted snapshot cleared, restart scheduled for the next turn for restored-session leaks (agent-fallback leaks are logged only) |
-| `restarting Kiro: restored session leaked builtins` | `{ session }` | Pre-turn restart after a leak (fresh process + session) |
-| `deferring leaked-builtins restart while session is busy` | `{ session }` | Leak restart postponed because a prompt is in flight |
-| `KIRO AGENT NOT FOUND — kiro-cli fell back` | `{ session, requestedAgent, fallbackAgent }` | kiro-cli could not discover the spawned `--agent` and ran under `kiro_default` (all builtins, wrong prompt) — always investigate |
+| `KIRO BUILTINS LEAKED into the model tool list` | `{ session, builtins, restoredFromPersistence, willRestartNextTurn }` | Built-in tools detected in the model-visible list; backend quarantined (persist suppressed), persisted snapshot cleared, restart scheduled for the next turn for restored-session and agent-fallback leaks |
+| `model-visible tools clean — leak quarantine lifted` | `{ session }` | A clean tools list on the same process after a leak — persistence resumes for the new snapshot |
+| `restarting Kiro: leaked builtins or agent fallback` | `{ session, agentFallback, restoredFromPersistence, attempt }` | Pre-turn restart after a leak or fallback (fresh process + session; bounded at two attempts) |
+| `deferring leaked-builtins restart while session is busy` | `{ session, agentFallback }` | Leak restart postponed because a prompt is in flight |
+| `GIVING UP on leak/fallback recovery after two restarts — session degraded` | `{ session, agentFallback, builtinsLeaked }` | Recovery bounded out (deterministic fallback/leak); session keeps running gated and unpersisted — investigate the agent config |
+| `KIRO AGENT NOT FOUND — kiro-cli fell back` | `{ session, requestedAgent, fallbackAgent }` | kiro-cli could not discover the spawned `--agent` and ran under `kiro_default` (all builtins, wrong prompt); schedules a bounded recovery restart — always investigate if it repeats |
 | `model set` | `{ session, modelId, previousModel }` | Model changed via RPC |
 | `prompt sent` | `{ session, modelId, replayHistory, promptChars, systemPromptChars, systemPromptIncluded, systemPromptSkipped, userMessageChars, imageCount, timing }` | `session/prompt` fired (system block once per ACP session unless hash changes) |
 | `rpc →` | `{ session, method, id, timeoutMs, pendingCount }` | RPC request sent |
@@ -268,10 +270,11 @@ Three layers handle a leak:
    actual tool list (`tools[].source` is `built-in` or `mcp:<server>`).
    `model-visible tools { builtins: [...] }` logs it; non-empty `builtins`
    triggers `KIRO BUILTINS LEAKED …`, clears the persisted snapshot, and — for
-   leaks on a **restored** backend — the next `ensureStarted` restarts the
-   process fresh (deferred while busy). An agent-fallback leak is logged only:
-   a restart cannot fix discovery, but the fallback itself is reported by
-   `KIRO AGENT NOT FOUND`.
+   leaks on a **restored** backend or an **agent fallback** — the next
+   `ensureStarted` restarts the process fresh (deferred while busy, bounded at
+   two attempts per session; a deterministic fallback then gives up loudly).
+   A clean list on the same process lifts the quarantine. An agent fallback is
+   additionally reported by `KIRO AGENT NOT FOUND`.
 3. **Execution gate** — `--trust-tools=@pi_host` plus deny-by-default
    `session/request_permission` blocks native execution that goes through the
    permission RPC (verified live: a pi_host tool executes with zero permission

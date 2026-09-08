@@ -321,6 +321,10 @@ async function main(): Promise<void> {
     }
     assert(!threw, "agent/not_found dispatches without crashing");
     assert(
+      session.agentFallback === true,
+      "agent/not_found marks the backend as fallen back",
+    );
+    assert(
       session.builtinsLeaked === false,
       "agent/not_found alone does not set the leak flag",
     );
@@ -364,6 +368,16 @@ async function main(): Promise<void> {
       session.builtinsLeaked === true,
       "repeated identical list is deduplicated",
     );
+
+    // A clean list on the same process lifts the quarantine (fresh
+    // session/new after a leaked restore is sound again).
+    available([{ name: "bash", source: "mcp:pi_host" }]);
+    assert(
+      session.builtinsLeaked === false &&
+        session.backendQuarantined === false &&
+        session.agentFallback === false,
+      "clean tools list lifts the leak quarantine",
+    );
   }
 
   {
@@ -391,7 +405,8 @@ async function main(): Promise<void> {
     assert(
       !session.builtinsLeaked &&
         !session.backendQuarantined &&
-        !session.restoredFromPersistence,
+        !session.restoredFromPersistence &&
+        !session.agentFallback,
       "stop() resets backend-scoped leak state",
     );
   }
