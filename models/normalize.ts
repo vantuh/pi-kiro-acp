@@ -9,7 +9,6 @@ type AvailableKiroModel = {
   modelId?: string;
   id?: string;
   name?: string;
-  description?: string;
 };
 
 const FALLBACK_BY_ID = new Map(KIRO_MODELS.map((model) => [model.id, model]));

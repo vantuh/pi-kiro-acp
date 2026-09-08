@@ -10,14 +10,17 @@ const sessions = new Map<string, AcpSession>();
 export interface RoutedSession {
   session: AcpSession;
   toolResults: ToolResultInfo[];
-  isResumption: boolean;
   /**
-   * True when the context carries tool results but no pending bridge call
-   * matched them: Kiro abandoned its own tools/call before pi finished running
-   * the tool. The result can no longer be answered into that MCP request, so it
-   * has to be handed back as a follow-up prompt instead.
+   * Why the context was routed the way it was:
+   * - "prompt": a plain turn — no tool results, or results placed on a fresh
+   *   or idle session.
+   * - "resumption": a pending bridge call matched the context's tool results.
+   * - "orphaned": tool results matched no pending call — Kiro abandoned its
+   *   own tools/call before pi finished running the tool. The result can no
+   *   longer be answered into that MCP request, so it has to be handed back
+   *   as a follow-up prompt instead.
    */
-  orphanedToolResults: boolean;
+  kind: "prompt" | "resumption" | "orphaned";
 }
 
 /** Sessions that still hold a live Kiro conversation, most recently used first. */
@@ -42,7 +45,7 @@ export async function routeSession(
       ? options.sessionId
       : undefined;
   const requestedCwd = (options as any)?.cwd || process.cwd();
-  let orphanedToolResults = false;
+  let kind: RoutedSession["kind"] = "prompt";
 
   if (toolResults.length > 0) {
     const matches = [...sessions.values()]
@@ -62,8 +65,7 @@ export async function routeSession(
       return {
         session: matches[0].session,
         toolResults,
-        isResumption: true,
-        orphanedToolResults: false,
+        kind: "resumption",
       };
     }
 
@@ -71,7 +73,7 @@ export async function routeSession(
     // here: a brand-new Kiro session would redo the work the tool just did.
     // Reuse the live session that still remembers the conversation and let the
     // stream deliver the result as a follow-up prompt instead.
-    orphanedToolResults = true;
+    kind = "orphaned";
     log("route: no resumption match found", {
       toolResults: toolResults.length,
       toolNames: toolResults.map((t) => t.toolName),
@@ -100,8 +102,7 @@ export async function routeSession(
       return {
         session: reusable,
         toolResults,
-        isResumption: false,
-        orphanedToolResults,
+        kind,
       };
     }
     log("route orphaned tool result: no live session to recover into", {
@@ -132,8 +133,7 @@ export async function routeSession(
       return {
         session: existing,
         toolResults,
-        isResumption: false,
-        orphanedToolResults,
+        kind,
       };
     }
 
@@ -152,8 +152,7 @@ export async function routeSession(
     return {
       session: created,
       toolResults,
-      isResumption: false,
-      orphanedToolResults,
+      kind,
     };
   }
 
@@ -169,8 +168,7 @@ export async function routeSession(
     return {
       session: idleSameCwd,
       toolResults,
-      isResumption: false,
-      orphanedToolResults,
+      kind,
     };
   }
 
@@ -185,8 +183,7 @@ export async function routeSession(
   return {
     session: created,
     toolResults,
-    isResumption: false,
-    orphanedToolResults,
+    kind,
   };
 }
 
@@ -209,8 +206,4 @@ export function pruneIdleSessions(maxIdleMs = 10 * 60 * 1000): void {
       void session.stop();
     }
   }
-}
-
-export function activeSessionCount(): number {
-  return sessions.size;
 }

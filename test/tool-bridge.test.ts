@@ -1,17 +1,18 @@
 // Test: authenticated loopback Streamable HTTP MCP adapter.
 // Run: test/run-all.sh test/tool-bridge.test.ts
 
-import { request as httpRequest, type ClientRequest } from "node:http";
 import { buildForwardedToolCatalog } from "../tool-catalog.ts";
 import { startToolBridge } from "../tool-bridge.ts";
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
+import {
+  assert,
+  del,
+  post,
+  rawPost,
+  sseMessages,
+  ssePost,
+  wait,
+  type HttpResponse,
+} from "./support.ts";
 
 const catalog = buildForwardedToolCatalog(
   [
@@ -25,188 +26,6 @@ const catalog = buildForwardedToolCatalog(
   ["probe_tool"],
 );
 
-interface Response {
-  status: number;
-  body: any;
-}
-
-function post(
-  url: string,
-  token: string,
-  body: unknown,
-  headers: Record<string, string> = {},
-): Promise<Response> {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const payload = JSON.stringify(body);
-    const req = httpRequest(
-      {
-        host: parsed.hostname,
-        port: Number(parsed.port),
-        path: parsed.pathname,
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${token}`,
-          "content-length": Buffer.byteLength(payload),
-          ...headers,
-        },
-      },
-      (res) => {
-        let text = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          text += chunk;
-        });
-        res.on("end", () => {
-          let parsedBody: any = undefined;
-          try {
-            parsedBody = text ? JSON.parse(text) : undefined;
-          } catch {
-            parsedBody = text;
-          }
-          resolve({ status: res.statusCode || 0, body: parsedBody });
-        });
-      },
-    );
-    req.on("error", reject);
-    req.end(payload);
-  });
-}
-
-function rawPost(
-  url: string,
-  token: string,
-  body: unknown,
-): { request: ClientRequest; response: Promise<Response> } {
-  const parsed = new URL(url);
-  const payload = JSON.stringify(body);
-  let resolveResponse!: (response: Response) => void;
-  let rejectResponse!: (error: Error) => void;
-  const response = new Promise<Response>((resolve, reject) => {
-    resolveResponse = resolve;
-    rejectResponse = reject;
-  });
-  const req = httpRequest(
-    {
-      host: parsed.hostname,
-      port: Number(parsed.port),
-      path: parsed.pathname,
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-length": Buffer.byteLength(payload),
-      },
-    },
-    (res) => {
-      let text = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        text += chunk;
-      });
-      res.on("end", () => {
-        let parsedBody: any = undefined;
-        try {
-          parsedBody = text ? JSON.parse(text) : undefined;
-        } catch {
-          parsedBody = text;
-        }
-        resolveResponse({ status: res.statusCode || 0, body: parsedBody });
-      });
-    },
-  );
-  req.on("error", rejectResponse);
-  req.end(payload);
-  return { request: req, response };
-}
-
-/** Collects raw SSE text as it arrives, so keepalives can be observed mid-call. */
-function ssePost(
-  url: string,
-  token: string,
-  body: unknown,
-): {
-  chunks: string[];
-  headers: Promise<Record<string, string | string[] | undefined>>;
-  done: Promise<string>;
-} {
-  const parsed = new URL(url);
-  const payload = JSON.stringify(body);
-  const chunks: string[] = [];
-  let resolveHeaders!: (
-    h: Record<string, string | string[] | undefined>,
-  ) => void;
-  let resolveDone!: (text: string) => void;
-  let rejectAll!: (error: Error) => void;
-  const headers = new Promise<Record<string, string | string[] | undefined>>(
-    (resolve, reject) => {
-      resolveHeaders = resolve;
-      rejectAll = reject;
-    },
-  );
-  const done = new Promise<string>((resolve, reject) => {
-    resolveDone = resolve;
-    const prev = rejectAll;
-    rejectAll = (error: Error) => {
-      prev(error);
-      reject(error);
-    };
-  });
-  const req = httpRequest(
-    {
-      host: parsed.hostname,
-      port: Number(parsed.port),
-      path: parsed.pathname,
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        accept: "application/json, text/event-stream",
-        "content-length": Buffer.byteLength(payload),
-      },
-    },
-    (res) => {
-      resolveHeaders(res.headers);
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        chunks.push(chunk);
-      });
-      res.on("end", () => resolveDone(chunks.join("")));
-    },
-  );
-  req.on("error", rejectAll);
-  req.end(payload);
-  return { chunks, headers, done };
-}
-
-/** Last JSON-RPC message carried by an SSE body. */
-function sseMessages(text: string): any[] {
-  return text
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => JSON.parse(line.slice(5).trim()));
-}
-
-function del(url: string, token: string): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const req = httpRequest(
-      {
-        host: parsed.hostname,
-        port: Number(parsed.port),
-        path: parsed.pathname,
-        method: "DELETE",
-        headers: { authorization: `Bearer ${token}` },
-      },
-      (res) => {
-        res.resume();
-        res.on("end", () => resolve(res.statusCode || 0));
-      },
-    );
-    req.on("error", reject);
-    req.end();
-  });
-}
-
-const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function main(): Promise<void> {
   let resolveCall: (() => void) | undefined;

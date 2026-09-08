@@ -32,7 +32,6 @@ export interface ToolBridgeResult {
 }
 
 export interface ToolBridgeCall {
-  requestId: JsonRpcId;
   kiroName: string;
   piName: string;
   arguments: Record<string, unknown>;
@@ -419,7 +418,6 @@ export async function startToolBridge(
         let result: ToolBridgeResult;
         try {
           result = await options.onToolCall({
-            requestId: id,
             kiroName: params.name as string,
             piName,
             arguments: args as Record<string, unknown>,

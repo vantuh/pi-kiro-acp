@@ -47,7 +47,8 @@ Three defects turned that drop into an unbounded loop:
 
 - **Recovery routing.** When a context carries tool results that match no pending bridge
   call, `routeSession` no longer falls through to "fresh session + replay". It reuses the
-  live session that still holds the ACP conversation (`orphanedToolResults: true`), and the
+  live session that still holds the ACP conversation (`kind: "orphaned"` on the
+  RoutedSession discriminant), and the
   stream sends `buildToolResultRecoveryPrompt` — the result framed as the return value of
   Kiro's own abandoned call, with an explicit "do not call the tool again". If no live
   session exists, the replay path is forced (never a persisted resume, whose fingerprint

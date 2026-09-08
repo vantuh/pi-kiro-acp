@@ -1,40 +1,16 @@
 // Test: streamKiroAcp handles AbortSignal without hanging.
 // Run: test/run-all.sh test/abort.test.ts
 
-import type { Context, Model } from "@earendil-works/pi-ai";
 import { streamKiroAcp } from "../stream.ts";
 import { stopAllSessions } from "../session-manager.ts";
-
-function assert(condition: unknown, message: string): asserts condition {
-  if (!condition) throw new Error(message);
-}
+import { assert, kiroContext, kiroModel } from "./support.ts";
 
 async function main() {
-  const model: Model<any> = {
-    id: "claude-sonnet-4.6",
-    name: "Claude Sonnet 4.6 (Kiro)",
-    api: "kiro-acp-api",
-    provider: "kiro-acp",
-    baseUrl: "",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 1000000,
-    maxTokens: 16384,
-  };
+  const model = kiroModel();
 
-  const context: Context = {
-    messages: [
-      {
-        role: "user",
-        content:
-          "Count from 1 to 100 slowly, one number per word. Do not stop early.",
-        timestamp: Date.now(),
-      },
-    ],
-    systemPrompt: "",
-    tools: [],
-  };
+  const context = kiroContext(
+    "Count from 1 to 100 slowly, one number per word. Do not stop early.",
+  );
 
   try {
     const ac = new AbortController();

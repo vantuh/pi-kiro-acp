@@ -3,54 +3,7 @@
 
 import type { SessionUpdate } from "../types.ts";
 import { AcpSession } from "../session.ts";
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
-
-/** A session with a fake stdin so rpc* writes are captured instead of spawned. */
-function fakeSession(): { session: AcpSession; written: string[] } {
-  const session = new AcpSession("/tmp");
-  const written: string[] = [];
-  session.proc = {
-    stdin: {
-      writable: true,
-      write(chunk: string) {
-        written.push(chunk);
-        return true;
-      },
-    },
-  } as any;
-  return { session, written };
-}
-
-/** Parses captured writes, requiring each to be exactly one newline-terminated line. */
-function parseLines(written: string[]): any[] {
-  return written.map((line) => {
-    if (!line.endsWith("\n") || line.slice(0, -1).includes("\n")) {
-      console.error(
-        `✗ write is not a single newline-delimited frame: ${JSON.stringify(line)}`,
-      );
-      process.exit(1);
-    }
-    return JSON.parse(line);
-  });
-}
-
-async function settled<T>(
-  promise: Promise<T>,
-): Promise<{ ok: boolean; value?: T; error?: Error }> {
-  try {
-    return { ok: true, value: await promise };
-  } catch (error) {
-    return { ok: false, error: error as Error };
-  }
-}
-
+import { assert, fakeSession, parseLines, settled } from "./support.ts";
 async function main(): Promise<void> {
   // --- outbound framing ---
   {
@@ -321,12 +274,12 @@ async function main(): Promise<void> {
     }
     assert(!threw, "agent/not_found dispatches without crashing");
     assert(
-      session.agentFallback === true,
+      session.recoveryPending === true,
       "agent/not_found marks the backend as fallen back",
     );
     assert(
-      session.builtinsLeaked === false,
-      "agent/not_found alone does not set the leak flag",
+      session.backendQuarantined === false,
+      "agent/not_found alone does not quarantine the backend",
     );
   }
 
@@ -344,7 +297,7 @@ async function main(): Promise<void> {
 
     available([{ name: "bash", source: "mcp:pi_host" }]);
     assert(
-      session.builtinsLeaked === false,
+      session.recoveryPending === false,
       "mcp-only tools list is not a leak",
     );
 
@@ -354,7 +307,7 @@ async function main(): Promise<void> {
       { name: "subagent", source: "built-in" },
     ]);
     assert(
-      session.builtinsLeaked === true,
+      session.recoveryPending === true,
       "built-in tool entries mark the leak",
     );
 
@@ -365,7 +318,7 @@ async function main(): Promise<void> {
       { name: "subagent", source: "built-in" },
     ]);
     assert(
-      session.builtinsLeaked === true,
+      session.recoveryPending === true,
       "repeated identical list is deduplicated",
     );
 
@@ -373,9 +326,8 @@ async function main(): Promise<void> {
     // session/new after a leaked restore is sound again).
     available([{ name: "bash", source: "mcp:pi_host" }]);
     assert(
-      session.builtinsLeaked === false &&
-        session.backendQuarantined === false &&
-        session.agentFallback === false,
+      session.recoveryPending === false &&
+        session.backendQuarantined === false,
       "clean tools list lifts the leak quarantine",
     );
   }
@@ -385,14 +337,12 @@ async function main(): Promise<void> {
     // they must not lift a quarantine set by a leak or agent fallback.
     const { session } = fakeSession();
     session.persistenceKey = null;
-    session.agentFallback = true;
-    session.builtinsLeaked = true;
+    session.recoveryPending = true;
     session.backendQuarantined = true;
     const post = (label: string) =>
       assert(
-        session.builtinsLeaked === true &&
-          session.backendQuarantined === true &&
-          session.agentFallback === true,
+        session.recoveryPending === true &&
+          session.backendQuarantined === true,
         label,
       );
 
@@ -427,7 +377,6 @@ async function main(): Promise<void> {
     // and stop() resets the backend-scoped state.
     const { session } = fakeSession();
     session.persistenceKey = null;
-    session.restoredFromPersistence = true;
     session.handleStdoutLine(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -439,16 +388,13 @@ async function main(): Promise<void> {
       }),
     );
     assert(
-      session.builtinsLeaked === true && session.backendQuarantined === true,
+      session.recoveryPending === true && session.backendQuarantined === true,
       "restored-backend leak quarantines the backend",
     );
     session.proc = null; // no real process to terminate in this unit test
     await session.stop();
     assert(
-      !session.builtinsLeaked &&
-        !session.backendQuarantined &&
-        !session.restoredFromPersistence &&
-        !session.agentFallback,
+      !session.recoveryPending && !session.backendQuarantined,
       "stop() resets backend-scoped leak state",
     );
   }

@@ -8,6 +8,7 @@
 // Run: test/run-all.sh test/stranded-tool-call.test.ts
 
 import { AcpSession } from "../session.ts";
+import { fakeSession, tick } from "./support.ts";
 
 let failed = false;
 
@@ -20,30 +21,20 @@ function assert(condition: unknown, label: string): void {
   console.log(`✓ ${label}`);
 }
 
-const tick = () => new Promise<void>((r) => setTimeout(r, 0));
-
 /** Long enough to cover the handoff's tool-result drain (default 150ms). */
 const DRAIN_WAIT_MS = (Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150) + 50;
 
 /** A session with fake stdin and a live ACP conversation, so prompts and
- * notifications are captured instead of spawning kiro-cli. */
-function fakeSession(): { session: AcpSession; written: any[] } {
-  const session = new AcpSession("/tmp/kiro-acp-stranded");
-  const written: any[] = [];
-  session.proc = {
-    stdin: {
-      writable: true,
-      write(chunk: string) {
-        written.push(JSON.parse(chunk));
-        return true;
-      },
-    },
-  } as any;
-  session.acpSessionId = "acp-1";
-  session.currentModelId = "m1";
-  session.started = true;
-  return { session, written };
-}
+ * notifications are captured instead of spawning kiro-cli. Writes are captured
+ * as parsed frames. */
+const fakeFrameSession = () =>
+  fakeSession({
+    cwd: "/tmp/kiro-acp-stranded",
+    acpSessionId: "acp-1",
+    currentModelId: "m1",
+    started: true,
+    parseJson: true,
+  });
 
 function bridgeCall(
   session: AcpSession,
@@ -52,7 +43,6 @@ function bridgeCall(
 ) {
   const abort = new AbortController();
   const result = (session as any).handleBridgeToolCall({
-    requestId: 1,
     kiroName: tool,
     piName: tool,
     arguments: args,
@@ -64,7 +54,7 @@ function bridgeCall(
 async function main(): Promise<void> {
   // --- a call arriving after the turn closed is answered, and the dead turn ends ---
   {
-    const { session, written } = fakeSession();
+    const { session, written } = fakeFrameSession();
     await session.startPrompt("m1", "", "original question");
     assert(
       session.toolIntakeClosed === false,
@@ -101,7 +91,7 @@ async function main(): Promise<void> {
 
   // --- a still-live sibling call keeps the turn alive ---
   {
-    const { session, written } = fakeSession();
+    const { session, written } = fakeFrameSession();
     await session.startPrompt("m1", "", "original question");
     void session.activePromptDone?.catch(() => {});
 
@@ -130,7 +120,7 @@ async function main(): Promise<void> {
 
   // --- a call arriving before the stream attaches is queued, not answered ---
   {
-    const { session } = fakeSession();
+    const { session } = fakeFrameSession();
     await session.startPrompt("m1", "", "question");
     void session.activePromptDone?.catch(() => {});
     let resolved = false;
@@ -153,7 +143,7 @@ async function main(): Promise<void> {
 
   // --- pending calls are answered before the cancel, not after it ---
   {
-    const { session, written } = fakeSession();
+    const { session, written } = fakeFrameSession();
     await session.startPrompt("m1", "", "original question");
     const promptFrame = written.find(
       (frame) => frame.method === "session/prompt",

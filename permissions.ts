@@ -4,52 +4,49 @@ function asRecord(value: unknown): Record<string, any> | undefined {
     : undefined;
 }
 
-function toolCallFromPermissionParams(
-  params: unknown,
-): Record<string, any> | undefined {
-  const p = asRecord(params);
-  return asRecord(p?.toolCall) ?? asRecord(p?.tool_call);
-}
-
-function kiroMeta(params: unknown): Record<string, any> {
-  const toolCall = toolCallFromPermissionParams(params);
-  const p = asRecord(params);
-  return (
+/** Kiro tags tool identity in several legacy shapes. One parser for all of
+ * them, so permission gating and logging agree on the same answer:
+ * - `toolCall`/`tool_call` params with `_meta.kiro.{toolName,mcpServerName}`
+ * - top-level `_meta.kiro.{toolName,mcpServerName}` (stream tool_call updates)
+ * - bare `_meta.{toolName,mcpServerName}` on the toolCall
+ * - plain `toolCall.{toolName,name}` with no meta at all
+ * The first non-empty string wins, in the order above. Call-site-specific
+ * fallbacks (e.g. `title` in stream.ts) stay at their call sites. */
+export function kiroToolIdentity(value: unknown): {
+  toolName: string | undefined;
+  mcpServer: string | undefined;
+} {
+  const v = asRecord(value);
+  const toolCall = asRecord(v?.toolCall) ?? asRecord(v?.tool_call);
+  const meta =
     asRecord(toolCall?._meta?.kiro) ??
-    asRecord(p?._meta?.kiro) ??
-    asRecord(toolCall?._meta) ??
-    {}
-  );
+    asRecord(v?._meta?.kiro) ??
+    asRecord(toolCall?._meta);
+  const firstString = (...candidates: unknown[]): string | undefined =>
+    candidates.find(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && candidate.length > 0,
+    );
+  return {
+    toolName: firstString(meta?.toolName, toolCall?.toolName, toolCall?.name),
+    mcpServer: firstString(
+      meta?.mcpServerName,
+      asRecord(toolCall?._meta)?.mcpServerName,
+      v?._meta?.mcpServerName,
+    ),
+  };
 }
 
 export function mcpServerFromPermissionParams(
   params: unknown,
 ): string | undefined {
-  const meta = kiroMeta(params);
-  const toolCall = toolCallFromPermissionParams(params);
-  const candidates = [
-    meta.mcpServerName,
-    asRecord(toolCall?._meta)?.mcpServerName,
-    asRecord(params)?._meta?.mcpServerName,
-  ];
-  return candidates.find((value) => typeof value === "string" && value) as
-    | string
-    | undefined;
+  return kiroToolIdentity(params).mcpServer;
 }
 
 export function kiroToolNameFromPermissionParams(
   params: unknown,
 ): string | undefined {
-  const meta = kiroMeta(params);
-  const toolCall = toolCallFromPermissionParams(params);
-  const candidates = [
-    meta.toolName,
-    toolCall?.toolName,
-    toolCall?.name,
-  ];
-  return candidates.find((value) => typeof value === "string" && value) as
-    | string
-    | undefined;
+  return kiroToolIdentity(params).toolName;
 }
 
 /** True when this permission is for a pi_host / forwarded Pi tool, not a

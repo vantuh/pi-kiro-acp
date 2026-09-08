@@ -16,6 +16,7 @@ import {
   lastUserMessage,
 } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
+import { kiroToolIdentity } from "./permissions.ts";
 import {
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
@@ -97,7 +98,7 @@ export function streamKiroAcp(
 
       log("streamSimple called", {
         session: session.id,
-        isResumption: routed.isResumption,
+        routeKind: routed.kind,
         toolResults: routed.toolResults.length,
         pendingToolCalls: session.pendingToolCalls.size,
         hasActivePrompt: !!session.activePromptDone,
@@ -117,7 +118,7 @@ export function streamKiroAcp(
         images: ReturnType<typeof imagesFromToolResults>;
       } | null = null;
 
-      if (!routed.isResumption) {
+      if (routed.kind !== "resumption") {
         const currentPrompt = buildPromptParts(context, false);
         const replayPrompt = buildPromptParts(context, true);
         // Kiro abandoned its own tools/call for these results, so they can no
@@ -126,7 +127,7 @@ export function streamKiroAcp(
         // subagent), so hand the result back instead: as its own turn when the ACP
         // session still holds the conversation, otherwise as a full replay that
         // now carries the completed work.
-        recoverInPlace = routed.orphanedToolResults && hadLiveConversation;
+        recoverInPlace = routed.kind === "orphaned" && hadLiveConversation;
         const recoveryText = recoverInPlace
           ? buildToolResultRecoveryPrompt(routed.toolResults)
           : null;
@@ -134,7 +135,7 @@ export function streamKiroAcp(
           session: session.id,
           promptChars: currentPrompt.userMessage.length,
           replayPromptChars: replayPrompt.userMessage.length,
-          orphanedToolResults: routed.orphanedToolResults,
+          routeKind: routed.kind,
           recoverInPlace,
           hadLiveConversation,
           sessionBusy: session.busy,
@@ -166,7 +167,7 @@ export function streamKiroAcp(
             currentPrompt.systemPrompt,
             currentPrompt.userMessage,
             currentPrompt.images,
-            routed.orphanedToolResults
+            routed.kind === "orphaned"
               ? // No live ACP session to recover into: force the replay path so the
                 // completed tool call cannot be dropped by resuming a persisted
                 // session from before it (the fingerprint ignores trailing results).
@@ -323,19 +324,13 @@ export function streamKiroAcp(
           update.sessionUpdate === "tool_call" ||
           update.sessionUpdate === "tool_call_update"
         ) {
-          const meta = (update as any)._meta?.kiro ?? {};
-          const mcpServer =
-            typeof meta.mcpServerName === "string"
-              ? meta.mcpServerName
-              : typeof (update as any)._meta?.mcpServerName === "string"
-                ? (update as any)._meta.mcpServerName
-                : undefined;
+          const { mcpServer, toolName: metaToolName } =
+            kiroToolIdentity(update);
           const kiroToolName =
-            typeof meta.toolName === "string"
-              ? meta.toolName
-              : typeof (update as any).title === "string"
-                ? (update as any).title
-                : null;
+            metaToolName ??
+            (typeof (update as any).title === "string"
+              ? (update as any).title
+              : null);
           // Untagged updates (no mcpServer) are not native by default — missing
           // `_meta` used to mark every tool_call as native. Treat as native only
           // when mcpServer is set and not pi_host, or the name is a Kiro builtin
@@ -370,7 +365,7 @@ export function streamKiroAcp(
         }
       };
 
-      if (routed.isResumption) {
+      if (routed.kind === "resumption") {
         const imageBlocks = imagesFromToolResults(routed.toolResults);
 
         if (imageBlocks.length > 0) {

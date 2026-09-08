@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-export interface KiroAcpConfig {
+interface KiroAcpConfig {
   logger?: {
     /** Write $TMPDIR/kiro-acp-debug.log. Default: off. */
     debug?: boolean;
@@ -28,7 +28,7 @@ export function loadKiroAcpConfig(): KiroAcpConfig {
   }
 }
 
-export interface LoggerConfig {
+interface LoggerConfig {
   debug: boolean;
   verbose: number;
 }
@@ -41,7 +41,7 @@ export function resolveLoggerConfig(config: KiroAcpConfig): LoggerConfig {
   };
 }
 
-export interface UsageFooterConfig {
+interface UsageFooterConfig {
   enabled: boolean;
   pollMinutes: number;
 }

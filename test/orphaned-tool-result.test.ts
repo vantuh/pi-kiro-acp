@@ -8,6 +8,7 @@
 import type { Context } from "@earendil-works/pi-ai";
 import { AcpSession } from "../session.ts";
 import { routeSession, stopAllSessions } from "../session-manager.ts";
+import { fakeSession, tick } from "./support.ts";
 
 let failed = false;
 
@@ -59,15 +60,13 @@ function markLive(session: AcpSession, acpSessionId: string): void {
   session.acpSessionId = acpSessionId;
 }
 
-const tick = () => new Promise<void>((r) => setTimeout(r, 0));
-
 async function main(): Promise<void> {
   // --- an orphaned tool result reuses the live session instead of forking ---
   {
     const first = await routeSession(askedContext(), opts("S1"));
     markLive(first.session, "acp-1");
     assert(
-      first.orphanedToolResults === false,
+      first.kind === "prompt",
       "a plain turn is not flagged as orphaned",
     );
 
@@ -83,11 +82,11 @@ async function main(): Promise<void> {
       "the orphaned result is routed back to the live session",
     );
     assert(
-      recovered.isResumption === false,
+      recovered.kind !== "resumption",
       "there is no MCP request left to resume",
     );
     assert(
-      recovered.orphanedToolResults === true,
+      recovered.kind === "orphaned",
       "the orphaned result is flagged for recovery",
     );
     assert(
@@ -115,11 +114,11 @@ async function main(): Promise<void> {
       "resumption stays on the same session",
     );
     assert(
-      resumed.isResumption === true,
+      resumed.kind === "resumption",
       "a matching pending call resumes normally",
     );
     assert(
-      resumed.orphanedToolResults === false,
+      resumed.kind !== "orphaned",
       "resumption is not treated as orphaned",
     );
     await stopAllSessions();
@@ -128,9 +127,9 @@ async function main(): Promise<void> {
   // --- no live session to recover into: still flagged, so the replay is forced ---
   {
     const routed = await routeSession(toolResultContext(), opts("S3"));
-    assert(routed.isResumption === false, "a cold start cannot resume");
+    assert(routed.kind !== "resumption", "a cold start cannot resume");
     assert(
-      routed.orphanedToolResults === true,
+      routed.kind === "orphaned",
       "a cold start with tool results is flagged as orphaned",
     );
     assert(
@@ -161,7 +160,6 @@ async function main(): Promise<void> {
     const bridgeCall = (args: Record<string, unknown>) => {
       const abort = new AbortController();
       const result = (session as any).handleBridgeToolCall({
-        requestId: 1,
         kiroName: "probe_tool",
         piName: "probe_tool",
         arguments: args,
@@ -239,19 +237,11 @@ async function main(): Promise<void> {
 
   // --- a late-settling prompt releases the session ---
   {
-    const session = new AcpSession(CWD);
-    const written: string[] = [];
-    session.proc = {
-      stdin: {
-        writable: true,
-        write: (chunk: string) => {
-          written.push(chunk);
-          return true;
-        },
-      },
-    } as any;
-    session.acpSessionId = "acp-4";
-    session.currentModelId = "m1";
+    const { session, written } = fakeSession({
+      cwd: CWD,
+      acpSessionId: "acp-4",
+      currentModelId: "m1",
+    });
 
     await session.startPrompt("m1", "", "hi");
     const frame = JSON.parse(written[0]);
@@ -278,19 +268,11 @@ async function main(): Promise<void> {
 
   // --- a settled prompt does not clear a newer one ---
   {
-    const session = new AcpSession(CWD);
-    const written: string[] = [];
-    session.proc = {
-      stdin: {
-        writable: true,
-        write: (chunk: string) => {
-          written.push(chunk);
-          return true;
-        },
-      },
-    } as any;
-    session.acpSessionId = "acp-5";
-    session.currentModelId = "m1";
+    const { session, written } = fakeSession({
+      cwd: CWD,
+      acpSessionId: "acp-5",
+      currentModelId: "m1",
+    });
 
     await session.startPrompt("m1", "", "first");
     const firstFrame = JSON.parse(written[0]);
@@ -317,20 +299,12 @@ async function main(): Promise<void> {
   // running (Kiro had dropped only the tools/call) came back as Internal error
   // in 1ms, then Kiro relaunched the subagent.
   {
-    const session = new AcpSession(CWD);
-    const written: string[] = [];
-    session.proc = {
-      stdin: {
-        writable: true,
-        write: (chunk: string) => {
-          written.push(chunk);
-          return true;
-        },
-      },
-    } as any;
-    session.acpSessionId = "acp-6";
-    session.currentModelId = "m1";
-    session.started = true;
+    const { session, written } = fakeSession({
+      cwd: CWD,
+      acpSessionId: "acp-6",
+      currentModelId: "m1",
+      started: true,
+    });
 
     await session.startPrompt("m1", "", "original question");
     const firstFrame = JSON.parse(written[0]);

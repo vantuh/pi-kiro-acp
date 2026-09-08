@@ -1,12 +1,10 @@
 // Test: per-session bridge isolation and resource cleanup on stop / idle prune.
-// Covers Symptom 6 from docs/MCP-UNIFIED-PLAN.md: no cross-session tool-call mixing,
-// no leaked HTTP ports.
+// No cross-session tool-call mixing, no leaked HTTP ports.
 // Run: test/run-all.sh test/lifecycle-cleanup.test.ts
 
 import { connect } from "node:net";
 import { AcpSession } from "../session.ts";
 import {
-  activeSessionCount,
   pruneIdleSessions,
   routeSession,
   stopAllSessions,
@@ -203,7 +201,6 @@ async function main(): Promise<void> {
     { cwd: "/tmp" } as any,
   );
   const bridgeC = await attachBridge(routed.session);
-  assert(activeSessionCount() >= 1, "routeSession registers the session");
   routed.session.lastUsedAt = Date.now() - 60_000;
   pruneIdleSessions(1000);
   assert(
@@ -218,7 +215,6 @@ async function main(): Promise<void> {
   );
   const bridgeD = await attachBridge(routed2.session);
   await stopAllSessions();
-  assert(activeSessionCount() === 0, "stopAllSessions empties the registry");
   assert(
     await waitForPortClosed(bridgeD.port),
     "stopAllSessions releases every port",

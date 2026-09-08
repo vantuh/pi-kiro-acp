@@ -103,8 +103,8 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 | Message | Data | When |
 |---|---|---|
 | `streamKiroAcp entry` | `{ modelId, toolsCount, messagesCount, systemPromptLen, sessionId }` | Stream handler called |
-| `streamSimple called` | `{ session, isResumption, toolResults, pendingToolCalls, hasActivePrompt, hadLiveConversation, cwd, optionSessionId, ensureStartedMs }` | Session routed (`hadLiveConversation` = ACP id existed *before* `ensureStarted`) |
-| `prompt parts` | `{ session, promptChars, replayPromptChars, orphanedToolResults, recoverInPlace, hadLiveConversation, sessionBusy, hasActivePrompt, persistenceKey }` | Before sending to kiro-cli (`recoverInPlace` = a dropped tool result is being handed back instead of the user message) |
+| `streamSimple called` | `{ session, routeKind, toolResults, pendingToolCalls, hasActivePrompt, hadLiveConversation, cwd, optionSessionId, ensureStartedMs }` | Session routed (`routeKind`: `prompt` / `resumption` / `orphaned`; `hadLiveConversation` = ACP id existed *before* `ensureStarted`) |
+| `prompt parts` | `{ session, promptChars, replayPromptChars, routeKind, recoverInPlace, hadLiveConversation, sessionBusy, hasActivePrompt, persistenceKey }` | Before sending to kiro-cli (`recoverInPlace` = a dropped tool result is being handed back instead of the user message) |
 | `timing first thinking` | `{ session, ttftMs, sincePromptMs }` | First `agent_thought_chunk` |
 | `timing first text` | `{ session, ttftMs, sincePromptMs, sinceThinkingMs }` | First `agent_message_chunk` |
 | `native ACP tool update (not forwarded to pi)` | `{ session, sessionUpdate, native, mcpServer, kiroToolName, toolCallId, status, kind }` | ACP `tool_call` / `tool_call_update` without `pi_host` (Kiro AgentCrew / native fs) |
@@ -162,11 +162,11 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 | `failed to configure mcp.noInteractiveTimeout` | `{ session, error }` | Settings call failed; will retry next cold start |
 | `acp session/new` | `{ session, acpSessionId }` | New ACP session ID allocated |
 | `model-visible tools` | `{ session, count, builtins, mcpServers }` | `_kiro.dev/commands/available` — the model's actual tool list, logged once per change. Non-empty `builtins` means the agent config was not applied or a restored snapshot leaked builtins |
-| `KIRO BUILTINS LEAKED into the model tool list` | `{ session, builtins, restoredFromPersistence, willRestartNextTurn }` | Built-in tools detected in the model-visible list; backend quarantined (persist suppressed), persisted snapshot cleared, restart scheduled for the next turn for restored-session and agent-fallback leaks |
+| `KIRO BUILTINS LEAKED into the model tool list` | `{ session, builtins }` | Built-in tools detected in the model-visible list; recovery scheduled and backend quarantined (persist suppressed), persisted snapshot cleared, restart scheduled for the next turn |
 | `model-visible tools clean — leak quarantine lifted` | `{ session }` | A clean tools list on the same process after a leak — persistence resumes for the new snapshot |
-| `restarting Kiro: leaked builtins or agent fallback` | `{ session, agentFallback, restoredFromPersistence, attempt }` | Pre-turn restart after a leak or fallback (fresh process + session; bounded at two attempts) |
-| `deferring leaked-builtins restart while session is busy` | `{ session, agentFallback }` | Leak restart postponed because a prompt is in flight |
-| `GIVING UP on leak/fallback recovery after two restarts — session degraded` | `{ session, agentFallback, builtinsLeaked }` | Recovery bounded out (deterministic fallback/leak); session keeps running gated and unpersisted — investigate the agent config |
+| `restarting Kiro: leaked builtins or agent fallback` | `{ session, attempt }` | Pre-turn restart after a leak or fallback (fresh process + session; bounded at two attempts) |
+| `deferring leaked-builtins restart while session is busy` | `{ session }` | Leak restart postponed because a prompt is in flight |
+| `GIVING UP on leak/fallback recovery after two restarts — session degraded` | `{ session }` | Recovery bounded out (deterministic fallback/leak); session keeps running gated and unpersisted — investigate the agent config |
 | `KIRO AGENT NOT FOUND — kiro-cli fell back` | `{ session, requestedAgent, fallbackAgent }` | kiro-cli could not discover the spawned `--agent` and ran under `kiro_default` (all builtins, wrong prompt); schedules a bounded recovery restart — always investigate if it repeats |
 | `model set` | `{ session, modelId, previousModel }` | Model changed via RPC |
 | `prompt sent` | `{ session, modelId, replayHistory, promptChars, systemPromptChars, systemPromptIncluded, systemPromptSkipped, userMessageChars, imageCount, timing }` | `session/prompt` fired (system block once per ACP session unless hash changes) |
@@ -249,8 +249,6 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
    - Large `delivering tool result.roundtripMs` → pi tool-loop roundtrip (bridge waiting)
    - Tiny `avgTextChunkChars` + many `textChunks` → tiny ACP chunks; they are forwarded 1:1 now,
      so this is kiro-cli's chunking, not extension batching
-
-See also `LATENCY-FIX-PLAN.md` (same directory).
 
 ### Native Kiro tool activity not visible in pi
 

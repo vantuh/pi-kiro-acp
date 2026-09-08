@@ -119,7 +119,7 @@ function formatHistoryMessage(msg: Context["messages"][number]): string {
 }
 
 /** Image blocks in the latest user message, for prompts that re-attach them. */
-export type ImageBlock = { type: "image"; data: string; mimeType: string };
+type ImageBlock = { type: "image"; data: string; mimeType: string };
 
 export function buildPromptParts(
   context: Context,

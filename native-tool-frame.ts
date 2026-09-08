@@ -11,9 +11,8 @@
  */
 
 export const KIRO_TOOL_FRAME_PREFIX = "<!--kiro-tool-->";
-export const KIRO_TOOL_FRAME_SUFFIX = "<!--/kiro-tool-->";
 
-export function nativeToolFrameRegex(): RegExp {
+function nativeToolFrameRegex(): RegExp {
   return /^<!--kiro-tool-->\r?\n([\s\S]*?)\r?\n<!--\/kiro-tool-->[ \t]*\r?$/gm;
 }
 

@@ -77,7 +77,7 @@ function runKiroCli(bin: string): Promise<string> {
   });
 }
 
-export async function fetchKiroUsage(): Promise<KiroUsage> {
+async function fetchKiroUsage(): Promise<KiroUsage> {
   let raw: string;
   try {
     raw = await runKiroCli("kiro-cli");

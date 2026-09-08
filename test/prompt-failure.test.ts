@@ -3,38 +3,7 @@
 // Run: test/run-all.sh test/prompt-failure.test.ts
 
 import { AcpSession } from "../session.ts";
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
-
-/** A session with a fake stdin and an existing ACP session, so startPrompt
- * writes session/prompt without spawning kiro-cli. */
-function fakeSession(modelId: string): {
-  session: AcpSession;
-  written: string[];
-} {
-  const session = new AcpSession("/tmp");
-  const written: string[] = [];
-  session.proc = {
-    stdin: {
-      writable: true,
-      write(chunk: string) {
-        written.push(chunk);
-        return true;
-      },
-    },
-  } as any;
-  session.acpSessionId = "acp-1";
-  session.currentModelId = modelId;
-  return { session, written };
-}
-
-const tick = () => new Promise<void>((r) => setTimeout(r, 0));
+import { assert, fakeSession, tick } from "./support.ts";
 
 async function main(): Promise<void> {
   const unhandled: unknown[] = [];
@@ -44,7 +13,10 @@ async function main(): Promise<void> {
   try {
     // --- a prompt error with no consumer must not become an unhandled rejection ---
     {
-      const { session, written } = fakeSession("m1");
+      const { session, written } = fakeSession({
+        acpSessionId: "acp-1",
+        currentModelId: "m1",
+      });
       await session.startPrompt("m1", "", "hi");
       const frame = JSON.parse(written[0]);
       assert(
@@ -78,7 +50,10 @@ async function main(): Promise<void> {
 
     // --- consumers still observe the failure ---
     {
-      const { session, written } = fakeSession("m1");
+      const { session, written } = fakeSession({
+        acpSessionId: "acp-1",
+        currentModelId: "m1",
+      });
       await session.startPrompt("m1", "", "hi");
       const frame = JSON.parse(written[0]);
       const settled = session.activePromptDone!.then(
@@ -100,7 +75,10 @@ async function main(): Promise<void> {
 
     // --- a successful prompt still resolves and clears the recorded error ---
     {
-      const { session, written } = fakeSession("m1");
+      const { session, written } = fakeSession({
+        acpSessionId: "acp-1",
+        currentModelId: "m1",
+      });
       session.lastPromptError = new Error("stale");
       await session.startPrompt("m1", "", "hi");
       const frame = JSON.parse(written[0]);
@@ -124,7 +102,10 @@ async function main(): Promise<void> {
 
     // --- a throwing update handler cannot escape through readline ---
     {
-      const { session } = fakeSession("m1");
+      const { session } = fakeSession({
+        acpSessionId: "acp-1",
+        currentModelId: "m1",
+      });
       session.updateHandler = () => {
         throw new Error("consumer blew up");
       };

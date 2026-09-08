@@ -4,9 +4,7 @@
 
 import {
   KIRO_TOOL_FRAME_PREFIX,
-  KIRO_TOOL_FRAME_SUFFIX,
   isNativeToolTextFrameLine,
-  nativeToolFrameRegex,
   stripAssistantContentFrames,
   stripNativeToolFrames,
 } from "../native-tool-frame.ts";
@@ -24,7 +22,7 @@ function frame(title: string, body: string, status = "completed"): string {
   const lines = [`🔧 ${title}`];
   if (body) lines.push(body);
   if (status !== "completed") lines.push(`[${status}]`);
-  return `${KIRO_TOOL_FRAME_PREFIX}\n${lines.join("\n")}\n${KIRO_TOOL_FRAME_SUFFIX}\n`;
+  return `${KIRO_TOOL_FRAME_PREFIX}\n${lines.join("\n")}\n<!--/kiro-tool-->\n`;
 }
 
 // --- frame structure and strip ---
@@ -33,10 +31,6 @@ function frame(title: string, body: string, status = "completed"): string {
   assert(
     completed.startsWith(`${KIRO_TOOL_FRAME_PREFIX}\n`),
     "frame opens with the marker prefix",
-  );
-  assert(
-    nativeToolFrameRegex().test(completed),
-    "nativeToolFrameRegex matches the emitted frame",
   );
   assert(
     stripNativeToolFrames(`before\n${completed}\nafter`) === "before\n\nafter",
@@ -51,9 +45,6 @@ function frame(title: string, body: string, status = "completed"): string {
 // --- statuses ---
 {
   const failed = frame("cat /nope", "no such file", "failed");
-  const aborted = frame("sleep", "stopped", "aborted");
-  assert(nativeToolFrameRegex().test(failed), "failed frame matches");
-  assert(nativeToolFrameRegex().test(aborted), "aborted frame matches");
   assert(
     stripNativeToolFrames(`x\n${failed}\ny`) === "x\n\ny",
     "failed card strips",

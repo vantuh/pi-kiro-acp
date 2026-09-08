@@ -116,7 +116,6 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
 {
   const controller = new AbortController();
   const call: ToolBridgeCall = {
-    requestId: 7,
     kiroName: "bash",
     piName: "bash",
     arguments: { command: "echo hi" },
@@ -176,7 +175,6 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     pending.resolve({ result: "", isError: false });
   };
   const result = await (session as any).handleBridgeToolCall({
-    requestId: 8,
     kiroName: "read",
     piName: "read",
     arguments: { path: "/tmp/x" },
@@ -205,7 +203,6 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
   (session as any).rememberAbandonedToolCall(fingerprint, "old-id", "ls");
   const makeCall = () =>
     (session as any).handleBridgeToolCall({
-      requestId: 0,
       kiroName: "ls",
       piName: "ls",
       arguments: { path: "." },
