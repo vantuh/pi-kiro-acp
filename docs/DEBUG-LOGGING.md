@@ -72,11 +72,16 @@ Pi extension tools reach Kiro through an in-process Streamable HTTP MCP server
   Kiro has zero tools — usually a session or subagent plan that deactivated everything.
 
 Forwarded Pi tools cross the `pi_host` bridge and are executed by pi (ADR 0001
-amendment 2026-09-04). kiro-cli still *registers* builtins (AgentCrew/FsRead/…);
-same-named MCP specs are dropped (`NameCollision`) unless aliased (`pi_subagent`).
-Spawn uses `--trust-tools=@pi_host` (not `--trust-all-tools`). Permission RPC
-denies anything that is not `pi_host` / a forwarded `kiroName` / `pi_*`.
-`excludedTools: ["@builtin"]` is written for CLI 3+; 2.21 ignores it.
+amendment 2026-09-04). A **fresh** session with `tools: ["@pi_host"]` registers
+no Kiro builtins at all (verified against kiro-cli 2.21.1). Builtins can only
+leak back when `session/load` restores a persisted session whose snapshot
+predates the current agent config — `model-visible tools { builtins: [...] }`
+detects that, the stale snapshot is never resumed again (config fingerprint),
+and the process restarts before the next turn. Spawn uses
+`--trust-tools=@pi_host` (not `--trust-all-tools`; verified live: pi_host tools
+run with zero permission RPCs). Permission RPC denies anything that is not
+`pi_host` / a forwarded `kiroName` / `pi_*`. `excludedTools: ["@builtin"]` is
+parsed by 2.21 but has no effect there; written for CLI 3+.
 
 ---
 
@@ -108,6 +113,7 @@ denies anything that is not `pi_host` / a forwarded `kiroName` / `pi_*`.
 | `tool calls → stream` | `{ session, count, callIds }` | Tool calls emitted to AI stream |
 | `tool call queued` | `{ session, callId, toolName }` | Tool call received from bridge |
 | `prompt done → stop` | `{ session }` | Prompt completed, no tool calls |
+| `skip persisting kiro session (backend quarantined)` | `{ session, acpSessionId }` | Turn finished on a leaked backend — its snapshot is not saved, so the leak cannot be resumed |
 | `prompt error → error` | `{ session, error }` | Prompt promise rejected |
 | `no active prompt → error` | `{ session, error }` | No prompt was in flight (process exited / session stopped) — turn fails instead of hanging |
 | `outcome` | `{ session, outcome, gen, streamGen, timing }` | Stream outcome + TTFT / chunk stats |
@@ -153,6 +159,11 @@ denies anything that is not `pi_host` / a forwarded `kiroName` / `pi_*`.
 | `skipped mcp.noInteractiveTimeout (already configured)` | `{ session }` | Later cold starts skip the ~0.3s settings call |
 | `failed to configure mcp.noInteractiveTimeout` | `{ session, error }` | Settings call failed; will retry next cold start |
 | `acp session/new` | `{ session, acpSessionId }` | New ACP session ID allocated |
+| `model-visible tools` | `{ session, count, builtins, mcpServers }` | `_kiro.dev/commands/available` — the model's actual tool list, logged once per change. Non-empty `builtins` means the agent config was not applied or a restored snapshot leaked builtins |
+| `KIRO BUILTINS LEAKED into the model tool list` | `{ session, builtins, restoredFromPersistence, willRestartNextTurn }` | Built-in tools detected in the model-visible list; backend quarantined (persist suppressed), persisted snapshot cleared, restart scheduled for the next turn for restored-session leaks (agent-fallback leaks are logged only) |
+| `restarting Kiro: restored session leaked builtins` | `{ session }` | Pre-turn restart after a leak (fresh process + session) |
+| `deferring leaked-builtins restart while session is busy` | `{ session }` | Leak restart postponed because a prompt is in flight |
+| `KIRO AGENT NOT FOUND — kiro-cli fell back` | `{ session, requestedAgent, fallbackAgent }` | kiro-cli could not discover the spawned `--agent` and ran under `kiro_default` (all builtins, wrong prompt) — always investigate |
 | `model set` | `{ session, modelId, previousModel }` | Model changed via RPC |
 | `prompt sent` | `{ session, modelId, replayHistory, promptChars, systemPromptChars, systemPromptIncluded, systemPromptSkipped, userMessageChars, imageCount, timing }` | `session/prompt` fired (system block once per ACP session unless hash changes) |
 | `rpc →` | `{ session, method, id, timeoutMs, pendingCount }` | RPC request sent |
@@ -239,18 +250,37 @@ See also `LATENCY-FIX-PLAN.md` (same directory).
 
 ### Native Kiro tool activity not visible in pi
 
-Kiro still registers builtins (`subagent`/AgentCrew, `read`/FsRead, `write`/FsWrite,
-`web_search`). An MCP tool with the same name is dropped (`NameCollision(BuiltIn(...))`)
-and Kiro may run the native tool — no `pi_host` `tools/call`, so pi shows silence after
-"делегую scout". The forwarded catalog aliases those names (`subagent` → `pi_subagent`,
-`read` → `pi_read`, …) so the MCP spec survives. `bash`/`edit` keep their Pi names.
+A fresh session has no Kiro builtins (`tools: ["@pi_host"]` — verified against
+kiro-cli 2.21.1 with a probe MCP server). Builtins leak back only when
+`session/load` restores a persisted session whose agent snapshot predates the
+current agent config: `NameCollision(BuiltIn(FsRead/AgentCrew/…))` then drops
+same-named pi_host specs and the native tool becomes model-visible. The
+forwarded catalog aliases those names (`subagent` → `pi_subagent`, `read` →
+`pi_read`, …) so the MCP spec survives. `bash`/`edit` keep their Pi names.
 
-Execution gate (kiro-cli 2.21 cannot unregister builtins): `--trust-tools=@pi_host`
-plus deny-by-default `session/request_permission`. If a native call still happens
-(no permission RPC), only a CLI that honors `excludedTools` can stop it.
+Three layers handle a leak:
+
+1. **Persistence gate** — `agentConfigFingerprint` (semantic config hash) is
+   stored with every persisted session; a mismatch refuses restore and starts
+   fresh (`persisted kiro session fingerprint mismatch { historyMatch,
+   configMatch }`).
+2. **Runtime detection** — `_kiro.dev/commands/available` carries the model's
+   actual tool list (`tools[].source` is `built-in` or `mcp:<server>`).
+   `model-visible tools { builtins: [...] }` logs it; non-empty `builtins`
+   triggers `KIRO BUILTINS LEAKED …`, clears the persisted snapshot, and — for
+   leaks on a **restored** backend — the next `ensureStarted` restarts the
+   process fresh (deferred while busy). An agent-fallback leak is logged only:
+   a restart cannot fix discovery, but the fallback itself is reported by
+   `KIRO AGENT NOT FOUND`.
+3. **Execution gate** — `--trust-tools=@pi_host` plus deny-by-default
+   `session/request_permission` blocks native execution that goes through the
+   permission RPC (verified live: a pi_host tool executes with zero permission
+   RPCs, so the gate costs nothing on the happy path). Native calls that skip
+   the RPC cannot be blocked on 2.21 — that needs a CLI honoring
+   `excludedTools`.
 
 ```sh
-grep -E 'native ACP tool update|permission request|NameCollision|Aliasing ' "$LOG"
+grep -E 'model-visible tools|BUILTINS LEAKED|AGENT NOT FOUND|native ACP tool update|permission request|NameCollision|Aliasing ' "$LOG"
 ```
 
 `native ACP tool update` is an ACP `tool_call` with `mcpServer` set and not `pi_host`,
@@ -258,6 +288,10 @@ or a builtin name (`subagent`, `read`, …) and no mcpServer. Missing `_meta` on
 non-builtin (e.g. `bash`) is *not* treated as native. The display-only mirror is gone
 (ADR 0001 amendment 3); these lines plus `permission request { allow: false }` are
 the remaining live trace.
+
+`KIRO AGENT NOT FOUND — kiro-cli fell back` means the spawned `--agent` name was
+not discovered by kiro-cli and everything ran under `kiro_default` (all builtins,
+wrong prompt). This must never be silent.
 
 ### Wrong session selected / unexpected resumption
 

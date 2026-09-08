@@ -105,8 +105,39 @@ tools are still dropped (`NameCollision`); the catalog aliases them (`pi_subagen
 Spawn is `--trust-tools=@pi_host` (not `--trust-all-tools`). `session/request_permission`
 allows only `pi_host` / forwarded `kiroName` / `pi_*` and otherwise picks
 `reject_always`/`reject_once` (or `cancelled`). `excludedTools: ["@builtin"]` is
-written for CLI 3+; kiro-cli 2.21 ignores it, so natives that skip the permission RPC
-cannot be blocked from this extension.
+written for CLI 3+; kiro-cli 2.21 parses the field but it has no effect there, so
+natives that skip the permission RPC cannot be blocked from this extension.
+
+## Amendment 5 — 2026-09-08: fresh sessions have no builtins; leaks come from restores
+
+Probe against kiro-cli 2.21.1 (minimal ACP handshake + a probe MCP server
+exposing a colliding `read`): a **fresh** session whose agent config lists only
+`tools: ["@pi_host"]` registers **no builtins at all** — no `NameCollision`, and
+`_kiro.dev/commands/available` lists zero `source: "built-in"` tools. The
+collision premise of amendments 4 and the aliasing work holds only for two
+cases: the `kiro_default` fallback (agent not discovered) and `session/load` /
+`session/resume` restoring a **persisted agent snapshot** that predates the
+current config (observed in production: only restored sessions showed
+`NameCollision`; fresh ones never did).
+
+Mitigations, in order:
+
+1. **Persistence gate.** The semantic agent config (everything except the
+   random `name`) is hashed into `agentConfigFingerprint` and stored with every
+   persisted session. A mismatch — including records saved before the field
+   existed — refuses restore and starts a fresh session.
+2. **Runtime detection.** kiro-cli pushes `_kiro.dev/commands/available` with
+   the model's actual tool list (`tools[].source`: `built-in` | `mcp:<server>`).
+   The extension logs it (`model-visible tools`); on any `built-in` entry
+   (`KIRO BUILTINS LEAKED`) the backend is quarantined (its snapshot is not
+   persisted again — otherwise the leaked session would be re-resumed with a
+   matching config fingerprint), the persisted snapshot is cleared, and for
+   restored-session leaks the process restarts before the next turn. An
+   agent-fallback leak is only logged: `_kiro.dev/agent/not_found`
+   (kiro_default fallback) is reported loudly.
+3. **Execution gate.** `--trust-tools=@pi_host` + deny-by-default permission
+   RPC stays as the backstop; verified live: a pi_host tool executes with zero
+   permission RPCs, so the gate costs nothing on the happy path.
 
 ## Amendment 3 — 2026-09-04: dormant mirror removed
 
