@@ -55,8 +55,11 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
       extension("read"),
       extension("bash"),
       extension("edit"),
+      extension("todo_list"),
+      extension("use_aws"),
+      extension("code"),
     ],
-    ["subagent", "read", "bash", "edit"],
+    ["subagent", "read", "bash", "edit", "todo_list", "use_aws", "code"],
   );
   const byPi = Object.fromEntries(
     catalog.tools.map((tool) => [tool.piName, tool.kiroName]),
@@ -65,6 +68,12 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
   assert(byPi.read === "pi_read", "read aliases around FsRead");
   assert(byPi.bash === "bash", "bash keeps its Pi name (no Kiro builtin clash)");
   assert(byPi.edit === "edit", "edit keeps its Pi name");
+  assert(
+    byPi.todo_list === "pi_todo_list" &&
+      byPi.use_aws === "pi_use_aws" &&
+      byPi.code === "pi_code",
+    "v2-name builtins (todo_list/use_aws/code) alias too",
+  );
   assert(
     catalog.piNameByKiroName.get("pi_subagent") === "subagent",
     "pi_subagent maps back to Pi subagent",

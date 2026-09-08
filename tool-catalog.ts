@@ -28,26 +28,43 @@ const KIRO_NAME = /^[A-Za-z0-9_-]+$/;
 const MAX_KIRO_NAME_LENGTH = 64;
 const ALIAS_PREFIX = "pi_";
 
-/** Kiro still registers these builtins even when the agent config is only
- * `@pi_host`. An MCP tool with the same name is dropped as
- * `NameCollision(BuiltIn(...))` and Kiro runs the native tool instead —
+/** Kiro built-in tool names (kiro-cli 2.21.1 registry). A fresh session with
+ * `tools: ["@pi_host"]` registers none of them, but a restored session
+ * (`session/load`) can resurrect a stale agent snapshot where they are active
+ * again — an MCP tool with the same name is then dropped as
+ * `NameCollision(BuiltIn(...))` and Kiro runs the native tool instead,
  * invisible in pi (no `pi_host` `tools/call`). Alias them so the forwarded
- * spec survives. Observed: `subagent` → AgentCrew, `read` → FsRead,
- * `write` → FsWrite, `web_search` → WebSearch. `delegate` is the crew-shaped
- * name in Kiro agent config examples. */
+ * spec survives. Observed live: `subagent` → AgentCrew, `read` → FsRead,
+ * `write` → FsWrite, `web_search` → WebSearch; the rest come from the
+ * registry embedded in the CLI (short names plus v2 aliases like
+ * `fs_read`/`execute_bash`/`use_subagent`). */
 export const KIRO_BUILTIN_NAMES = new Set([
   "aws",
+  "code",
   "delegate",
+  "execute_bash",
+  "fs_read",
+  "fs_write",
   "glob",
+  "goal",
   "grep",
   "introspect",
   "knowledge",
   "read",
   "report",
+  "report_issue",
+  "session",
+  "session_management",
   "shell",
   "subagent",
+  "summary",
+  "switch_to_execution",
   "thinking",
   "todo",
+  "todo_list",
+  "tool_search",
+  "use_aws",
+  "use_subagent",
   "web_fetch",
   "web_search",
   "write",
