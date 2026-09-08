@@ -316,6 +316,40 @@ export function streamKiroAcp(
             textChunks += 1;
             textWriter.delta(text, messageId);
           }
+        } else if (
+          update.sessionUpdate === "tool_call" ||
+          update.sessionUpdate === "tool_call_update"
+        ) {
+          const meta = (update as any)._meta?.kiro ?? {};
+          const mcpServer =
+            typeof meta.mcpServerName === "string"
+              ? meta.mcpServerName
+              : typeof (update as any)._meta?.mcpServerName === "string"
+                ? (update as any)._meta.mcpServerName
+                : undefined;
+          const native = mcpServer !== "pi_host";
+          log(
+            native
+              ? "native ACP tool update (not forwarded to pi)"
+              : "ACP tool update",
+            {
+              session: session.id,
+              sessionUpdate: update.sessionUpdate,
+              native,
+              mcpServer: mcpServer ?? null,
+              kiroToolName:
+                meta.toolName ?? (update as any).title ?? null,
+              toolCallId:
+                (update as any).toolCallId ?? (update as any).id ?? null,
+              status: (update as any).status ?? null,
+              kind: (update as any).kind ?? null,
+            },
+          );
+        } else if (update.sessionUpdate) {
+          log("unhandled ACP sessionUpdate", {
+            session: session.id,
+            sessionUpdate: update.sessionUpdate,
+          });
         }
       };
 

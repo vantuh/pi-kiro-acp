@@ -1247,7 +1247,7 @@ export class AcpSession {
       includeMcpJson: false,
       mcpServers: {},
       prompt:
-        "You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives.",
+        "You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives. Do not use Kiro native subagent/delegate/crew pipelines; delegate only through pi_host tools (the forwarded Pi subagent tool is named pi_subagent).",
     };
 
     this.agentRootPath = join(tmpdir(), "kiro-acp", `agent-root-${this.id}`);

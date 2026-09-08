@@ -97,6 +97,9 @@ path anymore.
 | `prompt parts` | `{ session, promptChars, replayPromptChars, orphanedToolResults, recoverInPlace, hadLiveConversation, sessionBusy, hasActivePrompt, persistenceKey }` | Before sending to kiro-cli (`recoverInPlace` = a dropped tool result is being handed back instead of the user message) |
 | `timing first thinking` | `{ session, ttftMs, sincePromptMs }` | First `agent_thought_chunk` |
 | `timing first text` | `{ session, ttftMs, sincePromptMs, sinceThinkingMs }` | First `agent_message_chunk` |
+| `native ACP tool update (not forwarded to pi)` | `{ session, sessionUpdate, native, mcpServer, kiroToolName, toolCallId, status, kind }` | ACP `tool_call` / `tool_call_update` without `pi_host` (Kiro AgentCrew / native fs) |
+| `ACP tool update` | same | ACP tool update that *is* tagged `pi_host` |
+| `unhandled ACP sessionUpdate` | `{ session, sessionUpdate }` | Any other `sessionUpdate` kind |
 | `timing first tool` | `{ session, sinceTurnMs, sincePromptMs, toolName }` | First bridge tool call |
 | `tool calls → stream` | `{ session, count, callIds }` | Tool calls emitted to AI stream |
 | `tool call queued` | `{ session, callId, toolName }` | Tool call received from bridge |
@@ -232,15 +235,21 @@ See also `LATENCY-FIX-PLAN.md` (same directory).
 
 ### Native Kiro tool activity not visible in pi
 
-Since the forwarded transport (ADR 0001 amendment 2026-09-04) Kiro has no native tools:
-every tool call — `read`, `bash`, `edit`, `write`, extension tools — crosses the pi_host
-bridge and renders as a real pi tool call (`toolCall`/`toolResult` pair), so there is
-nothing separate to "see". The mirror that once rendered Kiro's native tools as
-`<!--kiro-tool-->` marker blocks was removed along with its markdown transformer (ADR
-0001 amendment 3); the only remaining trace is the strip readers in
-`native-tool-frame.ts`, which clean legacy marker blocks and one-liner frames out of
-historical persisted transcripts before they reach the model. New frames are never
-created.
+Kiro still registers builtins (`subagent`/AgentCrew, `read`/FsRead, `write`/FsWrite,
+`web_search`). An MCP tool with the same name is dropped (`NameCollision(BuiltIn(...))`)
+and Kiro runs the native tool — no `pi_host` `tools/call`, so pi shows silence after
+"делегую scout". The forwarded catalog aliases those names (`subagent` → `pi_subagent`,
+`read` → `pi_read`, …) so the MCP spec survives. `bash`/`edit` keep their Pi names.
+
+If a native call still happens, look for:
+
+```sh
+grep -E 'native ACP tool update|NameCollision|Aliasing ' "$LOG"
+```
+
+`native ACP tool update (not forwarded to pi)` is an ACP `tool_call` / `tool_call_update`
+that did not go through `pi_host` (crew/fs). The display-only mirror is gone (ADR 0001
+amendment 3); these lines are the remaining live trace.
 
 ### Wrong session selected / unexpected resumption
 

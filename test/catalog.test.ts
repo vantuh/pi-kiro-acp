@@ -49,6 +49,35 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
 }
 
 {
+  const catalog = buildForwardedToolCatalog(
+    [
+      extension("subagent"),
+      extension("read"),
+      extension("bash"),
+      extension("edit"),
+    ],
+    ["subagent", "read", "bash", "edit"],
+  );
+  const byPi = Object.fromEntries(
+    catalog.tools.map((tool) => [tool.piName, tool.kiroName]),
+  );
+  assert(byPi.subagent === "pi_subagent", "subagent aliases around AgentCrew");
+  assert(byPi.read === "pi_read", "read aliases around FsRead");
+  assert(byPi.bash === "bash", "bash keeps its Pi name (no Kiro builtin clash)");
+  assert(byPi.edit === "edit", "edit keeps its Pi name");
+  assert(
+    catalog.piNameByKiroName.get("pi_subagent") === "subagent",
+    "pi_subagent maps back to Pi subagent",
+  );
+  assert(
+    catalog.diagnostics.some((line) =>
+      line.includes("Aliasing subagent → pi_subagent"),
+    ),
+    "builtin alias is recorded in diagnostics",
+  );
+}
+
+{
   const catalog = buildForwardedToolCatalog([], []);
   assert(
     catalog.tools.length === 0,

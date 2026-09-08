@@ -28,6 +28,31 @@ const KIRO_NAME = /^[A-Za-z0-9_-]+$/;
 const MAX_KIRO_NAME_LENGTH = 64;
 const ALIAS_PREFIX = "pi_";
 
+/** Kiro still registers these builtins even when the agent config is only
+ * `@pi_host`. An MCP tool with the same name is dropped as
+ * `NameCollision(BuiltIn(...))` and Kiro runs the native tool instead —
+ * invisible in pi (no `pi_host` `tools/call`). Alias them so the forwarded
+ * spec survives. Observed: `subagent` → AgentCrew, `read` → FsRead,
+ * `write` → FsWrite, `web_search` → WebSearch. `delegate` is the crew-shaped
+ * name in Kiro agent config examples. */
+const KIRO_BUILTIN_NAMES = new Set([
+  "aws",
+  "delegate",
+  "glob",
+  "grep",
+  "introspect",
+  "knowledge",
+  "read",
+  "report",
+  "shell",
+  "subagent",
+  "thinking",
+  "todo",
+  "web_fetch",
+  "web_search",
+  "write",
+]);
+
 export function isKiroToolName(name: string): boolean {
   return (
     name.length > 0 &&
@@ -76,6 +101,10 @@ function schemaOrFallback(
 }
 
 function aliasFor(piName: string, used: Set<string>): string | undefined {
+  if (KIRO_BUILTIN_NAMES.has(piName)) {
+    const preferred = `${ALIAS_PREFIX}${piName}`;
+    if (isKiroToolName(preferred) && !used.has(preferred)) return preferred;
+  }
   const hex = digest(piName);
   for (let length = 16; length <= hex.length; length += 4) {
     const candidate = `${ALIAS_PREFIX}${hex.slice(0, length)}`;
@@ -83,6 +112,10 @@ function aliasFor(piName: string, used: Set<string>): string | undefined {
       return candidate;
   }
   return undefined;
+}
+
+function needsKiroAlias(piName: string): boolean {
+  return !isKiroToolName(piName) || KIRO_BUILTIN_NAMES.has(piName);
 }
 
 /** Build the active tool catalog exposed to Kiro. Builtin (read/bash/…)
@@ -124,17 +157,22 @@ export function buildForwardedToolCatalog(
     a.piName.localeCompare(b.piName),
   );
   const used = new Set<string>();
-  // Preserve every valid original name. Invalid names alias around them.
+  // Keep original names that are Kiro-safe and do not collide with builtins.
   for (const tool of tools)
-    if (isKiroToolName(tool.piName)) used.add(tool.piName);
+    if (!needsKiroAlias(tool.piName)) used.add(tool.piName);
   for (const tool of tools) {
-    if (isKiroToolName(tool.piName)) continue;
+    if (!needsKiroAlias(tool.piName)) continue;
     const alias = aliasFor(tool.piName, used);
     if (!alias) {
       diagnostics.push(
         `Skipping ${tool.piName}: could not allocate a unique Kiro-safe alias.`,
       );
       continue;
+    }
+    if (KIRO_BUILTIN_NAMES.has(tool.piName)) {
+      diagnostics.push(
+        `Aliasing ${tool.piName} → ${alias} to avoid a Kiro builtin name collision.`,
+      );
     }
     tool.kiroName = alias;
     used.add(alias);
