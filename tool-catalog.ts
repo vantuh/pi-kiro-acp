@@ -35,7 +35,7 @@ const ALIAS_PREFIX = "pi_";
  * spec survives. Observed: `subagent` → AgentCrew, `read` → FsRead,
  * `write` → FsWrite, `web_search` → WebSearch. `delegate` is the crew-shaped
  * name in Kiro agent config examples. */
-const KIRO_BUILTIN_NAMES = new Set([
+export const KIRO_BUILTIN_NAMES = new Set([
   "aws",
   "delegate",
   "glob",

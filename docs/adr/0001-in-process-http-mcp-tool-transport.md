@@ -98,6 +98,16 @@ which the display-only mirror could never provide.
   auto-approves the `pi_host` MCP tools inside Kiro, but nothing executes outside
   pi's normal permission model anymore.
 
+## Amendment 4 — 2026-09-08: deny Kiro builtins at permission time
+
+`tools: ["@pi_host"]` does not unregister AgentCrew/FsRead/…. Same-named MCP
+tools are still dropped (`NameCollision`); the catalog aliases them (`pi_subagent`).
+Spawn is `--trust-tools=@pi_host` (not `--trust-all-tools`). `session/request_permission`
+allows only `pi_host` / forwarded `kiroName` / `pi_*` and otherwise picks
+`reject_always`/`reject_once` (or `cancelled`). `excludedTools: ["@builtin"]` is
+written for CLI 3+; kiro-cli 2.21 ignores it, so natives that skip the permission RPC
+cannot be blocked from this extension.
+
 ## Amendment 3 — 2026-09-04: dormant mirror removed
 
 After a week of live B2 usage the native-tool mirror (`native-tool-mirror.ts`),

@@ -187,16 +187,60 @@ async function main(): Promise<void> {
     assert(frames.length === 3, "every inbound request gets exactly one reply");
     assert(
       frames[0].id === 5 &&
-        frames[0].result.outcome.optionId === "allow_always",
-      "permission prefers allow_always",
+        frames[0].result.outcome.optionId === "reject_once",
+      "unidentified permission is denied (reject_once)",
     );
     assert(
-      frames[1].result.outcome.optionId === "allow_once",
-      "permission falls back to the first option",
+      frames[1].result.outcome.outcome === "cancelled",
+      "denied permission with no reject option is cancelled",
     );
     assert(
       frames[2].id === 7 && frames[2].result === null,
       "unknown inbound requests are answered with null",
+    );
+  }
+
+  {
+    const { session, written } = fakeSession();
+    session.catalogProvider = () =>
+      ({
+        tools: [{ kiroName: "bash", piName: "bash" }],
+        piNameByKiroName: new Map([["bash", "bash"]]),
+        fingerprint: "test",
+        diagnostics: [],
+      }) as any;
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 8,
+        method: "session/request_permission",
+        params: {
+          options: [{ id: "reject_always" }, { id: "allow_always" }],
+          toolCall: {
+            _meta: { kiro: { mcpServerName: "pi_host", toolName: "bash" } },
+          },
+        },
+      }),
+    );
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        id: 9,
+        method: "session/request_permission",
+        params: {
+          options: [{ id: "reject_always" }, { id: "allow_always" }],
+          toolCall: { toolName: "subagent" },
+        },
+      }),
+    );
+    const frames = parseLines(written);
+    assert(
+      frames[0].result.outcome.optionId === "allow_always",
+      "pi_host bash is allowed",
+    );
+    assert(
+      frames[1].result.outcome.optionId === "reject_always",
+      "native subagent is rejected always",
     );
   }
 

@@ -24,6 +24,12 @@ import {
   type ToolBridgeContent,
   type ToolBridgeResult,
 } from "./tool-bridge.ts";
+import {
+  isPiHostPermission,
+  kiroToolNameFromPermissionParams,
+  mcpServerFromPermissionParams,
+  pickPermissionOptionId,
+} from "./permissions.ts";
 import type { ForwardedToolCatalog } from "./tool-catalog.ts";
 import type {
   PendingRpc,
@@ -258,14 +264,7 @@ export class AcpSession {
         : p.resolve(msg.result);
     } else if (hasId && hasMethod) {
       if (msg.method === "session/request_permission") {
-        const opts = msg.params?.options || [];
-        const optId =
-          opts.find((o: any) => o.id === "allow_always")?.id ||
-          opts[0]?.id ||
-          "allow_once";
-        this.rpcRespond(msg.id, {
-          outcome: { outcome: "selected", optionId: optId },
-        });
+        this.respondToPermissionRequest(msg.id, msg.params);
       } else {
         this.rpcRespond(msg.id, null);
       }
@@ -285,6 +284,35 @@ export class AcpSession {
         this.handleMetadata(msg.params || {});
       }
     }
+  }
+
+  private forwardedKiroNames(): string[] {
+    if (!this.catalogProvider) return [];
+    return this.currentCatalog().tools.map((tool) => tool.kiroName);
+  }
+
+  private respondToPermissionRequest(id: number, params: unknown): void {
+    const options = Array.isArray((params as any)?.options)
+      ? ((params as any).options as Array<{ id?: string }>)
+      : [];
+    const allow = isPiHostPermission(params, this.forwardedKiroNames());
+    const optionId = pickPermissionOptionId(options, allow);
+    const toolName = kiroToolNameFromPermissionParams(params) ?? null;
+    const mcpServer = mcpServerFromPermissionParams(params) ?? null;
+    log("permission request", {
+      session: this.id,
+      allow,
+      toolName,
+      mcpServer,
+      optionId,
+      cancelled: !optionId,
+    });
+    this.rpcRespond(
+      id,
+      optionId
+        ? { outcome: { outcome: "selected", optionId } }
+        : { outcome: { outcome: "cancelled" } },
+    );
   }
 
   private handleUsageUpdate(
@@ -427,7 +455,11 @@ export class AcpSession {
       agentName: this.agentName,
       effort: this.currentEffort,
     });
-    const args = ["acp", "--agent", this.agentName, "--trust-all-tools"];
+    // Trust only the pi_host MCP server. `--trust-all-tools` also auto-approved
+    // Kiro builtins (AgentCrew/FsRead/…) which then ran inside kiro-cli with no
+    // pi_host tools/call. `--trust-tools=@pi_host` plus deny-by-default in
+    // session/request_permission is the execution gate.
+    const args = ["acp", "--agent", this.agentName, "--trust-tools", "@pi_host"];
     if (this.currentEffort) args.push("--effort", this.currentEffort);
     if (KIRO_VERBOSITY > 0) args.push(`-${"v".repeat(KIRO_VERBOSITY)}`);
     const spawnAt = Date.now();
@@ -1237,13 +1269,16 @@ export class AcpSession {
   }
 
   private writeAgentCfg(): void {
-    // Forwarded transport (ADR 0001 amendment 2026-09-04): Kiro has no native
-    // tools — every call crosses the pi_host bridge and is executed by pi, so
-    // pi emits real tool_execution_* events (visible to FleetView and meters).
+    // Forwarded transport: Kiro has no *intended* native tools — every allowed
+    // call crosses the pi_host bridge. Builtins still exist in kiro-cli 2.21;
+    // permission deny + --trust-tools=@pi_host is the execution gate.
     const config = {
       name: this.agentName,
       tools: ["@pi_host"],
       allowedTools: ["@pi_host"],
+      // CLI 3.0 / IDE 1.0: strip builtins even if `tools` is widened. kiro-cli
+      // 2.21 ignores this field (not in the binary); permission deny still gates.
+      excludedTools: ["@builtin"],
       includeMcpJson: false,
       mcpServers: {},
       prompt:

@@ -33,6 +33,10 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     JSON.stringify(config.allowedTools) === JSON.stringify(["@pi_host"]),
     "agent config allowedTools list only @pi_host",
   );
+  assert(
+    JSON.stringify(config.excludedTools) === JSON.stringify(["@builtin"]),
+    "agent config excludedTools strips Kiro builtins (honored on CLI 3+)",
+  );
   (session as any).removeAgentFiles();
 }
 

@@ -23,7 +23,10 @@ import {
   savePersistedKiroSession,
 } from "./session-persistence.ts";
 import { toKiroEffort, type AcpSession } from "./session.ts";
-import { buildForwardedToolCatalog } from "./tool-catalog.ts";
+import {
+  buildForwardedToolCatalog,
+  KIRO_BUILTIN_NAMES,
+} from "./tool-catalog.ts";
 import { pruneIdleSessions, routeSession } from "./session-manager.ts";
 
 /**
@@ -327,7 +330,22 @@ export function streamKiroAcp(
               : typeof (update as any)._meta?.mcpServerName === "string"
                 ? (update as any)._meta.mcpServerName
                 : undefined;
-          const native = mcpServer !== "pi_host";
+          const kiroToolName =
+            typeof meta.toolName === "string"
+              ? meta.toolName
+              : typeof (update as any).title === "string"
+                ? (update as any).title
+                : null;
+          // Untagged updates (no mcpServer) are not native by default — missing
+          // `_meta` used to mark every tool_call as native. Treat as native only
+          // when mcpServer is set and not pi_host, or the name is a Kiro builtin
+          // (subagent/read/…) without a pi_ prefix.
+          const native =
+            (typeof mcpServer === "string" && mcpServer !== "pi_host") ||
+            (mcpServer == null &&
+              typeof kiroToolName === "string" &&
+              KIRO_BUILTIN_NAMES.has(kiroToolName) &&
+              !kiroToolName.startsWith("pi_"));
           log(
             native
               ? "native ACP tool update (not forwarded to pi)"
@@ -337,8 +355,7 @@ export function streamKiroAcp(
               sessionUpdate: update.sessionUpdate,
               native,
               mcpServer: mcpServer ?? null,
-              kiroToolName:
-                meta.toolName ?? (update as any).title ?? null,
+              kiroToolName,
               toolCallId:
                 (update as any).toolCallId ?? (update as any).id ?? null,
               status: (update as any).status ?? null,

@@ -71,9 +71,12 @@ Pi extension tools reach Kiro through an in-process Streamable HTTP MCP server
   tools exposed to Kiro via pi_host changed (logged once per fingerprint). Empty means
   Kiro has zero tools — usually a session or subagent plan that deactivated everything.
 
-All Kiro tools — builtins and extension tools alike — cross the pi_host bridge and are
-executed by pi (ADR 0001 amendment 2026-09-04); there are no native Kiro tools on this
-path anymore.
+Forwarded Pi tools cross the `pi_host` bridge and are executed by pi (ADR 0001
+amendment 2026-09-04). kiro-cli still *registers* builtins (AgentCrew/FsRead/…);
+same-named MCP specs are dropped (`NameCollision`) unless aliased (`pi_subagent`).
+Spawn uses `--trust-tools=@pi_host` (not `--trust-all-tools`). Permission RPC
+denies anything that is not `pi_host` / a forwarded `kiroName` / `pi_*`.
+`excludedTools: ["@builtin"]` is written for CLI 3+; 2.21 ignores it.
 
 ---
 
@@ -100,6 +103,7 @@ path anymore.
 | `native ACP tool update (not forwarded to pi)` | `{ session, sessionUpdate, native, mcpServer, kiroToolName, toolCallId, status, kind }` | ACP `tool_call` / `tool_call_update` without `pi_host` (Kiro AgentCrew / native fs) |
 | `ACP tool update` | same | ACP tool update that *is* tagged `pi_host` |
 | `unhandled ACP sessionUpdate` | `{ session, sessionUpdate }` | Any other `sessionUpdate` kind |
+| `permission request` | `{ session, allow, toolName, mcpServer, optionId, cancelled }` | `session/request_permission` allow/deny |
 | `timing first tool` | `{ session, sinceTurnMs, sincePromptMs, toolName }` | First bridge tool call |
 | `tool calls → stream` | `{ session, count, callIds }` | Tool calls emitted to AI stream |
 | `tool call queued` | `{ session, callId, toolName }` | Tool call received from bridge |
@@ -237,19 +241,23 @@ See also `LATENCY-FIX-PLAN.md` (same directory).
 
 Kiro still registers builtins (`subagent`/AgentCrew, `read`/FsRead, `write`/FsWrite,
 `web_search`). An MCP tool with the same name is dropped (`NameCollision(BuiltIn(...))`)
-and Kiro runs the native tool — no `pi_host` `tools/call`, so pi shows silence after
+and Kiro may run the native tool — no `pi_host` `tools/call`, so pi shows silence after
 "делегую scout". The forwarded catalog aliases those names (`subagent` → `pi_subagent`,
 `read` → `pi_read`, …) so the MCP spec survives. `bash`/`edit` keep their Pi names.
 
-If a native call still happens, look for:
+Execution gate (kiro-cli 2.21 cannot unregister builtins): `--trust-tools=@pi_host`
+plus deny-by-default `session/request_permission`. If a native call still happens
+(no permission RPC), only a CLI that honors `excludedTools` can stop it.
 
 ```sh
-grep -E 'native ACP tool update|NameCollision|Aliasing ' "$LOG"
+grep -E 'native ACP tool update|permission request|NameCollision|Aliasing ' "$LOG"
 ```
 
-`native ACP tool update (not forwarded to pi)` is an ACP `tool_call` / `tool_call_update`
-that did not go through `pi_host` (crew/fs). The display-only mirror is gone (ADR 0001
-amendment 3); these lines are the remaining live trace.
+`native ACP tool update` is an ACP `tool_call` with `mcpServer` set and not `pi_host`,
+or a builtin name (`subagent`, `read`, …) and no mcpServer. Missing `_meta` on a
+non-builtin (e.g. `bash`) is *not* treated as native. The display-only mirror is gone
+(ADR 0001 amendment 3); these lines plus `permission request { allow: false }` are
+the remaining live trace.
 
 ### Wrong session selected / unexpected resumption
 
