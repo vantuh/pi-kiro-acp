@@ -87,6 +87,10 @@ export function loadPersistedKiroSession(
       typeof parsed.historyFingerprint !== "string"
     )
       return null;
+    // Timestamps must be real finite numbers: a missing lastUsed would make
+    // the TTL comparison NaN (always "fresh") and pin stale records forever.
+    if (!Number.isFinite(parsed.lastUsed) || !Number.isFinite(parsed.createdAt))
+      return null;
     if (Date.now() - parsed.lastUsed > SESSION_TTL_MS) return null;
     return parsed;
   } catch {

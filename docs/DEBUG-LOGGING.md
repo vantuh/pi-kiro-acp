@@ -45,7 +45,9 @@ one pipe can in principle interleave a large frame, so this stays off by default
 is meant for a specific hunt:
 
 ```sh
-PI_KIRO_ACP_VERBOSE=2 pi
+# logger.debug + logger.verbose go to ~/.pi/agent/kiro-acp.json:
+# { "logger": { "debug": true, "verbose": 2 } }
+pi
 ```
 
 Rough volume for one initialize + `session/new` cycle: `-v` ≈ 8 lines, `-vv` ≈ 20,
@@ -172,7 +174,7 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 | `rpc ←` | `{ session, method, id, ms, hasError }` | RPC response received (`ms` = roundtrip) |
 | `RPC TIMEOUT` | `{ session, method, id, timeoutMs, remainingPending }` | RPC exceeded timeout (60s default) |
 | `stdout parse error` | `{ session, line }` | kiro-cli stdout is not valid JSON (truncated to 200 chars) |
-| `kiro log` | `{ session, text }` | Same, but with `PI_KIRO_ACP_VERBOSE` on: kiro-cli's own `-v` line, kept in full |
+| `kiro log` | `{ session, text }` | Same, but with `logger.verbose` on (kiro-acp.json): kiro-cli's own `-v` line, kept in full |
 | `stdout dispatch error` | `{ session, method, id, error }` | A consumer callback threw while handling a stdout message |
 | `orphan RPC response` | `{ session, id, hasError }` | RPC response with no pending request |
 | `kiro stderr` | `{ session, text }` | stderr from kiro-cli process (one entry per line, ANSI stripped) |
@@ -215,8 +217,8 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 1. Check `session initialized` for a non-null `bridgePort` — without it Kiro was never told about `pi_host`
 2. Check `bridge tool call received` — confirms Kiro's `tools/call` reached the extension
 3. Check `tool call queued` → `tool calls → stream` to confirm it was flushed to the AI stream
-4. If a fs/bash/glob/grep call is missing entirely: that is expected — those are Kiro-native and bypass the bridge (look for a mirrored thinking block in the transcript instead)
-5. If the tool is missing from Kiro's list, check the catalog filter in `tool-catalog.ts` (only active, non-builtin/non-sdk pi tools are forwarded)
+4. If a call is missing entirely, check for `NameCollision` in the kiro-cli WARN lines: a forwarded tool sharing a Kiro builtin name was dropped; the catalog aliases those (`read` → `pi_read`, …)
+5. If the tool is missing from Kiro's list, check `forwarded tool catalog updated` diagnostics in `tool-catalog.ts` (all active builtin + extension pi tools are forwarded; only host-SDK customs stay out)
 
 ### Session dies unexpectedly
 

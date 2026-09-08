@@ -361,8 +361,16 @@ export class AcpSession {
    * change; built-in entries mean the agent config was not applied (agent
    * fallback) or a restored session resurrected a stale agent snapshot. */
   private handleCommandsAvailable(params: Record<string, unknown>): void {
-    const tools = Array.isArray(params.tools) ? params.tools : [];
-    const seen = tools
+    // Scope to the current ACP session when both ids are known: late
+    // notifications from a prior session must not flip quarantine state.
+    const sessionId =
+      typeof params.sessionId === "string" ? params.sessionId : undefined;
+    if (sessionId && this.acpSessionId && sessionId !== this.acpSessionId)
+      return;
+    // Malformed or absent tools payloads are never authoritative: they must
+    // not update the fingerprint nor lift leak/fallback state.
+    if (!Array.isArray(params.tools)) return;
+    const seen = (params.tools as any[])
       .map((t: any) =>
         typeof t?.name === "string"
           ? {
@@ -377,6 +385,13 @@ export class AcpSession {
           source: string;
         } => t !== null,
       );
+    // An empty list is not informative while the backend is tainted: skip
+    // it entirely instead of interpreting it as a recovery.
+    if (
+      seen.length === 0 &&
+      (this.builtinsLeaked || this.backendQuarantined || this.agentFallback)
+    )
+      return;
     const fingerprint = hashSystemPrompt(JSON.stringify(seen));
     if (fingerprint === this.lastToolsListFingerprint) return;
     this.lastToolsListFingerprint = fingerprint;
@@ -407,6 +422,7 @@ export class AcpSession {
       this.builtinsLeaked = false;
       this.backendQuarantined = false;
       this.agentFallback = false;
+      this.recoveryRestarts = 0;
     }
   }
 
@@ -423,7 +439,6 @@ export class AcpSession {
       session: this.id,
       builtins,
       restoredFromPersistence: this.restoredFromPersistence,
-      willRestartNextTurn: this.restoredFromPersistence,
     });
     if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
   }
@@ -547,10 +562,12 @@ export class AcpSession {
         await this.stop();
       }
     }
-    if (this.started && (this.agentFallback || (this.builtinsLeaked && this.restoredFromPersistence))) {
+    if (this.started && (this.builtinsLeaked || this.agentFallback)) {
       // The model's tool list is tainted (leaked restored snapshot or agent
       // fallback). The current turn still runs (the permission gate blocks
-      // execution); the next turn must start from a fresh process.
+      // execution); the next turn must start from a fresh process. The
+      // two-attempt bound absorbs deterministic failures without looping —
+      // also covering a future CLI that leaks builtins into fresh sessions.
       if (this.busy) {
         log("deferring leaked-builtins restart while session is busy", {
           session: this.id,
@@ -574,7 +591,6 @@ export class AcpSession {
         log("restarting Kiro: leaked builtins or agent fallback", {
           session: this.id,
           agentFallback: this.agentFallback,
-          restoredFromPersistence: this.restoredFromPersistence,
           attempt: this.recoveryRestarts + 1,
         });
         this.recoveryRestarts++;

@@ -65,6 +65,13 @@ const mcpTools = [
     description: "Probe tool without a name collision.",
     inputSchema: { type: "object", properties: {}, required: [] },
   },
+  {
+    // the aliased form of the colliding `read` — must survive a fallback
+    // NameCollision while plain `read` is dropped (aliasing defense)
+    name: "pi_read",
+    description: "Aliased probe tool; survives builtin name collisions.",
+    inputSchema: { type: "object", properties: {}, required: [] },
+  },
 ];
 function startMcp() {
   const server = http.createServer((req, res) => {
@@ -248,13 +255,14 @@ const summarizeTools = (params) => {
 };
 
 // ---------- checks ----------
-const results = [];
+const results = []; // { name, pass } — executed checks only
+const skipped = []; // { name, why }
 const check = (name, pass, detail) => {
   results.push({ name, pass });
   console.log(`${pass ? "✓" : "✗"} ${name}${detail ? ` — ${detail}` : ""}`);
 };
 const skip = (name, why) => {
-  results.push({ name, pass: true });
+  skipped.push({ name, why });
   console.log(`- SKIP ${name} — ${why}`);
 };
 
@@ -268,7 +276,10 @@ await withKiro(["--agent", "test-gate", "--trust-tools", "@pi_host"], port, asyn
   check("T1a fresh session: zero built-in tools", s && s.builtins.length === 0, JSON.stringify(s));
   check(
     "T1b pi_host tools visible",
-    s && s.mcp.includes("read(mcp:pi_host)") && s.mcp.includes("pi_probe_tool(mcp:pi_host)"),
+    s &&
+      s.mcp.includes("read(mcp:pi_host)") &&
+      s.mcp.includes("pi_probe_tool(mcp:pi_host)") &&
+      s.mcp.includes("pi_read(mcp:pi_host)"),
     JSON.stringify(s),
   );
   check("T1c no NameCollision with gate config", !k.verbose.some((l) => l.includes("NameCollision")));
@@ -297,6 +308,14 @@ await withKiro(["--agent", "no-such-agent-e2e", "--trust-all-tools"], port, asyn
     "T3 NameCollision(BuiltIn(FsRead)) under fallback",
     !!collision && collision.includes("BuiltIn(FsRead)"),
     collision ? collision.slice(0, 100) : "no collision line in 10s",
+  );
+  const sAliased = summarizeTools(await k.latestTools());
+  check(
+    "T3b aliased pi_read survives the fallback collision",
+    sAliased &&
+      sAliased.mcp.includes("pi_read(mcp:pi_host)") &&
+      !sAliased.mcp.includes("read(mcp:pi_host)"),
+    JSON.stringify(sAliased),
   );
 });
 
@@ -370,5 +389,9 @@ rmSync(AGENT_DIR, { recursive: true, force: true });
 console.log("\n==== E2E SUMMARY ====");
 const failed = results.filter((r) => !r.pass);
 for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
-console.log(`\n${results.length - failed.length}/${results.length} checks passed`);
+for (const s of skipped) console.log(`SKIP   ${s.name} (${s.why})`);
+console.log(
+  `\n${results.length - failed.length}/${results.length} checks passed` +
+    (skipped.length ? `, ${skipped.length} skipped` : ""),
+);
 process.exit(failed.length ? 1 : 0);

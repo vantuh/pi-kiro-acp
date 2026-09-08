@@ -45,6 +45,7 @@ kiro-cli's local session store (`kiro-cli chat --sessions`) — harmless.
 | **T1c** | Same-named MCP tools are **not** dropped (`NameCollision`) in a fresh session | `pi_*` aliasing stays dormant |
 | **T2a–c** | A missing agent config falls back to `kiro_default`, which registers all builtins | `KIRO AGENT NOT FOUND` loud log |
 | **T3** | Under the fallback, the same-named MCP tool is dropped with `NameCollision(BuiltIn(FsRead))` | why aliasing exists |
+| **T3b** | The aliased `pi_read` **survives** the fallback collision and stays model-visible while plain `read` is dropped | the aliasing defense working under leak |
 | **T4-alt** | `session/load` across processes with the config still present does **not** leak builtins | persistence gate is sufficient here |
 | **T4** | **The production leak mechanism**: session created under an agent whose config file is deleted before restore (the extension removes agent files on `stop()`) → fallback → all builtins leak into the model's tool list | `KIRO BUILTINS LEAKED` detection + config-fingerprint persistence gate + quarantine |
 | **T5a–c** | The model actually calls a forwarded tool: `tools/call` reaches the MCP host, the update is tagged `pi_host`, and **zero** `session/request_permission` RPCs fire (`--trust-tools=@pi_host` costs nothing on the happy path) | bridge round-trip + execution gate |
@@ -57,5 +58,6 @@ broke and aliasing/permission-gate become load-bearing again.
 
 ## Exit code
 
-`0` when every non-skipped check passes, `1` otherwise (T5 checks are skipped,
-not failed, when `KIRO_E2E_LIVE=1`).
+`0` when every executed check passes, `1` otherwise. Checks skipped due to
+`KIRO_E2E_LIVE=1` (T5) are reported separately and excluded from the pass
+count.

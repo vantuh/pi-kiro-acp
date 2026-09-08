@@ -381,6 +381,48 @@ async function main(): Promise<void> {
   }
 
   {
+    // Malformed / empty / foreign notifications are never authoritative:
+    // they must not lift a quarantine set by a leak or agent fallback.
+    const { session } = fakeSession();
+    session.persistenceKey = null;
+    session.agentFallback = true;
+    session.builtinsLeaked = true;
+    session.backendQuarantined = true;
+    const post = (label: string) =>
+      assert(
+        session.builtinsLeaked === true &&
+          session.backendQuarantined === true &&
+          session.agentFallback === true,
+        label,
+      );
+
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", method: "_kiro.dev/commands/available", params: {} }),
+    );
+    post("missing tools payload does not lift quarantine");
+
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", method: "_kiro.dev/commands/available", params: { tools: null } }),
+    );
+    post("null tools payload does not lift quarantine");
+
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", method: "_kiro.dev/commands/available", params: { tools: [] } }),
+    );
+    post("empty tools list does not lift quarantine");
+
+    session.acpSessionId = "current"; // for the foreign-id scoping check
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/commands/available",
+        params: { sessionId: "foreign", tools: [{ name: "bash", source: "mcp:pi_host" }] },
+      }),
+    );
+    post("foreign-session notification does not lift quarantine");
+  }
+
+  {
     // A leak on a restored backend quarantines it (persistence suppressed)
     // and stop() resets the backend-scoped state.
     const { session } = fakeSession();

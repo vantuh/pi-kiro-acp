@@ -39,8 +39,12 @@ function assert(condition: unknown, label: string): void {
     "native subagent is denied even if pi_subagent is forwarded",
   );
   assert(
-    isPiHostPermission({ toolCall: { toolName: "pi_subagent" } }, []),
-    "aliased pi_subagent is allowed",
+    isPiHostPermission({ toolCall: { toolName: "pi_subagent" } }, ["pi_subagent"]),
+    "aliased pi_subagent is allowed when the catalog lists it",
+  );
+  assert(
+    !isPiHostPermission({ toolCall: { toolName: "pi_subagent" } }, []),
+    "pi_* names unknown to the catalog are denied (fail-safe, no blanket prefix allow)",
   );
   assert(
     isPiHostPermission({ toolCall: { toolName: "bash" } }, ["bash"]),
@@ -65,6 +69,11 @@ function assert(condition: unknown, label: string): void {
   assert(
     pickPermissionOptionId([{ id: "allow_once" }], false) === null,
     "deny with no reject option returns null (caller cancels)",
+  );
+  assert(
+    pickPermissionOptionId([{ id: "reject_once" }, { id: "reject_always" }], true) ===
+      null,
+    "allow with reject-only options never picks a reject (caller cancels)",
   );
 }
 
