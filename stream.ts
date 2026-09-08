@@ -673,7 +673,15 @@ export function streamKiroAcp(
       } else {
         session.activePromptDone = null;
         output.stopReason = "stop";
-        if (session.persistenceKey && session.acpSessionId) {
+        if (session.backendQuarantined) {
+          // The backend's snapshot leaked Kiro builtins; persisting it would
+          // re-resume the leak next turn (config fingerprint matches). The
+          // record was already cleared; the next turn restarts fresh.
+          log("skip persisting kiro session (backend quarantined)", {
+            session: session.id,
+            acpSessionId: session.acpSessionId,
+          });
+        } else if (session.persistenceKey && session.acpSessionId) {
           const now = Date.now();
           const existingPersisted = loadPersistedKiroSession(
             session.persistenceKey,
@@ -685,6 +693,7 @@ export function streamKiroAcp(
               context,
               output,
             ),
+            agentConfigFingerprint: session.agentConfigFingerprint ?? undefined,
             modelId: session.currentModelId,
             createdAt: existingPersisted?.createdAt ?? now,
             lastUsed: now,

@@ -7,6 +7,10 @@
 import { readFileSync } from "node:fs";
 import { AcpSession } from "../session.ts";
 import { stableJson } from "../helpers.ts";
+import {
+  agentConfigFingerprint,
+  canRestorePersisted,
+} from "../session-persistence.ts";
 import type { ToolBridgeCall } from "../tool-bridge.ts";
 
 let failed = false;
@@ -37,7 +41,76 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     JSON.stringify(config.excludedTools) === JSON.stringify(["@builtin"]),
     "agent config excludedTools strips Kiro builtins (honored on CLI 3+)",
   );
+  assert(
+    /^[0-9a-f]{64}$/.test(session.agentConfigFingerprint ?? ""),
+    "agent config fingerprint is SHA-256 hex",
+  );
   (session as any).removeAgentFiles();
+}
+
+{
+  // The persisted-session gate hashes the semantic config only: the random
+  // per-session `name` must not affect resumability, any semantic change must,
+  // and key order must not matter (canonical serialization).
+  const semantic = {
+    tools: ["@pi_host"],
+    allowedTools: ["@pi_host"],
+    excludedTools: ["@builtin"],
+    includeMcpJson: false,
+    mcpServers: {},
+    prompt: "p",
+  };
+  assert(
+    agentConfigFingerprint(semantic) === agentConfigFingerprint(semantic),
+    "same semantic config yields the same fingerprint",
+  );
+  assert(
+    agentConfigFingerprint({ name: "pi-kiro-aaaa", ...semantic }) ===
+      agentConfigFingerprint({ name: "pi-kiro-bbbb", ...semantic }),
+    "random per-session name does not affect the fingerprint",
+  );
+  assert(
+    agentConfigFingerprint(semantic) !==
+      agentConfigFingerprint({ ...semantic, tools: ["@pi_host", "@other"] }),
+    "a config change changes the fingerprint",
+  );
+}
+
+{
+  // Restore gate: history match AND config match; records without a config
+  // fingerprint predate the gate and never resume.
+  const record = {
+    version: 1 as const,
+    kiroSessionId: "k",
+    historyFingerprint: "h",
+    agentConfigFingerprint: "c",
+    createdAt: 0,
+    lastUsed: Date.now(),
+  };
+  assert(
+    canRestorePersisted(record, "h", "c").canUse,
+    "matching history and config allows restore",
+  );
+  assert(
+    !canRestorePersisted(record, "h", "other").configMatch,
+    "config fingerprint mismatch refuses restore",
+  );
+  assert(
+    !canRestorePersisted(
+      { ...record, agentConfigFingerprint: undefined },
+      "h",
+      "c",
+    ).canUse,
+    "record without a config fingerprint never resumes",
+  );
+  assert(
+    !canRestorePersisted(record, undefined, "c").canUse,
+    "missing history fingerprint never resumes",
+  );
+  assert(
+    !canRestorePersisted(null, "h", "c").canUse,
+    "no record never resumes",
+  );
 }
 
 {

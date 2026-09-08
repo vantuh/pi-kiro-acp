@@ -300,6 +300,102 @@ async function main(): Promise<void> {
     assert(written.length === 0, "notifications are never answered");
   }
 
+  // --- _kiro.dev/agent/not_found + commands/available (leak detection) ---
+  {
+    const { session } = fakeSession();
+    let threw = false;
+    try {
+      session.handleStdoutLine(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "_kiro.dev/agent/not_found",
+          params: {
+            sessionId: "x",
+            requestedAgent: "pi-kiro-abcd",
+            fallbackAgent: "kiro_default",
+          },
+        }),
+      );
+    } catch {
+      threw = true;
+    }
+    assert(!threw, "agent/not_found dispatches without crashing");
+    assert(
+      session.builtinsLeaked === false,
+      "agent/not_found alone does not set the leak flag",
+    );
+  }
+
+  {
+    const { session } = fakeSession();
+    session.persistenceKey = null;
+    const available = (tools: unknown[]) =>
+      session.handleStdoutLine(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "_kiro.dev/commands/available",
+          params: { sessionId: "x", tools },
+        }),
+      );
+
+    available([{ name: "bash", source: "mcp:pi_host" }]);
+    assert(
+      session.builtinsLeaked === false,
+      "mcp-only tools list is not a leak",
+    );
+
+    available([
+      { name: "bash", source: "mcp:pi_host" },
+      { name: "read", source: "built-in" },
+      { name: "subagent", source: "built-in" },
+    ]);
+    assert(
+      session.builtinsLeaked === true,
+      "built-in tool entries mark the leak",
+    );
+
+    // Same list again: fingerprint dedup must not re-handle (state stable).
+    available([
+      { name: "bash", source: "mcp:pi_host" },
+      { name: "read", source: "built-in" },
+      { name: "subagent", source: "built-in" },
+    ]);
+    assert(
+      session.builtinsLeaked === true,
+      "repeated identical list is deduplicated",
+    );
+  }
+
+  {
+    // A leak on a restored backend quarantines it (persistence suppressed)
+    // and stop() resets the backend-scoped state.
+    const { session } = fakeSession();
+    session.persistenceKey = null;
+    session.restoredFromPersistence = true;
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/commands/available",
+        params: {
+          sessionId: "x",
+          tools: [{ name: "read", source: "built-in" }],
+        },
+      }),
+    );
+    assert(
+      session.builtinsLeaked === true && session.backendQuarantined === true,
+      "restored-backend leak quarantines the backend",
+    );
+    session.proc = null; // no real process to terminate in this unit test
+    await session.stop();
+    assert(
+      !session.builtinsLeaked &&
+        !session.backendQuarantined &&
+        !session.restoredFromPersistence,
+      "stop() resets backend-scoped leak state",
+    );
+  }
+
   // --- usage updates are scoped to the session's own ACP id ---
   {
     const { session } = fakeSession();

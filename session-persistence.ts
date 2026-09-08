@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
 import { log } from "./logging.ts";
-import { stableValue } from "./helpers.ts";
+import { stableJson, stableValue } from "./helpers.ts";
 import {
   KIRO_TOOL_FRAME_PREFIX,
   isNativeToolTextFrameLine,
@@ -24,9 +24,45 @@ export interface PersistedKiroSession {
   version: 1;
   kiroSessionId: string;
   historyFingerprint: string;
+  /** Semantic agent-config fingerprint at save time (see
+   * agentConfigFingerprint). Restore is refused on mismatch: `session/load`
+   * resurrects the agent snapshot captured when the Kiro session was created,
+   * so resuming across a config change leaks stale tools (observed: Kiro
+   * builtins re-enter the model's tool list and NameCollision drops
+   * same-named pi_host specs). Records saved before this field existed have
+   * no fingerprint and are never resumed. */
+  agentConfigFingerprint?: string;
   modelId?: string | null;
   createdAt: number;
   lastUsed: number;
+}
+
+/** Stable fingerprint of the semantic agent config — everything except the
+ * per-session random `name`, which must not affect resumability. Serialized
+ * canonically (sorted keys) so key order never changes the hash, and over the
+ * whole remaining config so a future semantic field cannot be missed. */
+export function agentConfigFingerprint(config: Record<string, unknown>): string {
+  const { name: _name, ...semantic } = config;
+  return hashText(stableJson(semantic));
+}
+
+/** Restore gate: a persisted snapshot may be resumed only when the history
+ * matches AND the agent config is the one the snapshot was created with.
+ * Records without a config fingerprint predate the gate and never resume. */
+export function canRestorePersisted(
+  persisted: PersistedKiroSession | null,
+  expectedHistoryFingerprint: string | null | undefined,
+  currentConfigFingerprint: string | null,
+): { historyMatch: boolean; configMatch: boolean; canUse: boolean } {
+  const historyMatch =
+    !!persisted &&
+    !!expectedHistoryFingerprint &&
+    persisted.historyFingerprint === expectedHistoryFingerprint;
+  const configMatch =
+    !!persisted &&
+    !!currentConfigFingerprint &&
+    persisted.agentConfigFingerprint === currentConfigFingerprint;
+  return { historyMatch, configMatch, canUse: historyMatch && configMatch };
 }
 
 export function persistenceKeyForSession(

@@ -14,6 +14,8 @@ import { log, msSince } from "./logging.ts";
 import { loadKiroAcpConfig, resolveLoggerConfig } from "./config.ts";
 import { getDescendantPids, terminateProcessTree } from "./process-utils.ts";
 import {
+  agentConfigFingerprint,
+  canRestorePersisted,
   clearPersistedKiroSession,
   loadPersistedKiroSession,
 } from "./session-persistence.ts";
@@ -137,6 +139,23 @@ export class AcpSession {
    * left to hang until Kiro's own deadline. Cleared by every startPrompt. */
   toolIntakeClosed = false;
   lastUsedAt = Date.now();
+  /** Stable fingerprint of the semantic agent config (session-persistence).
+   * Persisted Kiro sessions resume only when this matches — `session/load`
+   * resurrects the agent snapshot captured at session creation, so resuming
+   * across a config change leaks stale tools into the model's tool list. */
+  agentConfigFingerprint: string | null = null;
+  /** True once a persisted Kiro session was restored via session/resume|load. */
+  restoredFromPersistence = false;
+  /** Set when kiro-cli reports Kiro built-in tools in the model-visible tool
+   * list (`_kiro.dev/commands/available`). Triggered by a stale restored
+   * snapshot or an agent fallback; the next ensureStarted restarts fresh. */
+  builtinsLeaked = false;
+  /** Set together with builtinsLeaked: the running backend's snapshot is
+   * tainted, so stream.ts must not persist it (it would be re-resumed with a
+   * matching config fingerprint, resurrecting the leak every turn). */
+  backendQuarantined = false;
+  /** Fingerprint of the last model-visible tools list logged. */
+  private lastToolsListFingerprint: string | null = null;
 
   constructor(cwd: string) {
     this.cwd = cwd;
@@ -282,6 +301,18 @@ export class AcpSession {
         }
       } else if (msg.method === "_kiro.dev/metadata") {
         this.handleMetadata(msg.params || {});
+      } else if (msg.method === "_kiro.dev/commands/available") {
+        this.handleCommandsAvailable(msg.params || {});
+      } else if (msg.method === "_kiro.dev/agent/not_found") {
+        // The requested --agent was not found and kiro-cli fell back to
+        // kiro_default (all builtins, wrong prompt). Silently ignoring this
+        // used to make fallback invisible; nothing here can fix it, but the
+        // log must scream.
+        log("KIRO AGENT NOT FOUND — kiro-cli fell back", {
+          session: this.id,
+          requestedAgent: msg.params?.requestedAgent ?? null,
+          fallbackAgent: msg.params?.fallbackAgent ?? null,
+        });
       }
     }
   }
@@ -313,6 +344,67 @@ export class AcpSession {
         ? { outcome: { outcome: "selected", optionId } }
         : { outcome: { outcome: "cancelled" } },
     );
+  }
+
+  /** Ground truth of what the model can call, from kiro-cli's own
+   * `_kiro.dev/commands/available`: `tools[].source` is "built-in" or
+   * "mcp:<server>" (verified against kiro-cli 2.21.1). Logged once per list
+   * change; built-in entries mean the agent config was not applied (agent
+   * fallback) or a restored session resurrected a stale agent snapshot. */
+  private handleCommandsAvailable(params: Record<string, unknown>): void {
+    const tools = Array.isArray(params.tools) ? params.tools : [];
+    const seen = tools
+      .map((t: any) =>
+        typeof t?.name === "string"
+          ? {
+              name: t.name,
+              source: typeof t?.source === "string" ? t.source : "unknown",
+            }
+          : null,
+      )
+      .filter(
+        (t: { name: string; source: string } | null): t is {
+          name: string;
+          source: string;
+        } => t !== null,
+      );
+    const fingerprint = hashSystemPrompt(JSON.stringify(seen));
+    if (fingerprint === this.lastToolsListFingerprint) return;
+    this.lastToolsListFingerprint = fingerprint;
+    const builtins = seen
+      .filter((t) => t.source === "built-in")
+      .map((t) => t.name);
+    log("model-visible tools", {
+      session: this.id,
+      count: seen.length,
+      builtins: builtins.length > 0 ? builtins : undefined,
+      mcpServers: Array.isArray(params.mcpServers)
+        ? (params.mcpServers as any[]).map((s) => ({
+            name: s?.name ?? null,
+            status: s?.status ?? null,
+            toolCount: s?.toolCount ?? null,
+          }))
+        : undefined,
+    });
+    if (builtins.length > 0) this.handleBuiltinLeak(builtins);
+  }
+
+  /** A leaked built-in is model-visible. The stale snapshot must never be
+   * resumed again (cleared here), and the next ensureStarted restarts the
+   * process so the model sees only pi_host tools. */
+  private handleBuiltinLeak(builtins: string[]): void {
+    this.builtinsLeaked = true;
+    // Quarantine: the running backend's snapshot is tainted. Persistence is
+    // suppressed for it (stream.ts), otherwise the leaked snapshot would be
+    // re-saved with the current config fingerprint and resumed forever.
+    this.backendQuarantined = true;
+    log("KIRO BUILTINS LEAKED into the model tool list", {
+      session: this.id,
+      builtins,
+      restoredFromPersistence: this.restoredFromPersistence,
+      willRestartNextTurn: this.restoredFromPersistence,
+    });
+    if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
   }
 
   private handleUsageUpdate(
@@ -430,6 +522,21 @@ export class AcpSession {
           session: this.id,
           currentEffort: this.currentEffort,
           requestedEffort: effort,
+        });
+        await this.stop();
+      }
+    }
+    if (this.started && this.builtinsLeaked && this.restoredFromPersistence) {
+      // A restored snapshot leaked Kiro builtins into the model's tool list.
+      // The current turn still runs (the permission gate blocks execution);
+      // the next turn must start from a fresh process and session.
+      if (this.busy) {
+        log("deferring leaked-builtins restart while session is busy", {
+          session: this.id,
+        });
+      } else {
+        log("restarting Kiro: restored session leaked builtins", {
+          session: this.id,
         });
         await this.stop();
       }
@@ -576,16 +683,22 @@ export class AcpSession {
     const persisted = this.persistenceKey
       ? loadPersistedKiroSession(this.persistenceKey)
       : null;
-    const canUsePersisted =
-      !!persisted &&
-      !!options.expectedHistoryFingerprint &&
-      persisted.historyFingerprint === options.expectedHistoryFingerprint;
+    const restore = canRestorePersisted(
+      persisted,
+      options.expectedHistoryFingerprint,
+      this.agentConfigFingerprint,
+    );
+    const canUsePersisted = restore.canUse;
 
     if (persisted && !canUsePersisted) {
       log("persisted kiro session fingerprint mismatch", {
         session: this.id,
         key: this.persistenceKey,
         kiroSessionId: persisted.kiroSessionId,
+        historyMatch: restore.historyMatch,
+        // Old records have no config fingerprint; those must not resume —
+        // their snapshot predates the current agent config.
+        configMatch: restore.configMatch,
       });
     }
 
@@ -606,6 +719,7 @@ export class AcpSession {
       })) as any;
       this.acpSessionId = result.sessionId;
       this.systemPromptHash = null;
+      this.restoredFromPersistence = false;
       log("acp session/new", {
         session: this.id,
         acpSessionId: this.acpSessionId,
@@ -619,6 +733,11 @@ export class AcpSession {
   private async tryRestorePersistedSession(
     kiroSessionId: string,
   ): Promise<boolean> {
+    // Mark the restore origin before awaiting: leak notifications
+    // (`_kiro.dev/commands/available`) can arrive while the RPC is in flight,
+    // and the restart decision needs to know the session came from a
+    // persisted snapshot.
+    this.restoredFromPersistence = true;
     const attempts = [
       {
         method: "session/resume" as const,
@@ -642,6 +761,7 @@ export class AcpSession {
         this.acpSessionId = kiroSessionId;
         // Re-bind current pi instructions after resume/load.
         this.systemPromptHash = null;
+        this.restoredFromPersistence = true;
         log("restored persisted kiro session", {
           session: this.id,
           method: attempt.method,
@@ -670,6 +790,7 @@ export class AcpSession {
       loadSession: this.supportsLoadSession(),
       resumeSession: this.supportsResumeSession(),
     });
+    this.restoredFromPersistence = false;
     return false;
   }
 
@@ -869,6 +990,12 @@ export class AcpSession {
     this.acpSessionId = null;
     this.systemPromptHash = null;
     this.currentModelId = null;
+    // The backend is gone: restore origin, leak state and the tools-list
+    // fingerprint belong to it and must not leak into a replacement process.
+    this.restoredFromPersistence = false;
+    this.builtinsLeaked = false;
+    this.backendQuarantined = false;
+    this.lastToolsListFingerprint = null;
   }
 
   private removeAgentFiles(): void {
@@ -1270,14 +1397,16 @@ export class AcpSession {
 
   private writeAgentCfg(): void {
     // Forwarded transport: Kiro has no *intended* native tools — every allowed
-    // call crosses the pi_host bridge. Builtins still exist in kiro-cli 2.21;
-    // permission deny + --trust-tools=@pi_host is the execution gate.
+    // call crosses the pi_host bridge. A fresh session with this config
+    // registers no builtins (verified against kiro-cli 2.21.1); the permission
+    // deny + --trust-tools=@pi_host remain as the execution gate for restored
+    // sessions whose snapshot resurrects builtins.
     const config = {
       name: this.agentName,
       tools: ["@pi_host"],
       allowedTools: ["@pi_host"],
-      // CLI 3.0 / IDE 1.0: strip builtins even if `tools` is widened. kiro-cli
-      // 2.21 ignores this field (not in the binary); permission deny still gates.
+      // Forward-compat for CLI 3.x: parsed by 2.21 but ineffective there
+      // (fresh sessions already exclude builtins via `tools`).
       excludedTools: ["@builtin"],
       includeMcpJson: false,
       mcpServers: {},
@@ -1290,6 +1419,7 @@ export class AcpSession {
     mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
     this.agentConfigPath = join(agentsDir, `${this.agentName}.json`);
     writeFileSync(this.agentConfigPath, JSON.stringify(config, null, 2));
+    this.agentConfigFingerprint = agentConfigFingerprint(config);
   }
 }
 
