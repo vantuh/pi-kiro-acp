@@ -126,6 +126,16 @@ export class AcpSession {
   /** Fires on _kiro.dev/metadata updates so streamers can refresh usage. */
   onMetadata: ((m: SessionMetadata) => void) | null = null;
   metadata: SessionMetadata | null = null;
+  /**
+   * contextUsed reported as of the start of the *current* turn. kiro-cli's
+   * contextUsed/contextUsagePercentage is a cumulative snapshot of the whole
+   * session's context window, not a per-turn delta. estimateUsage() subtracts
+   * this baseline so usage.input reflects tokens added by this turn — without
+   * it, summing usage.input across turns (as pi's status bar does) double
+   * counts the same growing context on every turn and inflates the session
+   * total by an order of magnitude or more.
+   */
+  contextBaseline = 0;
   agentCapabilities: any = null;
   persistenceKey: string | null = null;
   pendingToolCalls = new Map<string, PendingToolCall>();
@@ -891,6 +901,13 @@ export class AcpSession {
       ? `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n${promptUserMessage}`
       : promptUserMessage;
 
+    // Snapshot the context level reached by the previous turn before it's
+    // cleared below — estimateUsage() subtracts this baseline from the next
+    // reported contextUsed so usage.input is a per-turn delta, not the whole
+    // session's cumulative context (see contextBaseline doc comment).
+    if (typeof this.metadata?.contextUsed === "number") {
+      this.contextBaseline = Math.max(0, this.metadata.contextUsed);
+    }
     this.metadata = null;
 
     // Optimistically record the system-prompt hash, but roll it back if the
