@@ -265,7 +265,6 @@ export function estimateUsage(
   output: AssistantMessage,
   contextWindow?: number,
   metadata?: SessionMetadata | null,
-  contextBaseline = 0,
 ) {
   let chars = 0;
   for (const b of output.content) {
@@ -283,16 +282,7 @@ export function estimateUsage(
               contextWindow,
           )
         : 0;
-  // kiro-cli reports contextUsed/contextUsagePercentage as a cumulative
-  // snapshot of the whole session's context window, not tokens added by this
-  // turn. Subtract the context level already reached before this turn began
-  // (contextBaseline) so usage.input is a per-turn delta — callers that sum
-  // usage.input across turns (pi's status bar) would otherwise double count
-  // the same growing context on every turn.
-  const totalTokens = Math.max(
-    outputTokens,
-    Math.max(0, reportedContextTokens - contextBaseline),
-  );
+  const totalTokens = Math.max(outputTokens, reportedContextTokens);
 
   return {
     input: Math.max(0, totalTokens - outputTokens),

@@ -277,12 +277,7 @@ export function streamKiroAcp(
       // frames carry it and live counters (e.g. the subagent fleet) tick.
       session.onMetadata = (m) => {
         if (suppressUpdates) return;
-        output.usage = estimateUsage(
-          output,
-          model.contextWindow,
-          m,
-          session.contextBaseline,
-        );
+        output.usage = estimateUsage(output, model.contextWindow, m);
       };
 
       session.updateHandler = (update) => {
@@ -659,7 +654,6 @@ export function streamKiroAcp(
         output,
         model.contextWindow,
         session.metadata,
-        session.contextBaseline,
       );
       appendKiroMetadataDiagnostic(output, session.metadata);
 

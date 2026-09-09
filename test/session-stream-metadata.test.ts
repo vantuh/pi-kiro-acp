@@ -70,25 +70,6 @@ assert(fromPercent.totalTokens === 100_000, "contextUsagePercentage × contextWi
 const negative = estimateUsage(msg, 1000, { contextUsed: -5 } as any);
 assert(negative.totalTokens === 100, "negative contextUsed clamps to the char-based floor");
 
-// ── contextBaseline turns the cumulative contextUsed snapshot into a
-// per-turn delta, so summing usage.input across turns (as pi's status bar
-// does) does not double count context already reported in earlier turns ──
-
-const turn1 = estimateUsage(msg, 1_000_000, { contextUsed: 50_000 } as any, 0);
-assert(turn1.totalTokens === 50_000, "first turn: no baseline yet, totalTokens = raw contextUsed");
-
-// Turn 2 starts from the 50k the previous turn reached; kiro-cli now reports
-// a cumulative 80k (30k of genuinely new context since turn 1).
-const turn2 = estimateUsage(msg, 1_000_000, { contextUsed: 80_000 } as any, 50_000);
-assert(turn2.totalTokens === 30_000, "turn 2 totalTokens is the delta above the baseline (max with this turn's output)");
-assert(turn2.input === 30_000 - turn2.output, "turn 2 input is the delta minus this turn's own output tokens");
-
-// A turn with no context growth (baseline caught all of it already) must not
-// go negative — it floors at the char-based estimate.
-const turn3 = estimateUsage(msg, 1_000_000, { contextUsed: 80_000 } as any, 80_000);
-assert(turn3.totalTokens === 100, "turn 3 with zero delta floors at the char-based output estimate");
-assert(turn3.input === 0, "turn 3 input is 0 when the baseline already covers the reported contextUsed");
-
 // ── session.onMetadata fires on _kiro.dev/metadata updates ───────────────────
 // stream.ts assigns session.onMetadata so partial frames carry live usage.
 
