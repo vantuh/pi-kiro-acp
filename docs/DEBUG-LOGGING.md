@@ -34,6 +34,7 @@ tail -f "$LOG" | grep '"session":"abc123"'
 | `kiro-acp.json` → `logger.debug: true` | Enables the log file above (`false`/unset = no logging) |
 | `kiro-acp.json` → `logger.verbose: 1..3` | Passes `-v`/`-vv`/`-vvv` to `kiro-cli acp`; its own logs land in the same file as `kiro log` |
 | `PI_KIRO_ACP_DRAIN_MS` | Grace period between answering Kiro's outstanding `tools/call` and cancelling its turn (default 150) |
+| `PI_KIRO_ACP_RESTORE_LEAK_CHECK_MS` | Wait after a successful `session/load`/`session/resume` before committing the restore, so the racing leak/fallback signals can land and a suspect snapshot is abandoned (default 150; 0 disables the wait) |
 | `PI_KIRO_ACP_REFUSAL_RETRY_MS` | Delay before re-sending a recovery prompt that came back as a contentless `refusal` (default 1500) |
 
 ### kiro-cli's own verbosity
@@ -202,6 +203,7 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 | `image FUP: *` / `orphaned tool result: *` | `{ session, ... }` | Follow-up handoff (cancel → settle → re-prompt); recovery uses the `orphaned tool result` prefix |
 | `startPrompt overlapping an in-flight prompt` | `{ session, pendingToolCalls }` | A second `session/prompt` was sent without cancel — kiro-cli answers `Internal error` |
 | `restored persisted kiro session` / `failed to restore persisted kiro session` | `{ session, ... }` | Fingerprint-keyed resume of a previous ACP session |
+| `abandoning restored kiro session — leak/fallback during restore` | `{ session, method, acpSessionId }` | The restore RPC succeeded but the fallback/leak signals landed within the check window — the suspect snapshot is cleared and the process restarts with a fresh session (history replayed from pi) |
 | `persisted kiro session fingerprint mismatch` | `{ session, ... }` | History changed → cannot resume |
 | `restarting Kiro for effort change` / `deferring effort change while session is busy` | `{ session, ... }` | `--effort` change handling |
 | `UNMATCHED tool result` | `{ session, toolCallId, toolName, pendingCalls }` | Tool result with no matching call (`... (text-only)` on the image follow-up path) |
@@ -255,7 +257,10 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 A fresh session has no Kiro builtins (`tools: ["@pi_host"]` — verified against
 kiro-cli 2.21.1 with a probe MCP server). Builtins leak back only when
 `session/load` restores a persisted session whose agent snapshot predates the
-current agent config: `NameCollision(BuiltIn(FsRead/AgentCrew/…))` then drops
+current agent config — including the common case of a snapshot bound to a
+previous process's agent name (names are per-instance random, so a
+**cross-restart restore always risks the `kiro_default` fallback**):
+`NameCollision(BuiltIn(FsRead/AgentCrew/…))` then drops
 same-named pi_host specs and the native tool becomes model-visible. The
 forwarded catalog aliases those names (`subagent` → `pi_subagent`, `read` →
 `pi_read`, …) so the MCP spec survives. `bash`/`edit` keep their Pi names.
@@ -274,7 +279,12 @@ Three layers handle a leak:
    `ensureStarted` restarts the process fresh (deferred while busy, bounded at
    two attempts per session; a deterministic fallback then gives up loudly).
    A clean list on the same process lifts the quarantine. An agent fallback is
-   additionally reported by `KIRO AGENT NOT FOUND`.
+   additionally reported by `KIRO AGENT NOT FOUND`. A restore whose restore RPC
+   succeeded but whose leak/fallback signals landed during the decision window
+   is **abandoned before it is ever used** (`abandoning restored kiro session —
+   leak/fallback during restore`): the snapshot is cleared and the process
+   restarts with a fresh session — pi replays the full history, so the model
+   keeps its context, only Kiro-side state is lost.
 3. **Execution gate** — `--trust-tools=@pi_host` plus deny-by-default
    `session/request_permission` blocks native execution that goes through the
    permission RPC (verified live: a pi_host tool executes with zero permission

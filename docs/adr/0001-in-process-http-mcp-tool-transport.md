@@ -141,6 +141,35 @@ Mitigations, in order:
    RPC stays as the backstop; verified live: a pi_host tool executes with zero
    permission RPCs, so the gate costs nothing on the happy path.
 
+## Amendment 6 — 2026-09-15: restored snapshots are abandoned on fallback signals
+
+Production replay (fozzy-space-migration, kiro-cli 2.21.1): a persisted session
+restored across an extension restart triggered `Agent 'pi-kiro-<old>' not
+found, falling back to default`. A persisted snapshot binds to the **agent name
+captured at its creation**, and agent names are per-instance random
+(`pi-kiro-${randomBytes(4)}`), so every cross-restart restore either finds its
+agent gone (kiro_default fallback → all builtins in the model's tool list) or
+nothing. The `agentConfigFingerprint` gate cannot catch this: it deliberately
+excludes the agent `name`, so the fingerprint matches while the snapshot is
+still unresumable.
+
+The leak defenses did contain it (detection → quarantine → cleared snapshot →
+builtin calls denied at the permission gate → bounded restart), but the turn
+ran on the poisoned backend first: the model attempted a native builtin `write`,
+the turn ended in refusal, and repeated denials pushed the model into emitting
+tool calls as markdown text.
+
+Fix — decide **before using** the restored session. The restore RPC response and
+the leak/fallback signals (`_kiro.dev/commands/available` with builtins,
+`_kiro.dev/agent/not_found`) race; the restore decision now waits out the race
+(`PI_KIRO_ACP_RESTORE_LEAK_CHECK_MS`, default 150 ms) and abandons a suspect
+snapshot: persisted record cleared, process restarted, fresh `session/new` with
+full history replay from pi. Kiro-side session state is lost; model context is
+not. A clean snapshot binds as before, so within-process restores keep their
+Kiro-side state only while no hazard signal has fired in this process — a
+builtin leak or a kiro_default fallback clears persistence, so those paths
+always continue with a fresh `session/new`.
+
 ## Amendment 3 — 2026-09-04: dormant mirror removed
 
 After a week of live B2 usage the native-tool mirror (`native-tool-mirror.ts`),

@@ -399,6 +399,132 @@ async function main(): Promise<void> {
     );
   }
 
+  // --- restore abandons a snapshot when fallback/leak signals land ---
+  // Regression: a persisted snapshot binds to the agent name captured at its
+  // creation; agent names are per-instance random, so every cross-restart
+  // restore fell back to kiro_default and leaked builtins into the model's
+  // tool list. The restore decision now waits out the racing signals and
+  // abandons a suspect snapshot instead of running a turn on it.
+  {
+    // Signal delivered before the restore response resolves.
+    const { session, written } = fakeSession({ started: true, parseJson: true });
+    session.persistenceKey = null; // no disk writes in this unit test
+    session.catalogProvider = null; // skip the real process restart
+    session.agentCapabilities = { loadSession: true };
+    const restoring = session.tryRestorePersistedSession("kiro-snap");
+    const loadId = written.find((w) => w.method === "session/load")?.id;
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/agent/not_found",
+        params: { requestedAgent: "pi-kiro-old", fallbackAgent: "kiro_default" },
+      }),
+    );
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+    );
+    assert(
+      (await restoring) === false,
+      "restore is abandoned when the fallback signal precedes the response",
+    );
+    assert(
+      session.acpSessionId === null,
+      "the suspect snapshot is not bound as the ACP session",
+    );
+    assert(
+      session.agentFallbackDetected && session.recoveryPending,
+      "fallback state survives the abandoned restore",
+    );
+  }
+
+  {
+    // Signal delivered after the restore response (response/notify race).
+    // The continuation is awaited via a tick before the signal is injected,
+    // so removing the drain wait makes this test fail.
+    const { session, written } = fakeSession({ started: true, parseJson: true });
+    session.persistenceKey = null;
+    session.catalogProvider = null;
+    session.agentCapabilities = { loadSession: true };
+    const restoring = session.tryRestorePersistedSession("kiro-snap");
+    const loadId = written.find((w) => w.method === "session/load")?.id;
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/commands/available",
+        params: {
+          sessionId: "x",
+          tools: [{ name: "shell", source: "built-in" }],
+        },
+      }),
+    );
+    assert(
+      (await restoring) === false,
+      "restore is abandoned when the leak signal lands during the drain",
+    );
+    assert(
+      session.acpSessionId === null && session.backendQuarantined,
+      "the leaked restore quarantines instead of binding",
+    );
+  }
+
+  {
+    // A clean tools list landing during the drain lifts the quarantine flags,
+    // but a hazard signal the snapshot already emitted must still abandon it
+    // (the decision keys on the monotonic hazard generation, not the flags).
+    const { session, written } = fakeSession({ started: true, parseJson: true });
+    session.persistenceKey = null;
+    session.catalogProvider = null;
+    session.agentCapabilities = { loadSession: true };
+    const restoring = session.tryRestorePersistedSession("kiro-snap");
+    const loadId = written.find((w) => w.method === "session/load")?.id;
+    const available = (tools: unknown[]) =>
+      session.handleStdoutLine(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "_kiro.dev/commands/available",
+          params: { sessionId: "x", tools },
+        }),
+      );
+    available([{ name: "shell", source: "built-in" }]); // hazard
+    available([{ name: "bash", source: "mcp:pi_host" }]); // clean list lifts flags
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+    );
+    assert(
+      (await restoring) === false,
+      "a clean list during the drain does not un-abandon a hazard snapshot",
+    );
+    assert(
+      session.acpSessionId === null,
+      "the hazard snapshot is still not bound as the ACP session",
+    );
+  }
+
+  {
+    // No signals: the restore binds as before.
+    const { session, written } = fakeSession({ started: true, parseJson: true });
+    session.persistenceKey = null;
+    session.catalogProvider = null;
+    session.agentCapabilities = { loadSession: true };
+    const restoring = session.tryRestorePersistedSession("kiro-snap");
+    const loadId = written.find((w) => w.method === "session/load")?.id;
+    session.handleStdoutLine(
+      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+    );
+    assert(
+      (await restoring) === true,
+      "a clean restore still binds the persisted session",
+    );
+    assert(
+      session.acpSessionId === "kiro-snap",
+      "the clean restore's ACP session id is bound",
+    );
+  }
+
   // --- usage updates are scoped to the session's own ACP id ---
   {
     const { session } = fakeSession();

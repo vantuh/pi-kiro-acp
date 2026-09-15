@@ -78,6 +78,17 @@ const MCP_NO_INTERACTIVE_TIMEOUT_MS = 120000;
  * instead of being dropped once the cancel puts it in Idle. */
 const TOOL_RESULT_DRAIN_MS = Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150;
 
+/** kiro-cli delivers the leak/fallback signals (`_kiro.dev/commands/available`
+ * with builtins, `_kiro.dev/agent/not_found`) concurrently with the restore
+ * response — either order is possible. The restore decision waits this long
+ * after the response so both can land before it commits. Override with
+ * PI_KIRO_ACP_RESTORE_LEAK_CHECK_MS (0 disables the wait and reintroduces the
+ * race). */
+const RESTORE_LEAK_CHECK_MS = (() => {
+  const raw = Number(process.env.PI_KIRO_ACP_RESTORE_LEAK_CHECK_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 150;
+})();
+
 export function toKiroEffort(
   reasoning: SimpleStreamOptions["reasoning"],
 ): KiroEffort | null {
@@ -165,6 +176,17 @@ export class AcpSession {
    * tainted, so stream.ts must not persist it (it would be re-resumed with a
    * matching config fingerprint, resurrecting the leak every turn). */
   backendQuarantined = false;
+  /** Set by `_kiro.dev/agent/not_found`: this process fell back to
+   * kiro_default, so every session it restores is suspect — a persisted
+   * snapshot binds to the agent name captured at its creation, and agent
+   * names are per-instance random. Reset on stop and on a clean tools list. */
+  agentFallbackDetected = false;
+  /** Monotonic count of restore-hazard signals seen by this process
+   * (builtin leaks + kiro_default fallbacks). Unlike the quarantine flags it
+   * is never reset — the clean-tools-list lift must not erase a hazard that
+   * already fired, because tryRestorePersistedSession keys its abandon
+   * decision on a generation change, not on the current flag values. */
+  hazardGeneration = 0;
   /** Bounded self-recovery: leak/fallback restarts per session instance. Two
    * attempts heal transient discovery failures; a deterministic fallback
    * (e.g. an invalid agent name) gives up and stays loud instead of looping. */
@@ -325,6 +347,8 @@ export class AcpSession {
         // rewritten before every spawn), deterministic ones give up after
         // two attempts and stay loud.
         this.recoveryPending = true;
+        this.agentFallbackDetected = true;
+        this.hazardGeneration++;
         log("KIRO AGENT NOT FOUND — kiro-cli fell back", {
           session: this.id,
           requestedAgent: msg.params?.requestedAgent ?? null,
@@ -428,6 +452,7 @@ export class AcpSession {
       });
       this.recoveryPending = false;
       this.backendQuarantined = false;
+      this.agentFallbackDetected = false;
       this.recoveryRestarts = 0;
     }
   }
@@ -437,6 +462,7 @@ export class AcpSession {
    * process so the model sees only pi_host tools. */
   private handleBuiltinLeak(builtins: string[]): void {
     this.recoveryPending = true;
+    this.hazardGeneration++;
     // Quarantine: the running backend's snapshot is tainted. Persistence is
     // suppressed for it (stream.ts), otherwise the leaked snapshot would be
     // re-saved with the current config fingerprint and resumed forever.
@@ -802,6 +828,14 @@ export class AcpSession {
     for (let i = 0; i < attempts.length; i++) {
       const attempt = attempts[i];
       try {
+        // The restore response and the leak/fallback signals race: either can
+        // arrive first, so the hazard generation is captured BEFORE the RPC —
+        // a restored snapshot that already shows a kiro_default fallback or
+        // builtins is the exact leak being defended against, so it must never
+        // be used. Keyed on the monotonic generation, not the current flags:
+        // a clean tools list landing during the window lifts those, but it
+        // must not erase a hazard signal this snapshot already emitted.
+        const hazardAtStart = this.hazardGeneration;
         await this.rpcSend(
           attempt.method,
           {
@@ -811,6 +845,24 @@ export class AcpSession {
           },
           15000,
         );
+        await new Promise((resolve) => setTimeout(resolve, RESTORE_LEAK_CHECK_MS));
+        if (
+          this.hazardGeneration !== hazardAtStart ||
+          this.recoveryPending ||
+          this.backendQuarantined
+        ) {
+          log("abandoning restored kiro session — leak/fallback during restore", {
+            session: this.id,
+            method: attempt.method,
+            acpSessionId: kiroSessionId,
+          });
+          // The snapshot can never resume cleanly: it binds to the agent name
+          // captured at its creation, and agent names are per-instance random,
+          // so every later restore would fall back to kiro_default again.
+          if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
+          await this.restartAfterRestoreFailure();
+          return false;
+        }
         this.acpSessionId = kiroSessionId;
         // Re-bind current pi instructions after resume/load.
         this.systemPromptHash = null;
@@ -1047,6 +1099,7 @@ export class AcpSession {
     // session instance, not per backend.
     this.recoveryPending = false;
     this.backendQuarantined = false;
+    this.agentFallbackDetected = false;
     this.lastToolsListFingerprint = null;
   }
 
