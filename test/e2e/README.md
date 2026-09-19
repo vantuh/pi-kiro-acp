@@ -1,5 +1,8 @@
 # E2E live probe (`live.mjs`)
 
+> **Pi copy.** See [../../README.md](../../README.md). Run this probe from
+> this tree, not from `omp/.omp/agent/extensions/kiro-acp`.
+
 Verifies the kiro-acp transport assumptions against the **real kiro-cli
 binary** — not mocks. The unit tests under `test/*.test.ts` cover the
 extension's logic in isolation; this probe proves that kiro-cli itself still

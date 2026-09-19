@@ -1,5 +1,8 @@
 # 0001 — In-process HTTP MCP tool transport for kiro-acp
 
+> **Pi copy** of this history. Identity and the sibling Oh My Pi tree:
+> [README.md](../../README.md).
+
 Status: accepted (2026-08)
 Supersedes: the `.mjs` stdio bridge + `/tmp` tools-file + HTTP IPC transport.
 

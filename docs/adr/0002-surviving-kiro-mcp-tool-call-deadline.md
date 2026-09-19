@@ -1,5 +1,8 @@
 # 0002 — Surviving Kiro's 120s MCP tool-call deadline
 
+> **Pi copy** of this history. Identity and the sibling Oh My Pi tree:
+> [README.md](../../README.md).
+
 Status: accepted (2026-08)
 Extends: [0001 — In-process HTTP MCP tool transport](0001-in-process-http-mcp-tool-transport.md)
 

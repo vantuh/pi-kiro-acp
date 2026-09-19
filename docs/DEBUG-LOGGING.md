@@ -1,5 +1,10 @@
 # kiro-acp Debug Logging
 
+> **Pi copy.** Source and identity: [README.md](../README.md).
+> Do not edit `omp/.omp/agent/extensions/kiro-acp` for Pi work.
+> The Oh My Pi copy uses `$TMPDIR/omp-kiro-acp-debug.log` and
+> `~/.omp/agent/kiro-acp.json`.
+
 ## Log File
 
 Path comes from Node `os.tmpdir()` (not always `/tmp` on macOS):
