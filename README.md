@@ -8,7 +8,7 @@ and then diverged. A change here does not appear in omp.
 
 | | Pi (this tree) | Oh My Pi |
 |---|---|---|
-| Repo | [`home/dot_pi/agent/extensions/kiro-acp`](.) | [`home/dot_omp/agent/extensions/kiro-acp`](../../../../dot_omp/agent/extensions/kiro-acp) |
+| Repo | [`home/dot_pi/agent/extensions/kiro-acp`](.) | [`home/dot_omp/private_agent/extensions/kiro-acp`](../../../../dot_omp/private_agent/extensions/kiro-acp) |
 | Loaded from | `~/.pi/agent/extensions/kiro-acp` | `~/.omp/agent/extensions/kiro-acp` |
 | Config | `~/.pi/agent/kiro-acp.json` | `~/.omp/agent/kiro-acp.json` |
 | Host binary | `pi` | `omp` |

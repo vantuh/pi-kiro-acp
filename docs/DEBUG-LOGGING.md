@@ -1,7 +1,7 @@
 # kiro-acp Debug Logging
 
 > **Pi copy.** Source and identity: [README.md](../README.md).
-> Do not edit `home/dot_omp/agent/extensions/kiro-acp` for Pi work.
+> Do not edit `home/dot_omp/private_agent/extensions/kiro-acp` for Pi work.
 > The Oh My Pi copy uses `$TMPDIR/omp-kiro-acp-debug.log` and
 > `~/.omp/agent/kiro-acp.json`.
 
