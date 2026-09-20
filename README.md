@@ -1,14 +1,14 @@
 # kiro-acp (Pi)
 
 This directory is the **Pi** copy of the Kiro ACP provider. Edit it when the
-host is `pi`. Stow maps it to `~/.pi/agent/extensions/kiro-acp`.
+host is `pi`. Chezmoi maps it to `~/.pi/agent/extensions/kiro-acp`.
 
 It is **not** the Oh My Pi copy. The two trees started as the same extension
 and then diverged. A change here does not appear in omp.
 
 | | Pi (this tree) | Oh My Pi |
 |---|---|---|
-| Repo | [`pi/.pi/agent/extensions/kiro-acp`](.) | [`omp/.omp/agent/extensions/kiro-acp`](../../../../../omp/.omp/agent/extensions/kiro-acp) |
+| Repo | [`home/dot_pi/agent/extensions/kiro-acp`](.) | [`home/dot_omp/agent/extensions/kiro-acp`](../../../../dot_omp/agent/extensions/kiro-acp) |
 | Loaded from | `~/.pi/agent/extensions/kiro-acp` | `~/.omp/agent/extensions/kiro-acp` |
 | Config | `~/.pi/agent/kiro-acp.json` | `~/.omp/agent/kiro-acp.json` |
 | Host binary | `pi` | `omp` |
