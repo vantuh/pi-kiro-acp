@@ -40,6 +40,15 @@ export interface SessionMetadata {
   sessionCost?: { amount: number; currency: string };
   meteringUsage?: Array<{ unit: string; unitPlural?: string; value: number }>;
   turnDurationMs?: number;
+  /** kiro's view of the session's thinking support, from
+   * `_kiro.dev/metadata.reasoning`. `effort` is the level kiro actually has
+   * applied — the only confirmation that pi's requested level took effect. */
+  reasoning?: {
+    support?: string;
+    thinkingEnabled?: boolean;
+    effort?: string;
+    effortLevels?: string[];
+  };
 }
 
 export interface ToolResultInfo {

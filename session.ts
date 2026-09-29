@@ -89,6 +89,36 @@ const RESTORE_LEAK_CHECK_MS = (() => {
   return Number.isFinite(raw) && raw >= 0 ? raw : 150;
 })();
 
+/** The `/effort` command prompt is answered by kiro's ACP layer locally (no
+ * model call), so a backend that has accepted it answers in milliseconds.
+ * Bounded unlike the turn's own prompt RPC (unlimited): a command that is
+ * never answered must not pin the turn's reconciliation forever. Read per
+ * call so the bound can be exercised without a 10s test. */
+function effortCommandTimeoutMs(): number {
+  const raw = Number(process.env.PI_KIRO_ACP_EFFORT_COMMAND_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : 10000;
+}
+
+/** kiro answers a command with its assistant chunk *before* the RPC result
+ * (observed on kiro-cli 2.24.1), but a late chunk is still possible. For this
+ * long after the command settles, a chunk that is (a prefix of) one of the
+ * known command replies is still kiro answering us, not model output. */
+function effortCommandReplyGraceMs(): number {
+  const raw = Number(process.env.PI_KIRO_ACP_EFFORT_REPLY_GRACE_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 2000;
+}
+
+/** Literal openings of the replies kiro's ACP layer produces for `/effort`. */
+const EFFORT_COMMAND_REPLY_PREFIXES = [
+  "Effort set to",
+  "Effort is not available",
+  "invalid effort level",
+] as const;
+
+/** Cap on the reply text captured while a command is in flight: the reply is
+ * a fixed one-liner, so anything past this is a leak, not a signal. */
+const EFFORT_COMMAND_REPLY_MAX_CHARS = 1024;
+
 export function toKiroEffort(
   reasoning: SimpleStreamOptions["reasoning"],
 ): KiroEffort | null {
@@ -103,6 +133,44 @@ export function toKiroEffort(
   );
 }
 
+/** `_kiro.dev/metadata` `reasoning` block (kiro-cli 2.24.1): what kiro thinks
+ * the session's thinking support is, including the effort level it currently
+ * has applied. Unrecognized shapes are dropped rather than trusted. */
+function parseKiroReasoning(
+  value: unknown,
+): SessionMetadata["reasoning"] | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Record<string, unknown>;
+  const support =
+    typeof raw.support === "string" ? raw.support : undefined;
+  const thinkingEnabled =
+    typeof raw.thinkingEnabled === "boolean" ? raw.thinkingEnabled : undefined;
+  const effort = typeof raw.effort === "string" ? raw.effort : undefined;
+  const effortLevels = Array.isArray(raw.effortLevels)
+    ? raw.effortLevels.filter((l): l is string => typeof l === "string")
+    : undefined;
+  if (
+    support === undefined &&
+    thinkingEnabled === undefined &&
+    effort === undefined &&
+    effortLevels === undefined
+  )
+    return null;
+  return {
+    ...(support !== undefined ? { support } : {}),
+    ...(thinkingEnabled !== undefined ? { thinkingEnabled } : {}),
+    ...(effort !== undefined ? { effort } : {}),
+    ...(effortLevels !== undefined ? { effortLevels } : {}),
+  };
+}
+
+/** Text carried by an `agent_message_chunk` / `agent_thought_chunk` update,
+ * or "" for any other shape. */
+function chunkTextOf(update: SessionUpdate): string {
+  const text = (update.content as { text?: unknown } | undefined)?.text;
+  return typeof text === "string" ? text : "";
+}
+
 export class AcpSession {
   readonly id = `s-${randomBytes(4).toString("hex")}`;
   cwd: string;
@@ -114,7 +182,50 @@ export class AcpSession {
   /** SHA-256 of last system prompt wrapped into this ACP session; null = not sent yet. */
   systemPromptHash: string | null = null;
   currentModelId: string | null = null;
+  /** Effort kiro's live session currently has. Applied in-band with the
+   * intercepted `/effort <level>` command prompt (kiro-cli 2.24.1 silently
+   * drops the `--effort` spawn flag when the model is `auto`), and only a
+   * process restart can take it away again — kiro has no in-band clear. */
   currentEffort: KiroEffort | null = null;
+  /** Effort pi wants for the coming turn. ensureStarted records it on every
+   * turn (stream.ts passes stream options each time); syncEffort reconciles
+   * the two. Kept apart from currentEffort so a change can be applied to a
+   * live session instead of only at spawn. */
+  desiredEffort: KiroEffort | null = null;
+  /** Set while an intercepted `/effort` command prompt is in flight: its
+   * `agent_message_chunk` reply is kiro answering us, never model output, so
+   * the session/update routing drops it instead of streaming it to pi. */
+  suppressCommandOutput = false;
+  /** Text of the chunks dropped by suppressCommandOutput — the command's
+   * reply, parsed by syncEffort to confirm the level took effect. */
+  private suppressedCommandText = "";
+  /** True once suppressedCommandText hit EFFORT_COMMAND_REPLY_MAX_CHARS:
+   * the captured text is then a prefix, not the whole reply. */
+  private suppressedCommandTruncated = false;
+  /** Set while a command prompt is in flight. Metadata ticks inside that
+   * window report the pre-command level by design, so they must not raise a
+   * mismatch (F5) and must not invalidate the belief the command is about to
+   * fix (F1). */
+  private effortCommandInFlight = false;
+  /** Reconciliation owed to the next pre-prompt sync. Set by ensureStarted
+   * when it cannot apply a level itself (busy deferral, or a fresh backend
+   * that starts with none) and by a metadata mismatch that invalidated the
+   * local belief; cleared by the sync itself, whatever its outcome, so a
+   * refused level is retried on the *next* turn and not twice in this one. */
+  private effortReconcilePending = false;
+  /** Single-flight guard: the running syncEffort. A command prompt is not
+   * part of `busy`, so two streams routed to one session could otherwise
+   * interleave two commands over the same suppression state. */
+  private effortSyncInFlight: Promise<void> | null = null;
+  /** Fingerprint of the last logged mismatch pair, so the metadata ticks
+   * kiro sends throughout a turn do not repeat the same line. */
+  private lastEffortMismatchFingerprint: string | null = null;
+  /** Timestamp until which a chunk that looks like a command reply is still
+   * dropped — a reply chunk may in principle land after its RPC result. */
+  private effortReplyGraceUntil = 0;
+  /** Trailing text seen inside the grace window, so a reply split across
+   * chunks is still recognised as a command reply. */
+  private effortReplyTail = "";
   toolBridge: ToolBridge | null = null;
   catalogProvider: CatalogProvider | null = null;
   private bridgeCallSeq = 0;
@@ -214,6 +325,9 @@ export class AcpSession {
   private recoveryRestarts = 0;
   /** Fingerprint of the last model-visible tools list logged. */
   private lastToolsListFingerprint: string | null = null;
+  /** Fingerprint of the last reasoning object logged, so `_kiro.dev/metadata`
+   * ticks do not repeat it. */
+  private lastReasoningFingerprint: string | null = null;
 
   constructor(cwd: string) {
     this.cwd = cwd;
@@ -354,6 +468,41 @@ export class AcpSession {
         if (update) {
           if (update.sessionUpdate === "usage_update") {
             this.handleUsageUpdate(update, msg.params?.sessionId);
+          }
+          // A `/effort` command prompt answers with a normal assistant
+          // chunk. While it is in flight that chunk is the command's reply,
+          // not model output: capture it for syncEffort and drop it so it
+          // never reaches pi's stream or the tool bridge.
+          if (
+            this.suppressCommandOutput &&
+            (update.sessionUpdate === "agent_message_chunk" ||
+              update.sessionUpdate === "agent_thought_chunk")
+          ) {
+            const text = chunkTextOf(update);
+            if (text) this.captureCommandReply(text);
+            log("suppressed kiro command output", {
+              session: this.id,
+              sessionUpdate: update.sessionUpdate,
+              late: false,
+            });
+            return;
+          }
+          // A reply chunk can in principle arrive after the command RPC
+          // settled. Inside the grace window only a chunk that reads like a
+          // command reply is dropped, so real model output keeps flowing.
+          if (
+            !this.suppressCommandOutput &&
+            this.inEffortReplyGrace() &&
+            (update.sessionUpdate === "agent_message_chunk" ||
+              update.sessionUpdate === "agent_thought_chunk") &&
+            this.isLateCommandReply(chunkTextOf(update))
+          ) {
+            log("suppressed kiro command output", {
+              session: this.id,
+              sessionUpdate: update.sessionUpdate,
+              late: true,
+            });
+            return;
           }
           this.updateHandler?.(update);
         }
@@ -567,6 +716,52 @@ export class AcpSession {
           }))
       : undefined;
 
+    const reasoning = parseKiroReasoning(params.reasoning);
+
+    if (reasoning) {
+      this.metadata = { ...this.metadata, sessionId, reasoning };
+      const fingerprint = JSON.stringify(reasoning);
+      // kiro ticks this notification throughout a turn; only the change is
+      // worth a log line.
+      if (fingerprint !== this.lastReasoningFingerprint) {
+        this.lastReasoningFingerprint = fingerprint;
+        log("kiro reasoning", { session: this.id, reasoning });
+      }
+      // The level pi asked for only becomes true when kiro reports it, so a
+      // difference here is the one signal that /effort did not take — but
+      // only when a level is believed applied at all. kiro reports the
+      // model's own default effort while nothing is applied (live: `max` for
+      // opus-5 right after `session/set_model`), and there is then nothing to
+      // invalidate: the pending reconciliation the model change / fresh spawn
+      // already scheduled re-applies the desired level anyway. kiro's report
+      // is likewise never adopted when desiredEffort is null — that would
+      // restart the process on every effort-less turn, and the clear path
+      // must key on what we applied.
+      if (this.desiredEffort !== null && reasoning.effort !== undefined) {
+        if (reasoning.effort === this.desiredEffort) {
+          this.lastEffortMismatchFingerprint = null;
+        } else if (!this.effortCommandInFlight && this.currentEffort !== null) {
+          // Deduped: kiro ticks this notification throughout a turn, and the
+          // same pair would otherwise be logged on every tick.
+          const fingerprint = `${this.desiredEffort}->${reasoning.effort}`;
+          if (fingerprint !== this.lastEffortMismatchFingerprint) {
+            this.lastEffortMismatchFingerprint = fingerprint;
+            log("kiro effort mismatch", {
+              session: this.id,
+              desired: this.desiredEffort,
+              reported: reasoning.effort,
+            });
+          }
+          // Actionable, not just a log line: currentEffort is what stops the
+          // next turn from re-sending the command, so a level kiro reports as
+          // different invalidates that belief and hands the re-apply to the
+          // next pre-prompt reconciliation.
+          this.currentEffort = null;
+          this.effortReconcilePending = true;
+        }
+      }
+    }
+
     this.metadata = {
       ...this.metadata,
       sessionId,
@@ -594,24 +789,25 @@ export class AcpSession {
 
   async ensureStarted(
     catalogProvider: CatalogProvider,
-    effort: KiroEffort | null = this.currentEffort,
+    effort: KiroEffort | null = this.desiredEffort,
   ): Promise<void> {
     this.lastUsedAt = Date.now();
     this.catalogProvider = catalogProvider;
-    if (this.started && this.currentEffort !== effort) {
+    // Recorded on every turn; syncEffort (or the spawn path) reconciles it
+    // with what kiro's live session actually has.
+    this.desiredEffort = effort;
+    if (this.started && this.currentEffort !== this.desiredEffort) {
       if (this.busy) {
+        // A `/effort` prompt is a session/prompt: kiro rejects it mid-turn.
+        // startPrompt re-syncs before its real prompt on the next turn.
+        this.effortReconcilePending = true;
         log("deferring effort change while session is busy", {
           session: this.id,
           currentEffort: this.currentEffort,
-          requestedEffort: effort,
+          requestedEffort: this.desiredEffort,
         });
       } else {
-        log("restarting Kiro for effort change", {
-          session: this.id,
-          currentEffort: this.currentEffort,
-          requestedEffort: effort,
-        });
-        await this.stop();
+        await this.syncEffort();
       }
     }
     if (this.started && this.recoveryPending) {
@@ -649,7 +845,11 @@ export class AcpSession {
     }
 
     const ensureStartedAt = Date.now();
-    this.currentEffort = effort;
+    // A fresh process has no effort applied: the level rides in-band on the
+    // first prompt (startPrompt → syncEffort), which the pending flag is what
+    // tells it to do even when the model id has not moved.
+    this.currentEffort = null;
+    this.effortReconcilePending = this.desiredEffort !== null;
     await this.startBridge();
     const bridgeReadyAt = Date.now();
     this.writeAgentCfg();
@@ -663,14 +863,16 @@ export class AcpSession {
       cwd: this.cwd,
       agentRootPath: this.agentRootPath,
       agentName: this.agentName,
-      effort: this.currentEffort,
+      desiredEffort: this.desiredEffort,
     });
     // Trust only the pi_host MCP server. `--trust-all-tools` also auto-approved
     // Kiro builtins (AgentCrew/FsRead/…) which then ran inside kiro-cli with no
     // pi_host tools/call. `--trust-tools=@pi_host` plus deny-by-default in
     // session/request_permission is the execution gate.
     const args = ["acp", "--agent", this.agentName, "--trust-tools", "@pi_host"];
-    if (this.currentEffort) args.push("--effort", this.currentEffort);
+    // No `--effort` flag: kiro-cli 2.24.1 silently drops it unless the process
+    // also fixes `--model` (session model `auto`), and it warns on every
+    // start. The level is applied in-band by syncEffort instead.
     if (KIRO_VERBOSITY > 0) args.push(`-${"v".repeat(KIRO_VERBOSITY)}`);
     const spawnAt = Date.now();
     this.proc = spawn("kiro-cli", args, {
@@ -720,6 +922,150 @@ export class AcpSession {
     });
 
     this.started = true;
+  }
+
+  /** Bring kiro's live effort level in line with desiredEffort.
+   *
+   * kiro-cli 2.24.1 offers no out-of-band effort RPC: the only channel is the
+   * `/effort <level>` command, which its ACP layer intercepts from a
+   * `session/prompt` and answers with an assistant chunk — it never reaches
+   * the model. So this sends exactly that prompt (not via startPrompt: it must
+   * not touch the turn's prompt/activePromptDone bookkeeping) and suppresses
+   * the reply so it cannot leak into pi's stream as model output.
+   *
+   * The one thing kiro cannot express in-band is *clearing* a level (`/effort`
+   * rejects every "unset" spelling), so that case restarts the process — the
+   * only restart effort still needs. Failures are logged, never thrown into
+   * the turn: the next turn retries.
+   *
+   * Single-flight: a command prompt is not part of `busy`, so two callers
+   * (two streams routed to this session) must not interleave commands over
+   * the same suppression state. The second caller waits for the running sync
+   * and then reconciles once more only if the level it wanted is still not
+   * the one applied. */
+  private async syncEffort(): Promise<void> {
+    if (this.effortSyncInFlight) {
+      const running = this.effortSyncInFlight;
+      await running;
+      if (this.desiredEffort === this.currentEffort) return;
+    }
+    const inFlight = this.runEffortCommand();
+    this.effortSyncInFlight = inFlight;
+    try {
+      await inFlight;
+    } finally {
+      if (this.effortSyncInFlight === inFlight) this.effortSyncInFlight = null;
+    }
+  }
+
+  /** One `/effort` command round-trip. Clears effortReconcilePending whatever
+   * the outcome, so a level kiro refused is retried on the next turn rather
+   * than twice in the one it failed in. */
+  private async runEffortCommand(): Promise<void> {
+    const level = this.desiredEffort;
+    try {
+      if (level === this.currentEffort) return;
+      if (level === null) {
+        log("resetting Kiro effort", {
+          session: this.id,
+          from: this.currentEffort,
+          // Why a restart: /effort only sets a level.
+          reason: "kiro has no in-band effort clear",
+        });
+        await this.stop();
+        return;
+      }
+
+      const sentAt = Date.now();
+      this.effortCommandInFlight = true;
+      this.suppressCommandOutput = true;
+      this.suppressedCommandText = "";
+      this.suppressedCommandTruncated = false;
+      let reply: string;
+      try {
+        await this.rpcSend(
+          "session/prompt",
+          {
+            sessionId: this.acpSessionId,
+            prompt: [{ type: "text", text: `/effort ${level}` }],
+          },
+          effortCommandTimeoutMs(),
+        );
+        reply = this.suppressedCommandText.trim();
+      } catch (error) {
+        // Timeout, dead process, or a failed write: currentEffort is left
+        // alone, so the next turn re-sends the command.
+        log("effort not applied", {
+          session: this.id,
+          level,
+          commandMs: msSince(sentAt),
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return;
+      } finally {
+        // Suppression is released on every path, so a command that fails
+        // cannot leave the session dropping model output forever. The grace
+        // window covers a reply chunk that lands after the RPC result.
+        this.suppressCommandOutput = false;
+        this.suppressedCommandText = "";
+        this.suppressedCommandTruncated = false;
+        this.effortCommandInFlight = false;
+        this.effortReplyTail = "";
+        this.effortReplyGraceUntil =
+          Date.now() + effortCommandReplyGraceMs();
+      }
+
+      // "Effort set to <level>" is the only success signal; "Effort is not
+      // available on this model." / "invalid effort level …" mean kiro refused
+      // the change (unsupported model, or the command changed shape).
+      if (/^Effort set to\b/.test(reply)) {
+        this.currentEffort = level;
+        log("effort applied", { session: this.id, level });
+      } else {
+        log("effort not applied", {
+          session: this.id,
+          level,
+          kiroReply: reply || null,
+          commandMs: msSince(sentAt),
+        });
+      }
+    } finally {
+      this.effortReconcilePending = false;
+    }
+  }
+
+  /** Append a chunk dropped while a command was in flight, bounded so a
+   * backend that streams without end cannot grow the buffer without limit. */
+  private captureCommandReply(text: string): void {
+    if (this.suppressedCommandTruncated) return;
+    const room = EFFORT_COMMAND_REPLY_MAX_CHARS - this.suppressedCommandText.length;
+    if (text.length > room) {
+      this.suppressedCommandText += text.slice(0, Math.max(0, room));
+      this.suppressedCommandTruncated = true;
+      log("effort command reply truncated", {
+        session: this.id,
+        maxChars: EFFORT_COMMAND_REPLY_MAX_CHARS,
+      });
+      return;
+    }
+    this.suppressedCommandText += text;
+  }
+
+  private inEffortReplyGrace(): boolean {
+    return this.effortReplyGraceUntil > 0 && Date.now() < this.effortReplyGraceUntil;
+  }
+
+  /** True when a chunk arriving after a settled command still reads like that
+   * command's reply — matched against the trailing text too, so a reply split
+   * across chunks is recognised. Anything else is model output and forwarded. */
+  private isLateCommandReply(text: string): boolean {
+    const combined = this.effortReplyTail + text;
+    const head = combined.trimStart();
+    const isReply = EFFORT_COMMAND_REPLY_PREFIXES.some(
+      (prefix) => prefix.startsWith(head) || head.startsWith(prefix),
+    );
+    this.effortReplyTail = isReply ? head.slice(-16) : "";
+    return isReply;
   }
 
   /** Configure the global kiro-cli setting once per process. Resolves with the
@@ -943,18 +1289,37 @@ export class AcpSession {
         : userMessage;
 
     const previousModelId = this.currentModelId;
-    if (this.currentModelId !== modelId) {
+    const modelChanged = this.currentModelId !== modelId;
+    if (modelChanged) {
       await this.rpcSend(
         "session/set_model",
         { sessionId: this.acpSessionId, modelId },
         30000,
       );
       this.currentModelId = modelId;
+      // kiro-cli 2.24.1 clears the session's effort on every set_model, and
+      // extra fields on the RPC are ignored — so re-apply it below.
+      this.currentEffort = null;
       log("model set", {
         session: this.id,
         modelId,
         previousModel: previousModelId,
       });
+    }
+    // Re-apply the level the turn asked for when it can be missing: kiro
+    // dropped it on set_model, or ensureStarted recorded a reconciliation it
+    // could not do (busy deferral, a fresh backend, a metadata mismatch).
+    // Keyed on the pending flag rather than on `currentEffort !== desired`:
+    // ensureStarted's own sync already ran this turn, and a level it could
+    // not apply must be retried on the *next* turn, not twice in this one.
+    // A cleared level is deliberately not handled here: restarting mid-turn
+    // would kill the session this prompt is about to use. ensureStarted owns
+    // the clear, before the turn starts.
+    if (
+      this.desiredEffort !== null &&
+      (modelChanged || this.effortReconcilePending)
+    ) {
+      await this.syncEffort();
     }
     const modelReadyAt = Date.now();
 
@@ -1115,6 +1480,20 @@ export class AcpSession {
     this.acpSessionId = null;
     this.systemPromptHash = null;
     this.currentModelId = null;
+    // The dead backend owned the applied effort and its reasoning report;
+    // the replacement process starts with none and re-applies in-band.
+    this.currentEffort = null;
+    this.lastReasoningFingerprint = null;
+    this.lastEffortMismatchFingerprint = null;
+    this.suppressCommandOutput = false;
+    this.suppressedCommandText = "";
+    this.suppressedCommandTruncated = false;
+    this.effortCommandInFlight = false;
+    // A replacement backend has no level either, so the next turn must
+    // reconcile (ensureStarted re-arms this from desiredEffort).
+    this.effortReconcilePending = false;
+    this.effortReplyGraceUntil = 0;
+    this.effortReplyTail = "";
     // The backend is gone: leak state and the tools-list
     // fingerprint belong to it and must not leak into a replacement process.
     // recoveryRestarts is deliberately kept — the restart bound is per
