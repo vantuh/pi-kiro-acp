@@ -9,7 +9,7 @@ import {
 import { tmpdir } from "node:os";
 import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
 import { KIRO_THINKING_LEVEL_MAP } from "./models/fallback.ts";
-import { stableJson } from "./helpers.ts";
+import { stableJson, sumMeteringCredits } from "./helpers.ts";
 import { log, msSince } from "./logging.ts";
 import { loadKiroAcpConfig, resolveLoggerConfig } from "./config.ts";
 import { getDescendantPids, terminateProcessTree } from "./process-utils.ts";
@@ -131,7 +131,25 @@ export class AcpSession {
       `${this.agentName}.json`,
     );
   }
-  readonly agentName = `pi-kiro-${randomBytes(4).toString("hex")}`;
+  /** Agent name derives from the persisted-session identity when one exists:
+   * a Kiro session binds the agent name captured at its creation and
+   * `session/load` re-resolves it. A random per-process name can never
+   * resolve in a later process (the config lived in another temp root), so
+   * every cross-restart resume fell back to kiro_default and was abandoned
+   * into a full replay. A stable name lets the next process rewrite the
+   * identical config under the same name and restore cleanly. Sessions
+   * without a persistence key keep a random name: nothing can re-resolve
+   * them anyway. Computed lazily — persistenceKey is assigned at routing,
+   * before any spawn. */
+  #agentName: string | null = null;
+  get agentName(): string {
+    if (this.#agentName === null) {
+      this.#agentName = this.persistenceKey
+        ? `pi-kiro-${createHash("sha256").update(this.persistenceKey).digest("hex").slice(0, 8)}`
+        : `pi-kiro-${randomBytes(4).toString("hex")}`;
+    }
+    return this.#agentName;
+  }
   started = false;
   updateHandler: ((u: SessionUpdate) => void) | null = null;
   /** Fires on _kiro.dev/metadata updates so streamers can refresh usage. */
@@ -178,8 +196,11 @@ export class AcpSession {
   backendQuarantined = false;
   /** Set by `_kiro.dev/agent/not_found`: this process fell back to
    * kiro_default, so every session it restores is suspect — a persisted
-   * snapshot binds to the agent name captured at its creation, and agent
-   * names are per-instance random. Reset on stop and on a clean tools list. */
+   * snapshot binds to the agent name captured at its creation, and a name
+   * recorded under another persistence key never resolves in this process.
+   * Reset on stop and on a clean tools list. Still possible for sessions
+   * without a persistence key (random agent name) or after a snapshot-config
+   * mismatch. */
   agentFallbackDetected = false;
   /** Monotonic count of restore-hazard signals seen by this process
    * (builtin leaks + kiro_default fallbacks). Unlike the quarantine flags it
@@ -559,7 +580,7 @@ export class AcpSession {
       acpSessionId: sessionId,
       contextUsagePercentage,
       turnDurationMs,
-      credits: meteringUsage?.find((m) => m.unit === "credit")?.value,
+      credits: meteringUsage ? sumMeteringCredits(meteringUsage) : undefined,
     });
     try {
       this.onMetadata?.(this.metadata);
@@ -856,9 +877,10 @@ export class AcpSession {
             method: attempt.method,
             acpSessionId: kiroSessionId,
           });
-          // The snapshot can never resume cleanly: it binds to the agent name
-          // captured at its creation, and agent names are per-instance random,
-          // so every later restore would fall back to kiro_default again.
+          // The snapshot can never resume cleanly once its recorded agent
+          // name stops resolving: kiro-cli falls back to kiro_default for
+          // that session again on every later restore (a name recorded
+          // under another persistence key cannot be found here).
           if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
           await this.restartAfterRestoreFailure();
           return false;
@@ -1326,7 +1348,25 @@ export class AcpSession {
   private currentCatalog(): ForwardedToolCatalog {
     if (!this.catalogProvider)
       throw new Error("kiro-acp: catalog provider not set");
-    const catalog = this.catalogProvider();
+    let catalog: ForwardedToolCatalog;
+    try {
+      catalog = this.catalogProvider();
+    } catch (error) {
+      log("catalog provider threw", {
+        session: this.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      catalog = {
+        tools: [],
+        piNameByKiroName: new Map(),
+        fingerprint: "",
+        diagnostics: [
+          `catalog provider threw: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        ],
+      };
+    }
     if (catalog.fingerprint !== this.lastCatalogFingerprint) {
       this.lastCatalogFingerprint = catalog.fingerprint;
       // With tools: ["@pi_host"] an empty catalog leaves Kiro with zero tools

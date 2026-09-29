@@ -586,6 +586,60 @@ async function main(): Promise<void> {
     assert(true, "notify/respond are no-ops without a live process");
   }
 
+  // --- the agent name survives a process restart ---
+  // A kiro session binds the agent name captured at its creation, so a
+  // per-process random name can never be re-resolved by `session/load` later:
+  // every cross-restart resume fell back to kiro_default and replayed.
+  {
+    const first = new AcpSession("/tmp");
+    first.persistenceKey = "kiro-acp:abc123:/tmp";
+    const name = first.agentName;
+    assert(
+      /^pi-kiro-[0-9a-f]{8}$/.test(name),
+      "the agent name keeps the pi-kiro- shape",
+    );
+
+    const later = new AcpSession("/tmp");
+    later.persistenceKey = first.persistenceKey;
+    assert(
+      later.agentName === name,
+      "a later process resolves the same agent name for the same key",
+    );
+
+    const other = new AcpSession("/tmp");
+    other.persistenceKey = "kiro-acp:zzz999:/tmp";
+    assert(
+      other.agentName !== name,
+      "a different persistence key derives a different agent name",
+    );
+
+    const anonymous = new AcpSession("/tmp");
+    const anonymousName = anonymous.agentName;
+    assert(
+      /^pi-kiro-[0-9a-f]{8}$/.test(anonymousName) &&
+        new AcpSession("/tmp").agentName !== anonymousName,
+      "without a persistence key the name stays random per instance",
+    );
+  }
+
+  // --- a throwing catalog provider degrades instead of propagating ---
+  // The provider runs while kiro is blocked on tools/list, so an escaping
+  // throw would become an unhandled rejection on the ACP connection.
+  {
+    const { session } = fakeSession();
+    session.catalogProvider = () => {
+      throw new Error("host runtime not bound");
+    };
+    const catalog = (session as any).currentCatalog();
+    assert(catalog.tools.length === 0, "a throwing provider yields no tools");
+    assert(
+      catalog.diagnostics.some((d: string) =>
+        d.includes("catalog provider threw"),
+      ),
+      "the provider failure is reported as a catalog diagnostic",
+    );
+  }
+
   console.log("✓ all framing tests passed");
 }
 

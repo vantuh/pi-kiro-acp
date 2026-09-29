@@ -6,7 +6,7 @@ process.env.XDG_DATA_HOME ??= "/tmp/kiro-acp-test-data";
 
 import { tmpdir } from "node:os";
 import { AcpSession } from "../session.ts";
-import { estimateUsage } from "../helpers.ts";
+import { appendKiroMetadataDiagnostic, estimateUsage, sumMeteringCredits } from "../helpers.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {
@@ -69,6 +69,55 @@ assert(fromPercent.totalTokens === 100_000, "contextUsagePercentage × contextWi
 
 const negative = estimateUsage(msg, 1000, { contextUsed: -5 } as any);
 assert(negative.totalTokens === 100, "negative contextUsed clamps to the char-based floor");
+
+// ── metering credits are summed, not first-matched ───────────────────────────
+// kiro reports one meteringUsage row per credit entry. Matching the first
+// `credit` row instead of summing them under-reported every multi-entry turn.
+
+assertEqual(
+  sumMeteringCredits([
+    { unit: "credit", value: 1 },
+    { unit: "credits", value: 1 },
+  ]),
+  2,
+  "sums credit and credits units",
+);
+
+assertEqual(
+  sumMeteringCredits([
+    { unit: "credit", value: 1 },
+    { unit: "credit", value: 4 },
+    { unit: "tokens", value: 999 },
+  ]),
+  5,
+  "every credit row counts and other units are ignored",
+);
+
+assertEqual(
+  sumMeteringCredits([
+    { unit: "credit", value: 2 },
+    { unit: "credit", value: -1 },
+    { unit: "credit", value: Number.NaN },
+  ]),
+  2,
+  "negative and non-finite credit values are dropped",
+);
+
+assertEqual(sumMeteringCredits(undefined), 0, "no meteringUsage sums to 0");
+assertEqual(sumMeteringCredits([]), 0, "an empty list sums to 0");
+
+const metered = sampleOutput("");
+appendKiroMetadataDiagnostic(metered, {
+  meteringUsage: [
+    { unit: "credit", value: 1 },
+    { unit: "credit", value: 4 },
+  ],
+} as any);
+assertEqual(
+  (metered.diagnostics?.[0] as any).details.credits,
+  5,
+  "the kiro_metadata diagnostic reports the summed credits",
+);
 
 // ── session.onMetadata fires on _kiro.dev/metadata updates ───────────────────
 // stream.ts assigns session.onMetadata so partial frames carry live usage.

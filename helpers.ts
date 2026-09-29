@@ -261,6 +261,20 @@ function normalizeToolResultContent(content: any[]): ToolResultContentBlock[] {
   return blocks;
 }
 
+/** Sum of per-turn Kiro credits from `_kiro.dev/metadata.meteringUsage`. */
+export function sumMeteringCredits(
+  meteringUsage?: Array<{ unit: string; value: number }> | null,
+): number {
+  if (!meteringUsage) return 0;
+  let sum = 0;
+  for (const m of meteringUsage) {
+    if (m.unit !== "credit" && m.unit !== "credits") continue;
+    if (!Number.isFinite(m.value) || m.value <= 0) continue;
+    sum += m.value;
+  }
+  return sum;
+}
+
 export function estimateUsage(
   output: AssistantMessage,
   contextWindow?: number,
@@ -312,8 +326,7 @@ export function appendKiroMetadataDiagnostic(
         sessionCost: metadata.sessionCost,
         meteringUsage: metadata.meteringUsage,
         turnDurationMs: metadata.turnDurationMs,
-        credits: metadata.meteringUsage?.find((m) => m.unit === "credit")
-          ?.value,
+        credits: sumMeteringCredits(metadata.meteringUsage) || undefined,
       },
     },
   ];
