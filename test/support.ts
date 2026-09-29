@@ -45,6 +45,15 @@ export function fakeSession(
         written.push(opts.parseJson ? JSON.parse(chunk) : chunk);
         return true;
       },
+      end() {
+        return true;
+      },
+    },
+    // stop() closes stdin and waits for the process to exit; a fake process
+    // reports the exit as soon as the wait starts.
+    once(event: string, handler: () => void) {
+      if (event === "exit") setImmediate(handler);
+      return session.proc;
     },
   } as any;
   if (opts.acpSessionId !== undefined) session.acpSessionId = opts.acpSessionId;

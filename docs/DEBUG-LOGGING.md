@@ -41,6 +41,8 @@ tail -f "$LOG" | grep '"session":"abc123"'
 | `PI_KIRO_ACP_DRAIN_MS` | Grace period between answering Kiro's outstanding `tools/call` and cancelling its turn (default 150) |
 | `PI_KIRO_ACP_RESTORE_LEAK_CHECK_MS` | Wait after a successful `session/load`/`session/resume` before committing the restore, so the racing leak/fallback signals can land and a suspect snapshot is abandoned (default 150; 0 disables the wait) |
 | `PI_KIRO_ACP_REFUSAL_RETRY_MS` | Delay before re-sending a recovery prompt that came back as a contentless `refusal` (default 1500) |
+| `PI_KIRO_ACP_EFFORT_COMMAND_TIMEOUT_MS` | Bound on the in-band `/effort <level>` command prompt, so a backend that never answers cannot pin the turn's reconciliation (default 10000) |
+| `PI_KIRO_ACP_EFFORT_REPLY_GRACE_MS` | How long after a settled `/effort` command a chunk that still reads like the command's reply is dropped instead of streamed (default 2000) |
 
 ### kiro-cli's own verbosity
 
@@ -90,6 +92,56 @@ and the process restarts before the next turn. Spawn uses
 run with zero permission RPCs). Permission RPC denies anything that is not
 `pi_host` / a forwarded `kiroName` / `pi_*`. `excludedTools: ["@builtin"]` is
 parsed by 2.21 but has no effect there; written for CLI 3+.
+
+### Thinking levels (`effort`)
+
+The thinking level is applied **in band**, not at spawn: kiro-cli 2.24.1
+silently drops the `--effort` flag unless the process also fixes `--model`
+(the session model is `auto`), and `session/set_model` clears the session's
+effort — extra fields on that RPC are ignored. The only remaining channel is
+the `/effort <level>` command, which kiro's ACP layer intercepts from a
+`session/prompt` and answers with an assistant chunk instead of calling the
+model. `session.ts` therefore sends that prompt directly (not via
+`startPrompt`, so the turn's bookkeeping is untouched), suppresses the reply
+so it cannot reach pi as model output, and re-applies the level after every
+`session/set_model`. Clearing a level is the one thing kiro cannot express
+in-band (`/effort` rejects every "unset" spelling), so that case restarts the
+process — the only restart effort still needs. A change that arrives while the
+session is busy is deferred (`deferring effort change while session is busy`)
+and applied before the next turn's prompt.
+
+Reconciliation is **one command per turn and one command at a time**. A turn
+tries to apply a missing level once — `ensureStarted` normally, `startPrompt`
+only when `session/set_model` dropped it or the previous attempt never ran
+(`effortReconcilePending`) — so a level kiro refuses costs one
+`effort not applied` per turn, not two. Concurrent reconciliations serialise
+on one in-flight command (a command prompt is not part of `busy`, and two
+interleaved commands would share the suppression state); a caller that waited
+for a command which did *not* apply the level it wanted gets one more.
+
+The command is **bounded** (`effortCommandTimeoutMs()`, 10s; override with
+`PI_KIRO_ACP_EFFORT_COMMAND_TIMEOUT_MS`) unlike the turn's own prompt, which is
+unlimited: a backend that never answers logs `effort not applied` with the
+timeout as `error`, leaves the applied level alone, and suppression is always
+released — a stuck command can never leave the session dropping model output.
+The reply is captured up to 1024 chars (`effort command reply truncated`).
+kiro answers with the reply chunk *before* the RPC result, but that order is
+not relied on: for 2s after the command settles
+(`PI_KIRO_ACP_EFFORT_REPLY_GRACE_MS`) a chunk that reads like a command reply
+(`Effort set to` / `Effort is not available` / `invalid effort level`, or a
+prefix of one) is still dropped as `late: true`; anything else is forwarded as
+model output.
+
+`kiro reasoning` and `kiro effort mismatch` come from
+`_kiro.dev/metadata.reasoning` and are the only feedback that a level actually
+took. A reported level counts as a mismatch only when a level is believed
+*applied*: with nothing applied kiro reports the model's own default (live:
+`max` for opus-5 right after `session/set_model`), which is not a mismatch and
+is never adopted as ours — the pending reconciliation the model change or fresh
+spawn already scheduled re-applies the desired level. A mismatch is also
+ignored while a command is in flight, where the report is the pre-command
+state by design. Seen at any other time, it invalidates the session's belief
+in its applied level, so the next turn re-sends the command.
 
 ---
 
@@ -161,7 +213,7 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 
 | Message | Data | When |
 |---|---|---|
-| `starting kiro session` | `{ session, cwd, agentRootPath, agentName }` | About to spawn kiro-cli |
+| `starting kiro session` | `{ session, cwd, agentRootPath, agentName, desiredEffort }` | About to spawn kiro-cli (`desiredEffort` = the level this turn asked for; the level is applied in-band, not by a spawn flag) |
 | `session initialized` | `{ session, bridgePort, pid, loadSession, resumeSession, timing }` | RPC initialize succeeded (`timing.bridgeMs` = pi_host startup, `preSpawnSetupMs`, `mcpCfgMs` = settings-call duration, `initializeMs`, `totalMs`) |
 | `configured mcp.noInteractiveTimeout` | `{ session, ms }` | First successful `kiro-cli settings` in this process (MCP *initialization* timeout, in ms) |
 | `skipped mcp.noInteractiveTimeout (already configured)` | `{ session }` | Later cold starts skip the ~0.3s settings call |
@@ -210,7 +262,14 @@ parsed by 2.21 but has no effect there; written for CLI 3+.
 | `restored persisted kiro session` / `failed to restore persisted kiro session` | `{ session, ... }` | Fingerprint-keyed resume of a previous ACP session |
 | `abandoning restored kiro session — leak/fallback during restore` | `{ session, method, acpSessionId }` | The restore RPC succeeded but the fallback/leak signals landed within the check window — the suspect snapshot is cleared and the process restarts with a fresh session (history replayed from pi) |
 | `persisted kiro session fingerprint mismatch` | `{ session, ... }` | History changed → cannot resume |
-| `restarting Kiro for effort change` / `deferring effort change while session is busy` | `{ session, ... }` | `--effort` change handling |
+| `effort applied` | `{ session, level }` | kiro accepted the in-band `/effort <level>` command (`Effort set to …`); the session now has that level |
+| `effort not applied` | `{ session, level, kiroReply, commandMs }` / `{ session, level, commandMs, error }` | The command was refused (`Effort is not available on this model.`, `invalid effort level …`), the RPC failed or the process died, or it went unanswered past the command timeout — the applied level is left unchanged and the next turn retries |
+| `effort command reply truncated` | `{ session, maxChars }` | The captured command reply hit the 1024-char cap; only the prefix was parsed |
+| `resetting Kiro effort` | `{ session, from, reason }` | Clearing an applied level; kiro has no in-band clear, so the process restarts (the only restart effort needs) |
+| `deferring effort change while session is busy` | `{ session, currentEffort, requestedEffort }` | A level change arrived mid-turn; `/effort` is a `session/prompt`, so it is applied before the next turn's prompt instead |
+| `suppressed kiro command output` | `{ session, sessionUpdate, late }` | An assistant chunk dropped because it was the `/effort` command's own reply, not model output (`late: true` = caught by the post-command grace window rather than while the command was in flight) |
+| `kiro reasoning` | `{ session, reasoning }` | `_kiro.dev/metadata.reasoning` changed (`support` / `thinkingEnabled` / `effort` / `effortLevels`); logged once per change, not per tick |
+| `kiro effort mismatch` | `{ session, desired, reported }` | A level is applied and kiro reports a different `effort` — the only signal that the level did not take. Logged once per `{desired, reported}` pair, never while a command is in flight (that window reports the pre-command level by design) and never when nothing is applied (kiro's report is then the model's default); it also invalidates the session's belief in its applied level, so the next turn re-sends the command |
 | `UNMATCHED tool result` | `{ session, toolCallId, toolName, pendingCalls }` | Tool result with no matching call (`... (text-only)` on the image follow-up path) |
 | `findToolCallMatch: rejecting name-match (foreign toolCallId)` | `{ session, toolCallId, toolName }` | Tool result from different session rejected |
 | `ambiguous tool name match` | `{ session, toolName, matchCount, callIds }` | Multiple pending calls with same name |
