@@ -1,9 +1,10 @@
 import {
   type AssistantMessageEventStream,
-  type Context,
   type Model,
   type SimpleStreamOptions,
+  type TranscriptContext,
   createAssistantMessageEventStream,
+  getCurrentTools,
 } from "@earendil-works/pi-ai";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
@@ -60,13 +61,13 @@ const REFUSAL_RETRIES = 1;
 export function streamKiroAcp(
   pi: ExtensionAPI,
   model: Model<any>,
-  context: Context,
+  context: TranscriptContext,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
   const turnStartedAt = Date.now();
   log("streamKiroAcp entry", {
     modelId: model.id,
-    toolsCount: context.tools?.length ?? 0,
+    toolsCount: getCurrentTools(context.messages).length,
     messagesCount: context.messages?.length ?? 0,
     systemPromptLen: context.systemPrompt?.length ?? 0,
     sessionId: options?.sessionId,

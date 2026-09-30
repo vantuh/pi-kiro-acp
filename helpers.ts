@@ -1,4 +1,9 @@
-import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  Context,
+  TranscriptContext,
+} from "@earendil-works/pi-ai";
 import type {
   SessionMetadata,
   ToolResultContentBlock,
@@ -122,7 +127,7 @@ function formatHistoryMessage(msg: Context["messages"][number]): string {
 type ImageBlock = { type: "image"; data: string; mimeType: string };
 
 export function buildPromptParts(
-  context: Context,
+  context: TranscriptContext,
   includeHistory: boolean,
 ): { systemPrompt: string; userMessage: string; images: ImageBlock[] } {
   const msgs = context.messages || [];
@@ -139,7 +144,9 @@ export function buildPromptParts(
     }
   }
   return {
-    systemPrompt: context.systemPrompt || "",
+    // Providers receive a TranscriptContext: the prompt and the tool declarations
+    // live in the transcript system messages, not in Context.systemPrompt/tools.
+    systemPrompt: getCurrentSystemPrompt(context.messages),
     userMessage: includeHistory
       ? buildConversationPrompt(context)
       : lastUserMessage(context),
