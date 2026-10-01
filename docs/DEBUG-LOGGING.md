@@ -302,7 +302,7 @@ in its applied level, so the next turn re-sends the command.
 
 ### Streaming feels slow / waiting
 
-1. Enable debug: `PI_KIRO_ACP_DEBUG=1`
+1. Enable debug in `~/.pi/agent/kiro-acp.json`: `{ "logger": { "debug": true } }` (env `PI_KIRO_ACP_DEBUG` is ignored) and restart pi
 2. Clear log: `LOG="${TMPDIR%/}/kiro-acp-debug.log"; : > "$LOG"`
 3. Reproduce one slow turn, then:
    ```sh
