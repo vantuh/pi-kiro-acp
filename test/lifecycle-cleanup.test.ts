@@ -3,15 +3,20 @@
 // Run: test/run-all.sh test/lifecycle-cleanup.test.ts
 
 import { connect } from "node:net";
-import { AcpSession } from "../session.ts";
+
+import type { Context } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
 import {
-  pruneIdleSessions,
-  routeSession,
-  stopAllSessions,
+  KiroSessionRuntimeRegistry,
+  SessionManager,
 } from "../session-manager.ts";
+import { AcpSession } from "../session.ts";
 import { startToolBridge, type ToolBridge } from "../tool-bridge.ts";
 import { buildForwardedToolCatalog } from "../tool-catalog.ts";
 import type { PendingToolCall, ToolResultInfo } from "../types.ts";
+
+const emptyContext: Context = { messages: [] };
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {
@@ -110,6 +115,9 @@ const toolResult = (
 });
 
 async function main(): Promise<void> {
+  const managerA = new SessionManager();
+  const managerB = new SessionManager();
+
   // --- each session gets its own bridge port and token ---
   const a = new AcpSession("/tmp");
   const b = new AcpSession("/tmp");
@@ -196,28 +204,60 @@ async function main(): Promise<void> {
   assert(await waitForPortClosed(bridgeA.port), "stop closes session A's port");
 
   // --- idle prune closes bridges of sessions it drops ---
-  const routed = await routeSession(
-    { messages: [] } as any,
-    { cwd: "/tmp" } as any,
-  );
+  const routed = await managerA.routeSession(emptyContext, { cwd: "/tmp" });
   const bridgeC = await attachBridge(routed.session);
   routed.session.lastUsedAt = Date.now() - 60_000;
-  pruneIdleSessions(1000);
+  managerA.pruneIdleSessions(1000);
   assert(
     await waitForPortClosed(bridgeC.port),
     "pruned idle sessions release their port",
   );
 
   // --- stopAllSessions leaves nothing behind ---
-  const routed2 = await routeSession(
-    { messages: [] } as any,
-    { cwd: "/tmp" } as any,
-  );
+  const routed2 = await managerA.routeSession(emptyContext, { cwd: "/tmp" });
   const bridgeD = await attachBridge(routed2.session);
-  await stopAllSessions();
+  await managerA.stopAllSessions();
   assert(
     await waitForPortClosed(bridgeD.port),
     "stopAllSessions releases every port",
+  );
+
+  // --- shared provider routing preserves extension-instance ownership ---
+  const runtimeRegistry = new KiroSessionRuntimeRegistry();
+  // The registry test never invokes ExtensionAPI methods.
+  const unusedPi = {} as unknown as ExtensionAPI;
+  const runtimeA = { pi: unusedPi, sessionManager: managerA };
+  const runtimeB = { pi: unusedPi, sessionManager: managerB };
+  runtimeRegistry.register("session-a", runtimeA);
+  runtimeRegistry.register("session-b", runtimeB);
+  const ownedByA = await runtimeRegistry
+    .resolve("session-a")
+    .sessionManager.routeSession(emptyContext, { cwd: "/tmp/a" });
+  const ownedByB = await runtimeRegistry
+    .resolve("session-b")
+    .sessionManager.routeSession(emptyContext, { cwd: "/tmp/b" });
+  const ownedBridgeA = await attachBridge(ownedByA.session);
+  const ownedBridgeB = await attachBridge(ownedByB.session);
+
+  runtimeRegistry.unregister("session-a", runtimeA);
+
+  await managerA.stopAllSessions();
+  assert(
+    await waitForPortClosed(ownedBridgeA.port),
+    "manager shutdown closes its own session",
+  );
+  assert(
+    runtimeRegistry.resolve("session-b") === runtimeB,
+    "shared provider routing keeps the surviving session owner",
+  );
+  assert(
+    await isListening(ownedBridgeB.port),
+    "runtime shutdown leaves another runtime's session alive",
+  );
+  await managerB.stopAllSessions();
+  assert(
+    await waitForPortClosed(ownedBridgeB.port),
+    "second manager can shut down its surviving session",
   );
 
   console.log("✓ all lifecycle-cleanup tests passed");

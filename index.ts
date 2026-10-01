@@ -4,18 +4,26 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 
 import { loadKiroAcpConfig, resolveUsageFooterConfig } from "./config.ts";
-import { KIRO_MODELS, type KiroModelConfig } from "./models/fallback.ts";
-import { discoverKiroModels } from "./models/discovery.ts";
 import { LOG_FILE, log } from "./logging.ts";
-import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
+import { discoverKiroModels } from "./models/discovery.ts";
+import { KIRO_MODELS, type KiroModelConfig } from "./models/fallback.ts";
 import { stripAssistantContentFrames } from "./native-tool-frame.ts";
-import { stopAllSessions } from "./session-manager.ts";
+import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from "./overflow.ts";
+import {
+  KiroSessionRuntimeRegistry,
+  SessionManager,
+} from "./session-manager.ts";
 import { streamKiroAcp } from "./stream.ts";
 import { getKiroUsage, type KiroUsage } from "./usage.ts";
 
 type UiGetter = () => ExtensionContext["ui"] | undefined;
 
+const sessionRuntimeRegistry = new KiroSessionRuntimeRegistry();
+
 export default function (pi: ExtensionAPI) {
+  const sessionManager = new SessionManager();
+  const runtime = { pi, sessionManager };
+  let registeredSessionId: string | undefined;
   log("extension loaded", {
     pid: process.pid,
     models: KIRO_MODELS.length,
@@ -32,6 +40,14 @@ export default function (pi: ExtensionAPI) {
   // usage footer working from the very start of a session (the footer needs
   // `ui` captured as early as possible).
   pi.on("session_start", grabUi);
+  pi.on("session_start", (_event, ctx) => {
+    const sessionId = ctx.sessionManager.getSessionId();
+    if (registeredSessionId && registeredSessionId !== sessionId) {
+      sessionRuntimeRegistry.unregister(registeredSessionId, runtime);
+    }
+    registeredSessionId = sessionId;
+    sessionRuntimeRegistry.register(sessionId, runtime);
+  });
   pi.on("turn_start", grabUi);
   pi.on("message_start", grabUi);
   const getUi: UiGetter = () => latestUi;
@@ -141,11 +157,15 @@ export default function (pi: ExtensionAPI) {
   );
 
   pi.on("session_shutdown", async (event) => {
+    if (registeredSessionId) {
+      sessionRuntimeRegistry.unregister(registeredSessionId, runtime);
+      registeredSessionId = undefined;
+    }
     log("session_shutdown", {
       reason: event.reason,
       targetSessionFile: event.targetSessionFile,
     });
-    await stopAllSessions();
+    await sessionManager.stopAllSessions();
   });
 }
 
@@ -175,8 +195,16 @@ function registerKiroProvider(
     apiKey: "unused",
     api: "kiro-acp-api" as any,
     models,
-    streamSimple: (model, context, options) =>
-      streamKiroAcp(pi, model, context, options),
+    streamSimple: (model, context, options) => {
+      const runtime = sessionRuntimeRegistry.resolve(options?.sessionId);
+      return streamKiroAcp(
+        runtime.pi,
+        runtime.sessionManager,
+        model,
+        context,
+        options,
+      );
+    },
   });
 }
 

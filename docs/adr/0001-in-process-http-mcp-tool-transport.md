@@ -59,9 +59,12 @@ turn loop.
   security-model change traded for latency; visibility is preserved by the mirror, not by
   approval prompts.
 - Every session owns a listening port, so lifecycle discipline is mandatory: `stop()`,
-  `pruneIdleSessions()`, and `stopAllSessions()` must close the bridge, and pending tool-call
-  ids are namespaced `${session.id}-<n>` so results cannot cross sessions. Both are covered by
-  `test/lifecycle-cleanup.test.ts`.
+  `SessionManager.pruneIdleSessions()`, and `SessionManager.stopAllSessions()` must close the
+  bridge. Each extension instance owns its own manager. Omp's custom API registry is process-wide,
+  so `KiroSessionRuntimeRegistry` resolves each stream by its omp session id before selecting the
+  instance's `ExtensionAPI` and manager. One subagent shutting down therefore cannot stop another
+  subagent's ACP sessions. Pending tool-call ids are namespaced `${session.id}-<n>` so results
+  cannot cross sessions. These invariants are covered by `test/lifecycle-cleanup.test.ts`.
 - Reverting to "pi executes and gates everything" (B2) stays cheap: widen the catalog filter,
   drop the native tools from `allowedTools`, disable the mirror.
 

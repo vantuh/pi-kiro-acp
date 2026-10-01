@@ -6,9 +6,12 @@
 // Run: test/run-all.sh test/orphaned-tool-result.test.ts
 
 import type { Context } from "@earendil-works/pi-ai";
+
+import { SessionManager } from "../session-manager.ts";
 import { AcpSession } from "../session.ts";
-import { routeSession, stopAllSessions } from "../session-manager.ts";
 import { fakeSession, tick } from "./support.ts";
+
+const sessionManager = new SessionManager();
 
 let failed = false;
 
@@ -63,12 +66,9 @@ function markLive(session: AcpSession, acpSessionId: string): void {
 async function main(): Promise<void> {
   // --- an orphaned tool result reuses the live session instead of forking ---
   {
-    const first = await routeSession(askedContext(), opts("S1"));
+    const first = await sessionManager.routeSession(askedContext(), opts("S1"));
     markLive(first.session, "acp-1");
-    assert(
-      first.kind === "prompt",
-      "a plain turn is not flagged as orphaned",
-    );
+    assert(first.kind === "prompt", "a plain turn is not flagged as orphaned");
 
     // Kiro dropped its tools/call, so nothing is pending when the result lands.
     assert(
@@ -76,7 +76,10 @@ async function main(): Promise<void> {
       "no pending bridge call remains after the drop",
     );
 
-    const recovered = await routeSession(toolResultContext(), opts("S1"));
+    const recovered = await sessionManager.routeSession(
+      toolResultContext(),
+      opts("S1"),
+    );
     assert(
       recovered.session === first.session,
       "the orphaned result is routed back to the live session",
@@ -93,12 +96,15 @@ async function main(): Promise<void> {
       recovered.toolResults.length === 1,
       "the tool result is carried through",
     );
-    await stopAllSessions();
+    await sessionManager.stopAllSessions();
   }
 
   // --- a matching pending call still takes the normal resumption path ---
   {
-    const routed = await routeSession(askedContext(), opts("S2"));
+    const routed = await sessionManager.routeSession(
+      askedContext(),
+      opts("S2"),
+    );
     markLive(routed.session, "acp-2");
     routed.session.pendingToolCalls.set("c1", {
       callId: "c1",
@@ -108,7 +114,10 @@ async function main(): Promise<void> {
       resolve: () => {},
     });
 
-    const resumed = await routeSession(toolResultContext(), opts("S2"));
+    const resumed = await sessionManager.routeSession(
+      toolResultContext(),
+      opts("S2"),
+    );
     assert(
       resumed.session === routed.session,
       "resumption stays on the same session",
@@ -121,12 +130,15 @@ async function main(): Promise<void> {
       resumed.kind !== "orphaned",
       "resumption is not treated as orphaned",
     );
-    await stopAllSessions();
+    await sessionManager.stopAllSessions();
   }
 
   // --- no live session to recover into: still flagged, so the replay is forced ---
   {
-    const routed = await routeSession(toolResultContext(), opts("S3"));
+    const routed = await sessionManager.routeSession(
+      toolResultContext(),
+      opts("S3"),
+    );
     assert(routed.kind !== "resumption", "a cold start cannot resume");
     assert(
       routed.kind === "orphaned",
@@ -136,7 +148,7 @@ async function main(): Promise<void> {
       routed.session.acpSessionId === null,
       "the cold session has no ACP conversation yet",
     );
-    await stopAllSessions();
+    await sessionManager.stopAllSessions();
   }
 
   // --- a retry of an abandoned call is answered, not run twice ---
@@ -355,7 +367,7 @@ async function main(): Promise<void> {
     );
   }
 
-  await stopAllSessions();
+  await sessionManager.stopAllSessions();
   if (failed) process.exit(1);
   console.log("✓ all orphaned-tool-result tests passed");
 }
@@ -365,5 +377,5 @@ main().catch((error) => {
     `✗ orphaned-tool-result test failed: ${error instanceof Error ? error.stack || error.message : String(error)}`,
   );
   process.exitCode = 1;
-  return stopAllSessions().catch(() => {});
+  return sessionManager.stopAllSessions().catch(() => {});
 });

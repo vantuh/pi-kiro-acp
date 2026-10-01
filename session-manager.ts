@@ -1,11 +1,11 @@
 import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+
 import { extractToolResults } from "./helpers.ts";
 import { log } from "./logging.ts";
-import { AcpSession } from "./session.ts";
 import { persistenceKeyForSession } from "./session-persistence.ts";
+import { AcpSession } from "./session.ts";
 import type { ToolResultInfo } from "./types.ts";
-
-const sessions = new Map<string, AcpSession>();
 
 export interface RoutedSession {
   session: AcpSession;
@@ -23,8 +23,16 @@ export interface RoutedSession {
   kind: "prompt" | "resumption" | "orphaned";
 }
 
+export type KiroStreamOptions = SimpleStreamOptions & {
+  cwd?: string;
+};
+
 /** Sessions that still hold a live Kiro conversation, most recently used first. */
-function liveSessionsForKey(keyPrefix: string, cwd: string): AcpSession[] {
+function liveSessionsForKey(
+  sessions: Map<string, AcpSession>,
+  keyPrefix: string,
+  cwd: string,
+): AcpSession[] {
   return [...sessions.entries()]
     .filter(([key]) => key === keyPrefix || key.startsWith(`${keyPrefix}:`))
     .map(([, session]) => session)
@@ -35,16 +43,17 @@ function liveSessionsForKey(keyPrefix: string, cwd: string): AcpSession[] {
     .sort((a, b) => b.lastUsedAt - a.lastUsedAt);
 }
 
-export async function routeSession(
+async function routeSession(
+  sessions: Map<string, AcpSession>,
   context: Context,
-  options?: SimpleStreamOptions,
+  options?: KiroStreamOptions,
 ): Promise<RoutedSession> {
   const toolResults = extractToolResults(context);
   const sessionId =
     typeof options?.sessionId === "string" && options.sessionId
       ? options.sessionId
       : undefined;
-  const requestedCwd = (options as any)?.cwd || process.cwd();
+  const requestedCwd = options?.cwd ?? process.cwd();
   let kind: RoutedSession["kind"] = "prompt";
 
   if (toolResults.length > 0) {
@@ -86,7 +95,7 @@ export async function routeSession(
     });
 
     const reusable = sessionId
-      ? liveSessionsForKey(`pi:${sessionId}`, requestedCwd)[0]
+      ? liveSessionsForKey(sessions, `pi:${sessionId}`, requestedCwd)[0]
       : undefined;
     if (reusable) {
       if (sessionId)
@@ -187,13 +196,18 @@ export async function routeSession(
   };
 }
 
-export async function stopAllSessions(): Promise<void> {
+async function stopAllSessions(
+  sessions: Map<string, AcpSession>,
+): Promise<void> {
   const all = [...sessions.values()];
   sessions.clear();
-  await Promise.allSettled(all.map((s) => s.stop()));
+  await Promise.allSettled(all.map((session) => session.stop()));
 }
 
-export function pruneIdleSessions(maxIdleMs = 10 * 60 * 1000): void {
+function pruneIdleSessions(
+  sessions: Map<string, AcpSession>,
+  maxIdleMs = 10 * 60 * 1000,
+): void {
   const now = Date.now();
   for (const [key, session] of sessions) {
     if (!session.busy && now - session.lastUsedAt > maxIdleMs) {
@@ -205,5 +219,62 @@ export function pruneIdleSessions(maxIdleMs = 10 * 60 * 1000): void {
       sessions.delete(key);
       void session.stop();
     }
+  }
+}
+
+export class SessionManager {
+  readonly #sessions = new Map<string, AcpSession>();
+
+  routeSession(
+    context: Context,
+    options?: KiroStreamOptions,
+  ): Promise<RoutedSession> {
+    return routeSession(this.#sessions, context, options);
+  }
+
+  stopAllSessions(): Promise<void> {
+    return stopAllSessions(this.#sessions);
+  }
+
+  pruneIdleSessions(maxIdleMs?: number): void {
+    pruneIdleSessions(this.#sessions, maxIdleMs);
+  }
+}
+
+export interface KiroSessionRuntime {
+  pi: ExtensionAPI;
+  sessionManager: SessionManager;
+}
+
+export class KiroSessionRuntimeRegistry {
+  readonly #runtimes = new Map<string, KiroSessionRuntime>();
+
+  register(sessionId: string, runtime: KiroSessionRuntime): void {
+    this.#runtimes.set(sessionId, runtime);
+  }
+
+  unregister(sessionId: string, runtime: KiroSessionRuntime): void {
+    if (this.#runtimes.get(sessionId) === runtime) {
+      this.#runtimes.delete(sessionId);
+    }
+  }
+
+  resolve(sessionId?: string): KiroSessionRuntime {
+    if (sessionId) {
+      const runtime = this.#runtimes.get(sessionId);
+      if (runtime) return runtime;
+      throw new Error(
+        `No kiro-acp runtime registered for session ${sessionId}`,
+      );
+    }
+
+    if (this.#runtimes.size === 1) {
+      const runtime = this.#runtimes.values().next().value;
+      if (runtime) return runtime;
+    }
+
+    throw new Error(
+      `Cannot resolve kiro-acp runtime without a session id (${this.#runtimes.size} registered)`,
+    );
   }
 }

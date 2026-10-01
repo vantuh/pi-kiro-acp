@@ -9,6 +9,8 @@
 
 process.env.PI_KIRO_ACP_REFUSAL_RETRY_MS = "20";
 
+import { SessionManager } from "../session-manager.ts";
+
 let failed = false;
 
 function assert(condition: unknown, label: string): void {
@@ -62,12 +64,11 @@ const toolResultContext = () =>
 async function main(): Promise<void> {
   // Imported after the env override above so the retry delay is picked up.
   const { streamKiroAcp } = await import("../stream.ts");
-  const { routeSession, stopAllSessions } =
-    await import("../session-manager.ts");
+  const sessionManager = new SessionManager();
 
   try {
     const opts = { sessionId: "S-refusal", cwd: CWD } as any;
-    const routed = await routeSession(
+    const routed = await sessionManager.routeSession(
       {
         messages: [{ role: "user", content: "delegate this" }],
         systemPrompt: "",
@@ -96,6 +97,7 @@ async function main(): Promise<void> {
     const consumed = (async () => {
       for await (const event of streamKiroAcp(
         pi,
+        sessionManager,
         model,
         toolResultContext(),
         opts,
@@ -184,6 +186,7 @@ async function main(): Promise<void> {
       const run = (async () => {
         for await (const event of streamKiroAcp(
           pi,
+          sessionManager,
           model,
           toolResultContext(),
           opts,
@@ -234,10 +237,9 @@ async function main(): Promise<void> {
       "a second refusal ends the turn instead of looping",
     );
 
-    await stopAllSessions();
+    await sessionManager.stopAllSessions();
   } finally {
-    const { stopAllSessions } = await import("../session-manager.ts");
-    await stopAllSessions().catch(() => {});
+    await sessionManager.stopAllSessions().catch(() => {});
   }
 
   if (failed) process.exit(1);

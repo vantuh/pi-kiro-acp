@@ -1,9 +1,11 @@
 // Test: streamKiroAcp handles AbortSignal without hanging.
 // Run: test/run-all.sh test/abort.test.ts
 
+import { SessionManager } from "../session-manager.ts";
 import { streamKiroAcp } from "../stream.ts";
-import { stopAllSessions } from "../session-manager.ts";
 import { assert, kiroContext, kiroModel } from "./support.ts";
+
+const sessionManager = new SessionManager();
 
 async function main() {
   const model = kiroModel();
@@ -15,7 +17,9 @@ async function main() {
   try {
     const ac = new AbortController();
     const pi = { getAllTools: () => [], getActiveTools: () => [] } as any;
-    const stream = streamKiroAcp(pi, model, context, { signal: ac.signal });
+    const stream = streamKiroAcp(pi, sessionManager, model, context, {
+      signal: ac.signal,
+    });
     const eventTypes: string[] = [];
     let gotDelta = false;
     let streamEnded = false;
@@ -50,12 +54,12 @@ async function main() {
     console.log("✓ stream ended without hanging");
     console.log("✓ abort test passed");
   } finally {
-    await stopAllSessions();
+    await sessionManager.stopAllSessions();
   }
 }
 
 main().catch((e) => {
   console.error("✗ test failed:", e);
   process.exitCode = 1;
-  return stopAllSessions().catch(() => {});
+  return sessionManager.stopAllSessions().catch(() => {});
 });
