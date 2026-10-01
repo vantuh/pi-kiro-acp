@@ -2,7 +2,11 @@
 // Run: test/run-all.sh test/catalog.test.ts
 
 import { createHash } from "node:crypto";
-import { buildForwardedToolCatalog, isKiroToolName } from "../tool-catalog.ts";
+import {
+  buildForwardedToolCatalog,
+  hostToolCatalog,
+  isKiroToolName,
+} from "../tool-catalog.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {
@@ -249,6 +253,53 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
   assert(
     base.fingerprint !== changedName.fingerprint,
     "name changes fingerprint",
+  );
+}
+
+{
+  const request = [
+    {
+      name: "propose_commit",
+      description: "Propose a conventional commit",
+      parameters: schema,
+    },
+  ];
+  const catalog = hostToolCatalog({
+    requestTools: request,
+    sessionTools: () => {
+      throw new Error(
+        "Extension runtime not initialized. Action methods cannot be called during extension loading.",
+      );
+    },
+  });
+  assert(
+    catalog.tools.map((tool) => tool.piName).join() === "propose_commit",
+    "request tools win over a throwing session catalog (omp commit CLI load)",
+  );
+}
+
+{
+  const catalog = hostToolCatalog({
+    sessionTools: () => {
+      throw new Error(
+        "Extension runtime not initialized. Action methods cannot be called during extension loading.",
+      );
+    },
+  });
+  assert(catalog.tools.length === 0, "throwing session catalog yields no tools");
+  assert(
+    catalog.diagnostics.some((line) =>
+      line.includes("session tool catalog unavailable"),
+    ),
+    "throwing session catalog records a diagnostic instead of rejecting",
+  );
+}
+
+{
+  const catalog = hostToolCatalog({ requestTools: [] });
+  assert(
+    catalog.tools.length === 0,
+    "an explicit empty request catalog is empty, not a session fallback",
   );
 }
 
