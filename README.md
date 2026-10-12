@@ -25,6 +25,13 @@ and then diverged. A change here does not appear in omp.
 - [Debug logging](docs/DEBUG-LOGGING.md)
 - [E2E live probe](test/e2e/README.md)
 
+## Tests
+
+Run `./test/run-all.sh`. For a managed Pi installation, set `PI_NODE_MODULES`
+to its `node_modules` directory containing `jiti` and `@earendil-works/pi-ai`.
+The default lookup assumes a global npm installation. Live E2E tests require
+an authenticated Kiro CLI; see the [live probe guide](test/e2e/README.md).
+
 ## Runtime paths
 
 | What | Path |
