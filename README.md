@@ -6,10 +6,12 @@ Use [Kiro](https://kiro.dev) models inside the [pi](https://github.com/earendil-
 `kiro-cli acp` over the Agent Client Protocol (ACP). Pi stays in charge of the
 conversation and the tools: Kiro only sees pi's tools, never its own built-ins.
 
-```
-pi ──streamSimple──▶ pi-kiro-acp ──ACP / JSON-RPC (stdio)──▶ kiro-cli acp
- ▲                        │                                       │
- └──── tool calls ◀── pi_host MCP server (127.0.0.1, HTTP) ◀──────┘
+```mermaid
+flowchart LR
+    pi[pi] -- streamSimple --> ext[pi-kiro-acp]
+    ext -- "ACP / JSON-RPC (stdio)" --> kiro[kiro-cli acp]
+    kiro -- "MCP tools/call (HTTP)" --> mcp["pi_host MCP server<br/>127.0.0.1"]
+    mcp -- tool calls --> pi
 ```
 
 ## Features
