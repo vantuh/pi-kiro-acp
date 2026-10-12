@@ -1,8 +1,3 @@
-// Shared test infrastructure for the kiro-acp tests. These files run through
-// jiti (test/run-all.sh) with pi's dependency tree, so imports stay relative
-// and there is no test framework — just helpers plus process.exit on failure.
-// test/refusal-retry.test.ts deliberately does not use this file: it must set
-// an env var before stream.ts is imported.
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { request as httpRequest, type ClientRequest } from "node:http";
 import { AcpSession } from "../src/session.ts";
@@ -11,10 +6,7 @@ import { AcpSession } from "../src/session.ts";
 
 /** Throws on a failed assertion so `finally` cleanup blocks (e.g.
  * stopAllSessions in the streaming tests) still run. */
-export function assert(
-  condition: unknown,
-  label: string,
-): asserts condition {
+export function assert(condition: unknown, label: string): asserts condition {
   if (!condition) throw new Error(label);
   console.log(`✓ ${label}`);
 }
@@ -33,9 +25,10 @@ export interface FakeSessionOptions {
 
 /** A session with a fake writable stdin, so rpc* writes are captured instead
  * of spawning kiro-cli. */
-export function fakeSession(
-  opts: FakeSessionOptions = {},
-): { session: AcpSession; written: any[] } {
+export function fakeSession(opts: FakeSessionOptions = {}): {
+  session: AcpSession;
+  written: any[];
+} {
   const session = new AcpSession(opts.cwd ?? "/tmp");
   const written: any[] = [];
   session.proc = {
@@ -67,10 +60,9 @@ export function fakeSession(
 export function parseLines(written: string[]): any[] {
   return written.map((line) => {
     if (!line.endsWith("\n") || line.slice(0, -1).includes("\n")) {
-      console.error(
-        `✗ write is not a single newline-delimited frame: ${JSON.stringify(line)}`,
+      throw new Error(
+        `write is not a single newline-delimited frame: ${JSON.stringify(line)}`,
       );
-      process.exit(1);
     }
     return JSON.parse(line);
   });

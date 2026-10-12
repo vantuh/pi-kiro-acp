@@ -5,22 +5,13 @@
 // 4-20ms with zero thinking/text, which the stream reported to pi as a normal
 // `stop`. The orchestrator then sat idle right after its subagent returned until
 // the user typed "continue" — a second prompt on the same session goes through.
-// Run: test/run-all.sh test/refusal-retry.test.ts
+// Run: npm test -- test/refusal-retry.test.ts
 
 process.env.PI_KIRO_ACP_REFUSAL_RETRY_MS = "20";
 
+import { test } from "vitest";
 import { SessionManager } from "../src/session-manager.ts";
-
-let failed = false;
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    failed = true;
-    return;
-  }
-  console.log(`✓ ${label}`);
-}
+import { assert } from "./support.ts";
 
 const CWD = "/tmp/kiro-acp-refusal";
 const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
@@ -61,7 +52,7 @@ const toolResultContext = () =>
     tools: [],
   }) as any;
 
-async function main(): Promise<void> {
+test("a recovery prompt kiro-cli refuses is re-sent", async () => {
   // Imported after the env override above so the retry delay is picked up.
   const { streamKiroAcp } = await import("../src/stream.ts");
   const sessionManager = new SessionManager();
@@ -241,14 +232,4 @@ async function main(): Promise<void> {
   } finally {
     await sessionManager.stopAllSessions().catch(() => {});
   }
-
-  if (failed) process.exit(1);
-  console.log("✓ all refusal-retry tests passed");
-}
-
-main().catch((error) => {
-  console.error(
-    `✗ refusal-retry test failed: ${error instanceof Error ? error.stack || error.message : String(error)}`,
-  );
-  process.exitCode = 1;
 });

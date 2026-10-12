@@ -5,21 +5,11 @@
 // Measured 2026-08-26: leaving one behind made the recovery prompt come back as a
 // contentless `refusal` in 4-20ms (7 of 14 recoveries), which pi reported as a
 // finished turn — the orchestrator stopped right after its subagent returned.
-// Run: test/run-all.sh test/stranded-tool-call.test.ts
+// Run: npm test -- test/stranded-tool-call.test.ts
 
+import { test } from "vitest";
 import { AcpSession } from "../src/session.ts";
-import { fakeSession, tick } from "./support.ts";
-
-let failed = false;
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    failed = true;
-    return;
-  }
-  console.log(`✓ ${label}`);
-}
+import { assert, fakeSession, tick } from "./support.ts";
 
 /** Long enough to cover the handoff's tool-result drain (default 150ms). */
 const DRAIN_WAIT_MS = (Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150) + 50;
@@ -51,7 +41,7 @@ function bridgeCall(
   return { abort, result };
 }
 
-async function main(): Promise<void> {
+test("stranded tool calls and the cancel handoff", async () => {
   // --- a call arriving after the turn closed is answered, and the dead turn ends ---
   {
     const { session, written } = fakeFrameSession();
@@ -199,14 +189,4 @@ async function main(): Promise<void> {
       "the follow-up prompt is sent after the cancel settles",
     );
   }
-
-  if (failed) process.exit(1);
-  console.log("✓ all stranded-tool-call tests passed");
-}
-
-main().catch((error) => {
-  console.error(
-    `✗ stranded-tool-call test failed: ${error instanceof Error ? error.stack || error.message : String(error)}`,
-  );
-  process.exitCode = 1;
 });

@@ -2,7 +2,6 @@ import { randomBytes } from "node:crypto";
 import {
   createServer,
   type IncomingMessage,
-  type Server,
   type ServerResponse,
 } from "node:http";
 import type { ForwardedTool, ForwardedToolCatalog } from "./tool-catalog.ts";
@@ -39,7 +38,8 @@ export interface ToolBridgeCall {
 }
 
 export type ToolBridgeCatalog =
-  ForwardedToolCatalog | (() => ForwardedToolCatalog);
+  | ForwardedToolCatalog
+  | (() => ForwardedToolCatalog);
 export type ToolBridgeCallHandler = (
   call: ToolBridgeCall,
 ) => Promise<ToolBridgeResult>;
@@ -317,7 +317,8 @@ export async function startToolBridge(
         return;
       case "tools/call": {
         const params = message.params as
-          { name?: unknown; arguments?: unknown } | undefined;
+          | { name?: unknown; arguments?: unknown }
+          | undefined;
         if (typeof params?.name !== "string") {
           sendJson(res, 200, jsonRpcError(id, -32602, "Tool name is required"));
           return;

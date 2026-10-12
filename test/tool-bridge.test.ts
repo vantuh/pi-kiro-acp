@@ -1,6 +1,7 @@
 // Test: authenticated loopback Streamable HTTP MCP adapter.
-// Run: test/run-all.sh test/tool-bridge.test.ts
+// Run: npm test -- test/tool-bridge.test.ts
 
+import { test } from "vitest";
 import { buildForwardedToolCatalog } from "../src/tool-catalog.ts";
 import { startToolBridge } from "../src/tool-bridge.ts";
 import {
@@ -11,7 +12,6 @@ import {
   sseMessages,
   ssePost,
   wait,
-  type HttpResponse,
 } from "./support.ts";
 
 const catalog = buildForwardedToolCatalog(
@@ -26,8 +26,7 @@ const catalog = buildForwardedToolCatalog(
   ["probe_tool"],
 );
 
-
-async function main(): Promise<void> {
+test("authenticated loopback Streamable HTTP MCP adapter", async () => {
   let resolveCall: (() => void) | undefined;
   let callStarted: ((call: any) => void) | undefined;
   const bridge = await startToolBridge({
@@ -492,11 +491,4 @@ async function main(): Promise<void> {
     );
     await jsonBridge.close();
   }
-}
-
-main().catch((error) => {
-  console.error(
-    `✗ tool bridge test failed: ${error instanceof Error ? error.message : String(error)}`,
-  );
-  process.exit(1);
 });

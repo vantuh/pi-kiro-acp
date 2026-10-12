@@ -1,7 +1,8 @@
 // Test: per-session bridge isolation and resource cleanup on stop / idle prune.
 // No cross-session tool-call mixing, no leaked HTTP ports.
-// Run: test/run-all.sh test/lifecycle-cleanup.test.ts
+// Run: npm test -- test/lifecycle-cleanup.test.ts
 
+import { test } from "vitest";
 import { connect } from "node:net";
 
 import type { Context } from "@earendil-works/pi-ai";
@@ -15,16 +16,9 @@ import { AcpSession } from "../src/session.ts";
 import { startToolBridge, type ToolBridge } from "../src/tool-bridge.ts";
 import { buildForwardedToolCatalog } from "../src/tool-catalog.ts";
 import type { PendingToolCall, ToolResultInfo } from "../src/types.ts";
+import { assert } from "./support.ts";
 
 const emptyContext: Context = { messages: [] };
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
 
 const catalog = () =>
   buildForwardedToolCatalog(
@@ -114,7 +108,7 @@ const toolResult = (
   isError: false,
 });
 
-async function main(): Promise<void> {
+test("per-session bridge isolation and cleanup on stop / idle prune", async () => {
   const managerA = new SessionManager();
   const managerB = new SessionManager();
 
@@ -259,8 +253,4 @@ async function main(): Promise<void> {
     await waitForPortClosed(ownedBridgeB.port),
     "second manager can shut down its surviving session",
   );
-
-  console.log("✓ all lifecycle-cleanup tests passed");
-}
-
-void main();
+});

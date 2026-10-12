@@ -41,7 +41,9 @@ export interface PersistedKiroSession {
  * per-session random `name`, which must not affect resumability. Serialized
  * canonically (sorted keys) so key order never changes the hash, and over the
  * whole remaining config so a future semantic field cannot be missed. */
-export function agentConfigFingerprint(config: Record<string, unknown>): string {
+export function agentConfigFingerprint(
+  config: Record<string, unknown>,
+): string {
   const { name: _name, ...semantic } = config;
   return hashText(stableJson(semantic));
 }

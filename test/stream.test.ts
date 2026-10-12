@@ -1,13 +1,14 @@
 // Test: streamKiroAcp streams text from a real Kiro ACP session.
-// Run: test/run-all.sh test/stream.test.ts
+// Run: npm test -- test/stream.test.ts
 
+import { test } from "vitest";
 import { SessionManager } from "../src/session-manager.ts";
 import { streamKiroAcp } from "../src/stream.ts";
 import { assert, kiroContext, kiroModel } from "./support.ts";
 
 const sessionManager = new SessionManager();
 
-async function main() {
+test("streamKiroAcp streams text from a real Kiro ACP session", async () => {
   const model = kiroModel();
 
   const context = kiroContext("Say 'hello world' and nothing else.");
@@ -47,10 +48,4 @@ async function main() {
   } finally {
     await sessionManager.stopAllSessions();
   }
-}
-
-main().catch((e) => {
-  console.error("✗ test failed:", e);
-  process.exitCode = 1;
-  return sessionManager.stopAllSessions().catch(() => {});
 });

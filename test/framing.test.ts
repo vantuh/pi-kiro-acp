@@ -1,10 +1,12 @@
 // Test: newline-delimited JSON-RPC framing and stdout dispatch in AcpSession.
-// Run: test/run-all.sh test/framing.test.ts
+// Run: npm test -- test/framing.test.ts
 
+import { test } from "vitest";
 import type { SessionUpdate } from "../src/types.ts";
 import { AcpSession } from "../src/session.ts";
 import { assert, fakeSession, parseLines, settled } from "./support.ts";
-async function main(): Promise<void> {
+
+test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
   // --- outbound framing ---
   {
     const { session, written } = fakeSession();
@@ -139,8 +141,7 @@ async function main(): Promise<void> {
     const frames = parseLines(written);
     assert(frames.length === 3, "every inbound request gets exactly one reply");
     assert(
-      frames[0].id === 5 &&
-        frames[0].result.outcome.optionId === "reject_once",
+      frames[0].id === 5 && frames[0].result.outcome.optionId === "reject_once",
       "unidentified permission is denied (reject_once)",
     );
     assert(
@@ -326,8 +327,7 @@ async function main(): Promise<void> {
     // session/new after a leaked restore is sound again).
     available([{ name: "bash", source: "mcp:pi_host" }]);
     assert(
-      session.recoveryPending === false &&
-        session.backendQuarantined === false,
+      session.recoveryPending === false && session.backendQuarantined === false,
       "clean tools list lifts the leak quarantine",
     );
   }
@@ -341,23 +341,34 @@ async function main(): Promise<void> {
     session.backendQuarantined = true;
     const post = (label: string) =>
       assert(
-        session.recoveryPending === true &&
-          session.backendQuarantined === true,
+        session.recoveryPending === true && session.backendQuarantined === true,
         label,
       );
 
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", method: "_kiro.dev/commands/available", params: {} }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/commands/available",
+        params: {},
+      }),
     );
     post("missing tools payload does not lift quarantine");
 
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", method: "_kiro.dev/commands/available", params: { tools: null } }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/commands/available",
+        params: { tools: null },
+      }),
     );
     post("null tools payload does not lift quarantine");
 
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", method: "_kiro.dev/commands/available", params: { tools: [] } }),
+      JSON.stringify({
+        jsonrpc: "2.0",
+        method: "_kiro.dev/commands/available",
+        params: { tools: [] },
+      }),
     );
     post("empty tools list does not lift quarantine");
 
@@ -366,7 +377,10 @@ async function main(): Promise<void> {
       JSON.stringify({
         jsonrpc: "2.0",
         method: "_kiro.dev/commands/available",
-        params: { sessionId: "foreign", tools: [{ name: "bash", source: "mcp:pi_host" }] },
+        params: {
+          sessionId: "foreign",
+          tools: [{ name: "bash", source: "mcp:pi_host" }],
+        },
       }),
     );
     post("foreign-session notification does not lift quarantine");
@@ -407,7 +421,10 @@ async function main(): Promise<void> {
   // abandons a suspect snapshot instead of running a turn on it.
   {
     // Signal delivered before the restore response resolves.
-    const { session, written } = fakeSession({ started: true, parseJson: true });
+    const { session, written } = fakeSession({
+      started: true,
+      parseJson: true,
+    });
     session.persistenceKey = null; // no disk writes in this unit test
     session.catalogProvider = null; // skip the real process restart
     session.agentCapabilities = { loadSession: true };
@@ -417,7 +434,10 @@ async function main(): Promise<void> {
       JSON.stringify({
         jsonrpc: "2.0",
         method: "_kiro.dev/agent/not_found",
-        params: { requestedAgent: "pi-kiro-old", fallbackAgent: "kiro_default" },
+        params: {
+          requestedAgent: "pi-kiro-old",
+          fallbackAgent: "kiro_default",
+        },
       }),
     );
     session.handleStdoutLine(
@@ -441,7 +461,10 @@ async function main(): Promise<void> {
     // Signal delivered after the restore response (response/notify race).
     // The continuation is awaited via a tick before the signal is injected,
     // so removing the drain wait makes this test fail.
-    const { session, written } = fakeSession({ started: true, parseJson: true });
+    const { session, written } = fakeSession({
+      started: true,
+      parseJson: true,
+    });
     session.persistenceKey = null;
     session.catalogProvider = null;
     session.agentCapabilities = { loadSession: true };
@@ -475,7 +498,10 @@ async function main(): Promise<void> {
     // A clean tools list landing during the drain lifts the quarantine flags,
     // but a hazard signal the snapshot already emitted must still abandon it
     // (the decision keys on the monotonic hazard generation, not the flags).
-    const { session, written } = fakeSession({ started: true, parseJson: true });
+    const { session, written } = fakeSession({
+      started: true,
+      parseJson: true,
+    });
     session.persistenceKey = null;
     session.catalogProvider = null;
     session.agentCapabilities = { loadSession: true };
@@ -506,7 +532,10 @@ async function main(): Promise<void> {
 
   {
     // No signals: the restore binds as before.
-    const { session, written } = fakeSession({ started: true, parseJson: true });
+    const { session, written } = fakeSession({
+      started: true,
+      parseJson: true,
+    });
     session.persistenceKey = null;
     session.catalogProvider = null;
     session.agentCapabilities = { loadSession: true };
@@ -639,8 +668,4 @@ async function main(): Promise<void> {
       "the provider failure is reported as a catalog diagnostic",
     );
   }
-
-  console.log("✓ all framing tests passed");
-}
-
-void main();
+});

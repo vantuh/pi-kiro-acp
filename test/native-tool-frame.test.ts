@@ -1,21 +1,15 @@
 // Test: legacy native-tool frame readers — stripping marker blocks and
 // one-liner frames from assistant content before it reaches the model.
-// Run: test/run-all.sh test/native-tool-frame.test.ts
+// Run: npm test -- test/native-tool-frame.test.ts
 
+import { test } from "vitest";
 import {
   KIRO_TOOL_FRAME_PREFIX,
   isNativeToolTextFrameLine,
   stripAssistantContentFrames,
   stripNativeToolFrames,
 } from "../src/native-tool-frame.ts";
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
+import { assert } from "./support.ts";
 
 /** Literal frame in the exact shape the removed mirror emitted. */
 function frame(title: string, body: string, status = "completed"): string {
@@ -26,7 +20,7 @@ function frame(title: string, body: string, status = "completed"): string {
 }
 
 // --- frame structure and strip ---
-{
+test("frame structure and strip", async () => {
   const completed = frame("Running: echo hello", "hello\n");
   assert(
     completed.startsWith(`${KIRO_TOOL_FRAME_PREFIX}\n`),
@@ -40,30 +34,29 @@ function frame(title: string, body: string, status = "completed"): string {
     stripNativeToolFrames("plain assistant text") === "plain assistant text",
     "plain assistant text passes through unchanged",
   );
-}
+});
 
 // --- statuses ---
-{
+test("statuses", async () => {
   const failed = frame("cat /nope", "no such file", "failed");
   assert(
     stripNativeToolFrames(`x\n${failed}\ny`) === "x\n\ny",
     "failed card strips",
   );
-}
+});
 
 // --- strip is non-greedy: two cards in one text block are both removed ---
-{
-  const both =
-    frame("tool A", "a") + frame("tool B", "b");
+test("two adjacent cards are both stripped", async () => {
+  const both = frame("tool A", "a") + frame("tool B", "b");
   const strippedBoth = stripNativeToolFrames(`before\n${both}after`);
   assert(
     strippedBoth === "before\n\nafter",
     "two adjacent cards are both stripped (non-greedy match)",
   );
-}
+});
 
 // --- stripAssistantContentFrames ---
-{
+test("stripAssistantContentFrames", async () => {
   const strippedContent = stripAssistantContentFrames([
     { type: "text", text: "keep me" },
     { type: "text", text: frame("ls", "a.txt") },
@@ -79,19 +72,13 @@ function frame(title: string, body: string, status = "completed"): string {
     { type: "text", text: frame("ls", "a.txt") },
   ]);
   assert(onlyFrame.changed, "all-frame content reports changed");
-  assert(
-    onlyFrame.content.length === 0,
-    "all-frame content strips to nothing",
-  );
+  assert(onlyFrame.content.length === 0, "all-frame content strips to nothing");
 
   const noFrame = stripAssistantContentFrames([
     { type: "text", text: "plain" },
     { type: "thinking", thinking: "hmm" },
   ]);
-  assert(
-    !noFrame.changed,
-    "content without frames is untouched",
-  );
+  assert(!noFrame.changed, "content without frames is untouched");
 
   const mixedText = stripAssistantContentFrames([
     { type: "text", text: `before\n${frame("ls", "a.txt")}\nafter` },
@@ -101,10 +88,10 @@ function frame(title: string, body: string, status = "completed"): string {
     (mixedText.content[0] as any).text === "before\n\nafter",
     "mixed text keeps the surrounding prose",
   );
-}
+});
 
 // --- legacy one-liner text frames ---
-{
+test("legacy one-liner text frames", async () => {
   const ok = "🔧 read foo ✓\n";
   assert(isNativeToolTextFrameLine(ok), "completed one-liner matches");
   assert(
@@ -129,10 +116,7 @@ function frame(title: string, body: string, status = "completed"): string {
     { type: "text", text: ok },
   ]);
   assert(stripped.changed, "one-liner frame triggers strip");
-  assert(
-    stripped.content.length === 1,
-    "one-liner frame block is dropped",
-  );
+  assert(stripped.content.length === 1, "one-liner frame block is dropped");
 
   // stripNativeToolFrames (text-level) leaves one-liners alone: they are
   // block-scoped, stripped via stripAssistantContentFrames.
@@ -140,6 +124,4 @@ function frame(title: string, body: string, status = "completed"): string {
     stripNativeToolFrames(`before\n${ok}after`) === `before\n${ok}after`,
     "stripNativeToolFrames leaves one-liners alone",
   );
-}
-
-console.log("✓ native-tool-frame tests passed");
+});

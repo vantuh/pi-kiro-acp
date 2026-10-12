@@ -21,7 +21,11 @@ export interface KiroUsage {
   credits: string;
 }
 
-const ANSI_RE = /\x1B\[[0-?]*[ -/]*[@-~]/g;
+// ESC comes from its code point so the pattern carries no control character.
+const ANSI_RE = new RegExp(
+  `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+  "g",
+);
 const FETCH_TIMEOUT_MS = 45_000;
 
 /** Parses the output of `kiro-cli chat --no-interactive /usage`. */

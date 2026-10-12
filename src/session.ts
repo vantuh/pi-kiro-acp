@@ -57,8 +57,11 @@ type CatalogProvider = () => ForwardedToolCatalog;
 const KIRO_VERBOSITY = resolveLoggerConfig(loadKiroAcpConfig()).verbose;
 
 /** kiro-cli colours its verbose output; keep the debug log readable. */
+// ESC comes from its code point so the pattern carries no control character.
+const ANSI_SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
 function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*m/g, "");
+  return text.replace(ANSI_SGR_RE, "");
 }
 
 /** Process-wide: kiro-cli settings are global; configure once per pi process.
@@ -141,8 +144,7 @@ function parseKiroReasoning(
 ): SessionMetadata["reasoning"] | null {
   if (typeof value !== "object" || value === null) return null;
   const raw = value as Record<string, unknown>;
-  const support =
-    typeof raw.support === "string" ? raw.support : undefined;
+  const support = typeof raw.support === "string" ? raw.support : undefined;
   const thinkingEnabled =
     typeof raw.thinkingEnabled === "boolean" ? raw.thinkingEnabled : undefined;
   const effort = typeof raw.effort === "string" ? raw.effort : undefined;
@@ -450,9 +452,8 @@ export class AcpSession {
         ms: msSince(p.startedAt),
         hasError: !!msg.error,
       });
-      msg.error
-        ? p.reject(new Error(msg.error.message || "RPC error"))
-        : p.resolve(msg.result);
+      if (msg.error) p.reject(new Error(msg.error.message || "RPC error"));
+      else p.resolve(msg.result);
     } else if (hasId && hasMethod) {
       if (msg.method === "session/request_permission") {
         this.respondToPermissionRequest(msg.id, msg.params);
@@ -581,17 +582,16 @@ export class AcpSession {
           : null,
       )
       .filter(
-        (t: { name: string; source: string } | null): t is {
+        (
+          t: { name: string; source: string } | null,
+        ): t is {
           name: string;
           source: string;
         } => t !== null,
       );
     // An empty list is not informative while the backend is tainted: skip
     // it entirely instead of interpreting it as a recovery.
-    if (
-      seen.length === 0 &&
-      (this.recoveryPending || this.backendQuarantined)
-    )
+    if (seen.length === 0 && (this.recoveryPending || this.backendQuarantined))
       return;
     const fingerprint = hashSystemPrompt(JSON.stringify(seen));
     if (fingerprint === this.lastToolsListFingerprint) return;
@@ -869,7 +869,13 @@ export class AcpSession {
     // Kiro builtins (AgentCrew/FsRead/…) which then ran inside kiro-cli with no
     // pi_host tools/call. `--trust-tools=@pi_host` plus deny-by-default in
     // session/request_permission is the execution gate.
-    const args = ["acp", "--agent", this.agentName, "--trust-tools", "@pi_host"];
+    const args = [
+      "acp",
+      "--agent",
+      this.agentName,
+      "--trust-tools",
+      "@pi_host",
+    ];
     // No `--effort` flag: kiro-cli 2.24.1 silently drops it unless the process
     // also fixes `--model` (session model `auto`), and it warns on every
     // start. The level is applied in-band by syncEffort instead.
@@ -1011,8 +1017,7 @@ export class AcpSession {
         this.suppressedCommandTruncated = false;
         this.effortCommandInFlight = false;
         this.effortReplyTail = "";
-        this.effortReplyGraceUntil =
-          Date.now() + effortCommandReplyGraceMs();
+        this.effortReplyGraceUntil = Date.now() + effortCommandReplyGraceMs();
       }
 
       // "Effort set to <level>" is the only success signal; "Effort is not
@@ -1038,7 +1043,8 @@ export class AcpSession {
    * backend that streams without end cannot grow the buffer without limit. */
   private captureCommandReply(text: string): void {
     if (this.suppressedCommandTruncated) return;
-    const room = EFFORT_COMMAND_REPLY_MAX_CHARS - this.suppressedCommandText.length;
+    const room =
+      EFFORT_COMMAND_REPLY_MAX_CHARS - this.suppressedCommandText.length;
     if (text.length > room) {
       this.suppressedCommandText += text.slice(0, Math.max(0, room));
       this.suppressedCommandTruncated = true;
@@ -1052,7 +1058,9 @@ export class AcpSession {
   }
 
   private inEffortReplyGrace(): boolean {
-    return this.effortReplyGraceUntil > 0 && Date.now() < this.effortReplyGraceUntil;
+    return (
+      this.effortReplyGraceUntil > 0 && Date.now() < this.effortReplyGraceUntil
+    );
   }
 
   /** True when a chunk arriving after a settled command still reads like that
@@ -1212,22 +1220,28 @@ export class AcpSession {
           },
           15000,
         );
-        await new Promise((resolve) => setTimeout(resolve, RESTORE_LEAK_CHECK_MS));
+        await new Promise((resolve) =>
+          setTimeout(resolve, RESTORE_LEAK_CHECK_MS),
+        );
         if (
           this.hazardGeneration !== hazardAtStart ||
           this.recoveryPending ||
           this.backendQuarantined
         ) {
-          log("abandoning restored kiro session — leak/fallback during restore", {
-            session: this.id,
-            method: attempt.method,
-            acpSessionId: kiroSessionId,
-          });
+          log(
+            "abandoning restored kiro session — leak/fallback during restore",
+            {
+              session: this.id,
+              method: attempt.method,
+              acpSessionId: kiroSessionId,
+            },
+          );
           // The snapshot can never resume cleanly once its recorded agent
           // name stops resolving: kiro-cli falls back to kiro_default for
           // that session again on every later restore (a name recorded
           // under another persistence key cannot be found here).
-          if (this.persistenceKey) clearPersistedKiroSession(this.persistenceKey);
+          if (this.persistenceKey)
+            clearPersistedKiroSession(this.persistenceKey);
           await this.restartAfterRestoreFailure();
           return false;
         }

@@ -1,20 +1,14 @@
 // Test: active extension-tool catalog filtering, aliases, and fingerprints.
-// Run: test/run-all.sh test/catalog.test.ts
+// Run: npm test -- test/catalog.test.ts
 
+import { test } from "vitest";
 import { createHash } from "node:crypto";
 import {
   buildForwardedToolCatalog,
   hostToolCatalog,
   isKiroToolName,
 } from "../src/tool-catalog.ts";
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
+import { assert } from "./support.ts";
 
 const schema = {
   type: "object",
@@ -29,7 +23,7 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
-{
+test("active extension-tool catalog filtering", async () => {
   const catalog = buildForwardedToolCatalog(
     [
       extension("active_tool"),
@@ -50,9 +44,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     catalog.tools[0]?.parameters === schema,
     "TypeBox/JSON schema is preserved",
   );
-}
+});
 
-{
+test("Kiro name aliases for clashing pi tools", async () => {
   const catalog = buildForwardedToolCatalog(
     [
       extension("subagent"),
@@ -70,7 +64,10 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
   );
   assert(byPi.subagent === "pi_subagent", "subagent aliases around AgentCrew");
   assert(byPi.read === "pi_read", "read aliases around FsRead");
-  assert(byPi.bash === "bash", "bash keeps its Pi name (no Kiro builtin clash)");
+  assert(
+    byPi.bash === "bash",
+    "bash keeps its Pi name (no Kiro builtin clash)",
+  );
   assert(byPi.edit === "edit", "edit keeps its Pi name");
   assert(
     byPi.todo_list === "pi_todo_list" &&
@@ -88,9 +85,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     ),
     "builtin alias is recorded in diagnostics",
   );
-}
+});
 
-{
+test("an empty active set is an empty catalog", async () => {
   const catalog = buildForwardedToolCatalog([], []);
   assert(
     catalog.tools.length === 0,
@@ -100,9 +97,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     catalog.fingerprint.length === 64,
     "empty catalog has a SHA-256 fingerprint",
   );
-}
+});
 
-{
+test("missing description and schema fall back safely", async () => {
   const catalog = buildForwardedToolCatalog(
     [
       {
@@ -135,9 +132,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     padded.tools[0]?.description === paddedDescription,
     "non-empty descriptions are preserved verbatim",
   );
-}
+});
 
-{
+test("incompatible tool names get order-independent aliases", async () => {
   const invalidName = "tool.with.dot";
   const first = buildForwardedToolCatalog(
     [extension(invalidName), extension("valid_tool")],
@@ -165,9 +162,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     first.fingerprint === reordered.fingerprint,
     "fingerprint is input-order independent",
   );
-}
+});
 
-{
+test("alias collisions stay resolvable", async () => {
   const invalidName = "collision.name";
   const hash = createHash("sha256").update(invalidName).digest("hex");
   const validCollision = `pi_${hash.slice(0, 16)}`;
@@ -193,9 +190,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     catalog.piNameByKiroName.get(invalid!.kiroName) === invalidName,
     "alias maps unambiguously to the Pi name",
   );
-}
+});
 
-{
+test("peer_send union schema survives unchanged", async () => {
   const peerSendSchema = {
     anyOf: [
       {
@@ -219,9 +216,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
       JSON.stringify(peerSendSchema),
     "peer_send union schema survives unchanged",
   );
-}
+});
 
-{
+test("the fingerprint tracks description, schema and name", async () => {
   const base = buildForwardedToolCatalog(
     [extension("fingerprint_tool")],
     ["fingerprint_tool"],
@@ -254,9 +251,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     base.fingerprint !== changedName.fingerprint,
     "name changes fingerprint",
   );
-}
+});
 
-{
+test("request tools win over a throwing session catalog", async () => {
   const request = [
     {
       name: "propose_commit",
@@ -276,9 +273,9 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
     catalog.tools.map((tool) => tool.piName).join() === "propose_commit",
     "request tools win over a throwing session catalog (omp commit CLI load)",
   );
-}
+});
 
-{
+test("a throwing session catalog records a diagnostic", async () => {
   const catalog = hostToolCatalog({
     sessionTools: () => {
       throw new Error(
@@ -286,22 +283,22 @@ const extension = (name: string, extra: Record<string, unknown> = {}) => ({
       );
     },
   });
-  assert(catalog.tools.length === 0, "throwing session catalog yields no tools");
+  assert(
+    catalog.tools.length === 0,
+    "throwing session catalog yields no tools",
+  );
   assert(
     catalog.diagnostics.some((line) =>
       line.includes("session tool catalog unavailable"),
     ),
     "throwing session catalog records a diagnostic instead of rejecting",
   );
-}
+});
 
-{
+test("an explicit empty request catalog is empty", async () => {
   const catalog = hostToolCatalog({ requestTools: [] });
   assert(
     catalog.tools.length === 0,
     "an explicit empty request catalog is empty, not a session fallback",
   );
-}
-
-console.log("✓ all catalog tests passed");
-process.exit(0);
+});

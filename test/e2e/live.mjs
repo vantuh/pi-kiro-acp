@@ -6,7 +6,7 @@
 // path, NameCollision filtering and a real model-driven tools/call.
 //
 // GUARDED: requires KIRO_E2E_LIVE to run (it spawns kiro-cli and T5 spends a
-// tiny amount of credits). It is NOT part of test/run-all.sh (not *.test.ts).
+// tiny amount of credits). It is NOT part of npm test (not *.test.ts).
 //
 //   KIRO_E2E_LIVE=1     ./test/e2e/live.mjs   # free checks only (no model call)
 //   KIRO_E2E_LIVE=full  ./test/e2e/live.mjs   # + T5 real model tools/call round-trip
@@ -15,7 +15,13 @@
 
 import { spawn } from "node:child_process";
 import http from "node:http";
-import { mkdtempSync, mkdirSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -29,6 +35,9 @@ if (!GUARD) {
 }
 const WITH_MODEL = GUARD === "full";
 
+// ESC comes from its code point so the pattern carries no control character.
+const ANSI_SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+
 // ---------- isolated workspace ----------
 const AGENT_DIR = mkdtempSync(join(tmpdir(), "kiro-e2e-"));
 const GATE_CONFIG = join(AGENT_DIR, ".kiro", "agents", "test-gate.json");
@@ -39,7 +48,8 @@ const GATE_CONFIG_BODY = JSON.stringify(
     allowedTools: ["@pi_host"],
     includeMcpJson: false,
     mcpServers: {},
-    prompt: "You are a tool-calling probe. Follow the user instruction exactly.",
+    prompt:
+      "You are a tool-calling probe. Follow the user instruction exactly.",
   },
   null,
   2,
@@ -90,13 +100,34 @@ function startMcp() {
       res.writeHead(200, { "Content-Type": "application/json" });
       if (msg.method === "initialize")
         res.end(
-          JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { protocolVersion: "2025-06-18", capabilities: { tools: {} }, serverInfo: { name: "mini", version: "0.0.1" } } }),
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: {
+              protocolVersion: "2025-06-18",
+              capabilities: { tools: {} },
+              serverInfo: { name: "mini", version: "0.0.1" },
+            },
+          }),
         );
       else if (msg.method === "tools/list")
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { tools: mcpTools } }));
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: { tools: mcpTools },
+          }),
+        );
       else if (msg.method === "tools/call")
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: { content: [{ type: "text", text: "tool executed ok" }] } }));
-      else if (msg.id !== undefined) res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }));
+        res.end(
+          JSON.stringify({
+            jsonrpc: "2.0",
+            id: msg.id,
+            result: { content: [{ type: "text", text: "tool executed ok" }] },
+          }),
+        );
+      else if (msg.id !== undefined)
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }));
       else res.end(JSON.stringify({ jsonrpc: "2.0", id: 0, result: {} }));
     });
   });
@@ -152,9 +183,15 @@ class Kiro {
                 result: { outcome: { outcome: "selected", optionId: allow } },
               });
             }
-            if (msg.method === "session/update" || msg.method === "_kiro.dev/session/update") {
+            if (
+              msg.method === "session/update" ||
+              msg.method === "_kiro.dev/session/update"
+            ) {
               const u = msg.params?.update ?? {};
-              if (u.sessionUpdate === "tool_call" || u.sessionUpdate === "tool_call_update")
+              if (
+                u.sessionUpdate === "tool_call" ||
+                u.sessionUpdate === "tool_call_update"
+              )
                 this.events.push({
                   kind: u.sessionUpdate,
                   tool: u._meta?.kiro?.toolName ?? u.title ?? null,
@@ -166,7 +203,7 @@ class Kiro {
             }
           }
         } catch {
-          this.verbose.push(line.replace(/\x1b\[[0-9;]*m/g, ""));
+          this.verbose.push(line.replace(ANSI_SGR_RE, ""));
         }
       }
     });
@@ -207,7 +244,8 @@ class Kiro {
         .find((n) => n.method === "_kiro.dev/commands/available");
       const tools = avail?.params?.tools;
       const snapshot = tools ? JSON.stringify(tools) : null;
-      if (snapshot !== null && snapshot === last && tools.length > 0) return avail.params;
+      if (snapshot !== null && snapshot === last && tools.length > 0)
+        return avail.params;
       last = snapshot;
       await new Promise((r) => setTimeout(r, 200));
     }
@@ -216,7 +254,9 @@ class Kiro {
   async notFound() {
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
-      const n = this.notifications.find((x) => x.method === "_kiro.dev/agent/not_found");
+      const n = this.notifications.find(
+        (x) => x.method === "_kiro.dev/agent/not_found",
+      );
       if (n) return n.params;
       await new Promise((r) => setTimeout(r, 100));
     }
@@ -247,7 +287,9 @@ async function withKiro(spawnArgs, port, fn) {
 
 const summarizeTools = (params) => {
   if (!params?.tools) return null;
-  const builtins = params.tools.filter((t) => t.source === "built-in").map((t) => t.name);
+  const builtins = params.tools
+    .filter((t) => t.source === "built-in")
+    .map((t) => t.name);
   const mcp = params.tools
     .filter((t) => String(t.source ?? "").startsWith("mcp:"))
     .map((t) => `${t.name}(${t.source})`);
@@ -270,115 +312,194 @@ const port = await startMcp();
 const mcp = mcpServer(port);
 
 // T1: fresh session under the gate config — zero builtins, pi_host tools only
-await withKiro(["--agent", "test-gate", "--trust-tools", "@pi_host"], port, async (k) => {
-  await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
-  const s = summarizeTools(await k.latestTools());
-  check("T1a fresh session: zero built-in tools", s && s.builtins.length === 0, JSON.stringify(s));
-  check(
-    "T1b pi_host tools visible",
-    s &&
-      s.mcp.includes("read(mcp:pi_host)") &&
-      s.mcp.includes("pi_probe_tool(mcp:pi_host)") &&
-      s.mcp.includes("pi_read(mcp:pi_host)"),
-    JSON.stringify(s),
-  );
-  check("T1c no NameCollision with gate config", !k.verbose.some((l) => l.includes("NameCollision")));
-});
+await withKiro(
+  ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+  port,
+  async (k) => {
+    await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
+    const s = summarizeTools(await k.latestTools());
+    check(
+      "T1a fresh session: zero built-in tools",
+      s && s.builtins.length === 0,
+      JSON.stringify(s),
+    );
+    check(
+      "T1b pi_host tools visible",
+      s &&
+        s.mcp.includes("read(mcp:pi_host)") &&
+        s.mcp.includes("pi_probe_tool(mcp:pi_host)") &&
+        s.mcp.includes("pi_read(mcp:pi_host)"),
+      JSON.stringify(s),
+    );
+    check(
+      "T1c no NameCollision with gate config",
+      !k.verbose.some((l) => l.includes("NameCollision")),
+    );
+  },
+);
 
 // T2 + T3: missing agent -> not_found fallback -> all builtins + NameCollision
-await withKiro(["--agent", "no-such-agent-e2e", "--trust-all-tools"], port, async (k) => {
-  await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
-  const nf = await k.notFound();
-  check("T2a agent/not_found emitted", !!nf, JSON.stringify(nf));
-  check("T2b fallback is kiro_default", nf?.fallbackAgent === "kiro_default", nf?.fallbackAgent ?? "none");
-  const s = summarizeTools(await k.latestTools());
-  check(
-    "T2c fallback registers builtins",
-    s && s.builtins.length >= 10,
-    `${s?.builtins.length} builtins: ${s?.builtins.slice(0, 8).join(",")}…`,
-  );
-  let collision = null;
-  const collisionDeadline = Date.now() + 10000;
-  while (Date.now() < collisionDeadline) {
-    collision = k.verbose.find((l) => l.includes("NameCollision"));
-    if (collision) break;
-    await new Promise((r) => setTimeout(r, 200));
-  }
-  check(
-    "T3 NameCollision(BuiltIn(FsRead)) under fallback",
-    !!collision && collision.includes("BuiltIn(FsRead)"),
-    collision ? collision.slice(0, 100) : "no collision line in 10s",
-  );
-  const sAliased = summarizeTools(await k.latestTools());
-  check(
-    "T3b aliased pi_read survives the fallback collision",
-    sAliased &&
-      sAliased.mcp.includes("pi_read(mcp:pi_host)") &&
-      !sAliased.mcp.includes("read(mcp:pi_host)"),
-    JSON.stringify(sAliased),
-  );
-});
+await withKiro(
+  ["--agent", "no-such-agent-e2e", "--trust-all-tools"],
+  port,
+  async (k) => {
+    await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
+    const nf = await k.notFound();
+    check("T2a agent/not_found emitted", !!nf, JSON.stringify(nf));
+    check(
+      "T2b fallback is kiro_default",
+      nf?.fallbackAgent === "kiro_default",
+      nf?.fallbackAgent ?? "none",
+    );
+    const s = summarizeTools(await k.latestTools());
+    check(
+      "T2c fallback registers builtins",
+      s && s.builtins.length >= 10,
+      `${s?.builtins.length} builtins: ${s?.builtins.slice(0, 8).join(",")}…`,
+    );
+    let collision = null;
+    const collisionDeadline = Date.now() + 10000;
+    while (Date.now() < collisionDeadline) {
+      collision = k.verbose.find((l) => l.includes("NameCollision"));
+      if (collision) break;
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    check(
+      "T3 NameCollision(BuiltIn(FsRead)) under fallback",
+      !!collision && collision.includes("BuiltIn(FsRead)"),
+      collision ? collision.slice(0, 100) : "no collision line in 10s",
+    );
+    const sAliased = summarizeTools(await k.latestTools());
+    check(
+      "T3b aliased pi_read survives the fallback collision",
+      sAliased &&
+        sAliased.mcp.includes("pi_read(mcp:pi_host)") &&
+        !sAliased.mcp.includes("read(mcp:pi_host)"),
+      JSON.stringify(sAliased),
+    );
+  },
+);
 
 // T4-alt: restore across processes with the config still present — no leak
 let gateSessionId = null;
-await withKiro(["--agent", "test-gate", "--trust-tools", "@pi_host"], port, async (k) => {
-  const sn = await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
-  gateSessionId = sn?.sessionId;
-});
-await withKiro(["--agent", "test-gate", "--trust-tools", "@pi_host"], port, async (k) => {
-  try {
-    await k.rpc("session/load", { sessionId: gateSessionId, cwd: AGENT_DIR, mcpServers: [mcp] });
-  } catch (e) {
-    check("T4-alt restore with config present: no leak", false, `session/load failed: ${e.message}`);
-    return;
-  }
-  const s = summarizeTools(await k.latestTools());
-  check("T4-alt restore with config present: no leak", s && s.builtins.length === 0, JSON.stringify(s));
-});
+await withKiro(
+  ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+  port,
+  async (k) => {
+    const sn = await k.rpc("session/new", {
+      cwd: AGENT_DIR,
+      mcpServers: [mcp],
+    });
+    gateSessionId = sn?.sessionId;
+  },
+);
+await withKiro(
+  ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+  port,
+  async (k) => {
+    try {
+      await k.rpc("session/load", {
+        sessionId: gateSessionId,
+        cwd: AGENT_DIR,
+        mcpServers: [mcp],
+      });
+    } catch (e) {
+      check(
+        "T4-alt restore with config present: no leak",
+        false,
+        `session/load failed: ${e.message}`,
+      );
+      return;
+    }
+    const s = summarizeTools(await k.latestTools());
+    check(
+      "T4-alt restore with config present: no leak",
+      s && s.builtins.length === 0,
+      JSON.stringify(s),
+    );
+  },
+);
 
 // T4: the production leak mechanism — agent config DELETED before restore
 // (the extension removes agent files on stop; a persisted session resumed
 // later finds no config) -> agent fallback -> builtins leak into the model
 unlinkSync(GATE_CONFIG);
 try {
-  await withKiro(["--agent", "test-gate", "--trust-tools", "@pi_host"], port, async (k) => {
-    try {
-      await k.rpc("session/load", { sessionId: gateSessionId, cwd: AGENT_DIR, mcpServers: [mcp] });
-    } catch (e) {
-      check("T4 restore with deleted config leaks builtins", false, `session/load failed: ${e.message}`);
-      return;
-    }
-    const nf = await k.notFound();
-    const s = summarizeTools(await k.latestTools());
-    check(
-      "T4 restore with deleted config leaks builtins",
-      s && s.builtins.length > 0,
-      `not_found=${JSON.stringify(nf)}; ${s?.builtins.length ?? "?"} builtins leaked: ${s?.builtins.slice(0, 8).join(",") || "none"}`,
-    );
-  });
+  await withKiro(
+    ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+    port,
+    async (k) => {
+      try {
+        await k.rpc("session/load", {
+          sessionId: gateSessionId,
+          cwd: AGENT_DIR,
+          mcpServers: [mcp],
+        });
+      } catch (e) {
+        check(
+          "T4 restore with deleted config leaks builtins",
+          false,
+          `session/load failed: ${e.message}`,
+        );
+        return;
+      }
+      const nf = await k.notFound();
+      const s = summarizeTools(await k.latestTools());
+      check(
+        "T4 restore with deleted config leaks builtins",
+        s && s.builtins.length > 0,
+        `not_found=${JSON.stringify(nf)}; ${s?.builtins.length ?? "?"} builtins leaked: ${s?.builtins.slice(0, 8).join(",") || "none"}`,
+      );
+    },
+  );
 } finally {
   restoreGateConfig();
 }
 
 // T5: real model-driven tools/call round-trip under the gate (spends credits)
 if (WITH_MODEL) {
-  await withKiro(["--agent", "test-gate", "--trust-tools", "@pi_host"], port, async (k) => {
-    const sn = await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
-    await k.latestTools(); // ensure the model has the pi_host tools registered
-    await k.rpc("session/prompt", {
-      sessionId: sn.sessionId,
-      prompt: [
+  await withKiro(
+    ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+    port,
+    async (k) => {
+      const sn = await k.rpc("session/new", {
+        cwd: AGENT_DIR,
+        mcpServers: [mcp],
+      });
+      await k.latestTools(); // ensure the model has the pi_host tools registered
+      await k.rpc(
+        "session/prompt",
         {
-          type: "text",
-          text: 'Call the read tool exactly once with arguments {"path": "notes.txt"}. Do not use any other tool. When it returns, reply with exactly: DONE',
+          sessionId: sn.sessionId,
+          prompt: [
+            {
+              type: "text",
+              text: 'Call the read tool exactly once with arguments {"path": "notes.txt"}. Do not use any other tool. When it returns, reply with exactly: DONE',
+            },
+          ],
         },
-      ],
-    }, 120000);
-    check("T5a forwarded tool executed by the MCP host", mcpToolCalls >= 1, `${mcpToolCalls} tools/call(s) received; model: "${k.modelText.join("").trim().slice(0, 40)}"`);
-    const piHostCalls = k.events.filter((e) => e.kind === "tool_call" && e.server === "pi_host");
-    check("T5b tool_call tagged pi_host", piHostCalls.length >= 1, JSON.stringify(piHostCalls[0] ?? null));
-    check("T5c zero permission RPCs for pi_host tools", k.permissionCount === 0, `${k.permissionCount} permission request(s)`);
-  });
+        120000,
+      );
+      check(
+        "T5a forwarded tool executed by the MCP host",
+        mcpToolCalls >= 1,
+        `${mcpToolCalls} tools/call(s) received; model: "${k.modelText.join("").trim().slice(0, 40)}"`,
+      );
+      const piHostCalls = k.events.filter(
+        (e) => e.kind === "tool_call" && e.server === "pi_host",
+      );
+      check(
+        "T5b tool_call tagged pi_host",
+        piHostCalls.length >= 1,
+        JSON.stringify(piHostCalls[0] ?? null),
+      );
+      check(
+        "T5c zero permission RPCs for pi_host tools",
+        k.permissionCount === 0,
+        `${k.permissionCount} permission request(s)`,
+      );
+    },
+  );
 } else {
   skip("T5 model tools/call round-trip (a/b/c)", "run with KIRO_E2E_LIVE=full");
 }

@@ -1,11 +1,11 @@
 // Test: a failing session/prompt (or a throwing update handler) degrades the
 // turn instead of killing the pi process.
-// Run: test/run-all.sh test/prompt-failure.test.ts
+// Run: npm test -- test/prompt-failure.test.ts
 
-import { AcpSession } from "../src/session.ts";
+import { test } from "vitest";
 import { assert, fakeSession, tick } from "./support.ts";
 
-async function main(): Promise<void> {
+test("a failing prompt or update handler degrades the turn", async () => {
   const unhandled: unknown[] = [];
   const onUnhandled = (reason: unknown) => unhandled.push(reason);
   process.on("unhandledRejection", onUnhandled);
@@ -129,10 +129,7 @@ async function main(): Promise<void> {
       unhandled.length === 0,
       "no unhandled rejections across the whole test",
     );
-    console.log("✓ all prompt-failure tests passed");
   } finally {
     process.off("unhandledRejection", onUnhandled);
   }
-}
-
-void main();
+});

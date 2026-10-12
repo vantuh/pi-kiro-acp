@@ -3,26 +3,16 @@
 // a relaunch loop: the session stayed `busy` forever because a late-settling
 // prompt never cleared `activePromptDone`, and the orphaned result was answered by
 // spawning a fresh Kiro session that replayed only the user's question.
-// Run: test/run-all.sh test/orphaned-tool-result.test.ts
+// Run: npm test -- test/orphaned-tool-result.test.ts
 
+import { afterAll, test } from "vitest";
 import type { Context } from "@earendil-works/pi-ai";
 
 import { SessionManager } from "../src/session-manager.ts";
 import { AcpSession } from "../src/session.ts";
-import { fakeSession, tick } from "./support.ts";
+import { assert, fakeSession, tick } from "./support.ts";
 
 const sessionManager = new SessionManager();
-
-let failed = false;
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    failed = true;
-    return;
-  }
-  console.log(`✓ ${label}`);
-}
 
 const CWD = "/tmp/kiro-acp-orphan";
 const opts = (sessionId: string) => ({ sessionId, cwd: CWD }) as any;
@@ -63,7 +53,7 @@ function markLive(session: AcpSession, acpSessionId: string): void {
   session.acpSessionId = acpSessionId;
 }
 
-async function main(): Promise<void> {
+test("recovery when Kiro abandons its own pi_host tools/call", async () => {
   // --- an orphaned tool result reuses the live session instead of forking ---
   {
     const first = await sessionManager.routeSession(askedContext(), opts("S1"));
@@ -366,16 +356,6 @@ async function main(): Promise<void> {
       "the recovery prompt is now the in-flight one",
     );
   }
-
-  await sessionManager.stopAllSessions();
-  if (failed) process.exit(1);
-  console.log("✓ all orphaned-tool-result tests passed");
-}
-
-main().catch((error) => {
-  console.error(
-    `✗ orphaned-tool-result test failed: ${error instanceof Error ? error.stack || error.message : String(error)}`,
-  );
-  process.exitCode = 1;
-  return sessionManager.stopAllSessions().catch(() => {});
 });
+
+afterAll(() => sessionManager.stopAllSessions());

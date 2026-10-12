@@ -2,8 +2,9 @@
 // native tools — the agent config exposes only @pi_host, and every bridged
 // tools/call lands in pendingToolCalls (session-prefixed id) whose resolution
 // maps back to an MCP result for Kiro.
-// Run: test/run-all.sh test/forwarded-transport.test.ts
+// Run: npm test -- test/forwarded-transport.test.ts
 
+import { test } from "vitest";
 import { readFileSync } from "node:fs";
 import { AcpSession } from "../src/session.ts";
 import { stableJson } from "../src/helpers.ts";
@@ -12,43 +13,36 @@ import {
   canRestorePersisted,
 } from "../src/session-persistence.ts";
 import type { ToolBridgeCall } from "../src/tool-bridge.ts";
-
-let failed = false;
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    failed = true;
-    return;
-  }
-  console.log(`✓ ${label}`);
-}
+import { assert } from "./support.ts";
 
 const session = new AcpSession("/tmp/kiro-acp-forwarded");
 
-{
+test("the agent config exposes only @pi_host", async () => {
   (session as any).writeAgentCfg();
-  const config = JSON.parse(readFileSync(session.agentConfigPath!, "utf8"));
-  assert(
-    JSON.stringify(config.tools) === JSON.stringify(["@pi_host"]),
-    `agent config tools list only @pi_host (got ${JSON.stringify(config.tools)})`,
-  );
-  assert(
-    JSON.stringify(config.allowedTools) === JSON.stringify(["@pi_host"]),
-    "agent config allowedTools list only @pi_host",
-  );
-  assert(
-    JSON.stringify(config.excludedTools) === JSON.stringify(["@builtin"]),
-    "agent config excludedTools strips Kiro builtins (honored on CLI 3+)",
-  );
-  assert(
-    /^[0-9a-f]{64}$/.test(session.agentConfigFingerprint ?? ""),
-    "agent config fingerprint is SHA-256 hex",
-  );
-  (session as any).removeAgentFiles();
-}
+  try {
+    const config = JSON.parse(readFileSync(session.agentConfigPath!, "utf8"));
+    assert(
+      JSON.stringify(config.tools) === JSON.stringify(["@pi_host"]),
+      `agent config tools list only @pi_host (got ${JSON.stringify(config.tools)})`,
+    );
+    assert(
+      JSON.stringify(config.allowedTools) === JSON.stringify(["@pi_host"]),
+      "agent config allowedTools list only @pi_host",
+    );
+    assert(
+      JSON.stringify(config.excludedTools) === JSON.stringify(["@builtin"]),
+      "agent config excludedTools strips Kiro builtins (honored on CLI 3+)",
+    );
+    assert(
+      /^[0-9a-f]{64}$/.test(session.agentConfigFingerprint ?? ""),
+      "agent config fingerprint is SHA-256 hex",
+    );
+  } finally {
+    (session as any).removeAgentFiles();
+  }
+});
 
-{
+test("the agent config fingerprint ignores the random name", async () => {
   // The persisted-session gate hashes the semantic config only: the random
   // per-session `name` must not affect resumability, any semantic change must,
   // and key order must not matter (canonical serialization).
@@ -74,9 +68,9 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
       agentConfigFingerprint({ ...semantic, tools: ["@pi_host", "@other"] }),
     "a config change changes the fingerprint",
   );
-}
+});
 
-{
+test("the persisted-session restore gate", async () => {
   // Restore gate: history match AND config match; records without a config
   // fingerprint predate the gate and never resume.
   const record = {
@@ -111,9 +105,9 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     !canRestorePersisted(null, "h", "c").canUse,
     "no record never resumes",
   );
-}
+});
 
-{
+test("a bridged call maps back to an MCP result", async () => {
   const controller = new AbortController();
   const call: ToolBridgeCall = {
     kiroName: "bash",
@@ -160,9 +154,9 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     session.pendingToolCalls.size === 0,
     "deliverToolResults removes the resolved call",
   );
-}
+});
 
-{
+test("an aborted call never reaches the pi stream", async () => {
   // Aborted before dispatch: answered as an MCP error, never queued. A fresh
   // dispatch spy is attached (replacing the previous block's handler) so a
   // regression of the abort-before-dispatch guard fails these assertions
@@ -189,9 +183,9 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     session.pendingToolCalls.size === 0,
     "aborted call never enters pendingToolCalls",
   );
-}
+});
 
-{
+test("abandoned-call dedup is single-use", async () => {
   // Abandoned-call dedup is single-use: after one repeat has been answered
   // with the already-running note, the record is dropped so the next
   // identical call is dispatched normally instead of suppressed for the
@@ -228,8 +222,4 @@ const session = new AcpSession("/tmp/kiro-acp-forwarded");
     dispatched.length === 1,
     "next identical call after the note is dispatched normally",
   );
-}
-
-if (failed) process.exit(1);
-console.log("✓ all forwarded-transport tests passed");
-process.exit(0);
+});

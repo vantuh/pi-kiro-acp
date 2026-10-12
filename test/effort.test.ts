@@ -2,11 +2,12 @@
 // `/effort` command prompt — including after session/set_model clears it —
 // while the command's reply never reaches pi's update handler. Clearing a
 // level is the one case kiro cannot express in-band, so it restarts.
-// Run: test/run-all.sh test/effort.test.ts
+// Run: npm test -- test/effort.test.ts
 
 // Keep session-persistence's import hermetic before it loads.
 process.env.XDG_DATA_HOME ??= "/tmp/kiro-acp-test-data";
 
+import { test } from "vitest";
 import { AcpSession, toKiroEffort } from "../src/session.ts";
 import type { ForwardedToolCatalog } from "../src/tool-catalog.ts";
 import type { SessionUpdate } from "../src/types.ts";
@@ -111,7 +112,11 @@ async function answerCommand(
 
 /** A JSON-RPC error response for a frame still in flight. */
 function rpcError(id: number, message: string): string {
-  return JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32000, message } });
+  return JSON.stringify({
+    jsonrpc: "2.0",
+    id,
+    error: { code: -32000, message },
+  });
 }
 
 /** A `_kiro.dev/metadata` tick reporting one effort level. */
@@ -132,7 +137,7 @@ function metadataTick(reasoning: Record<string, unknown>): string {
   });
 }
 
-async function main(): Promise<void> {
+test("the reasoning level reaches kiro-cli in-band through /effort", async () => {
   // --- pi's reasoning level maps onto kiro's /effort levels ---
   assert(toKiroEffort("max") === "max", "max maps to the kiro max level");
   assert(
@@ -305,11 +310,7 @@ async function main(): Promise<void> {
 
     await session.ensureStarted(catalogProvider, null);
 
-    assertEqual(
-      stopped,
-      1,
-      "clearing the level restarts the process",
-    );
+    assertEqual(stopped, 1, "clearing the level restarts the process");
     assertEqual(
       session.desiredEffort,
       null,
@@ -707,8 +708,4 @@ async function main(): Promise<void> {
       "drift from an applied level still schedules the re-apply",
     );
   }
-
-  console.log("✓ all effort tests passed");
-}
-
-void main();
+});

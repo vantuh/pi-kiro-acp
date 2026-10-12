@@ -1,6 +1,7 @@
 // Test: the system prompt reaches Kiro from the transcript's system messages.
-// Run: test/run-all.sh test/system-prompt.test.ts
+// Run: npm test -- test/system-prompt.test.ts
 
+import { test } from "vitest";
 import { normalizeContext } from "@earendil-works/pi-ai";
 import { buildPromptParts } from "../src/helpers.ts";
 import { assert, fakeSession } from "./support.ts";
@@ -16,7 +17,7 @@ function transcriptContext(systemPrompt?: string) {
   });
 }
 
-async function main(): Promise<void> {
+test("the system prompt reaches Kiro from the transcript", async () => {
   // --- buildPromptParts reads the prompt out of the transcript ---
   // A TranscriptContext has no systemPrompt field. Reading context.systemPrompt
   // yielded "" and silently dropped every standing instruction from the prompt.
@@ -83,8 +84,4 @@ async function main(): Promise<void> {
       "an unchanged prompt is not re-sent",
     );
   }
-
-  console.log("✓ all system-prompt tests passed");
-}
-
-void main();
+});

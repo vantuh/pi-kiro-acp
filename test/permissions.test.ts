@@ -1,45 +1,43 @@
 // Test: deny Kiro builtins, allow only pi_host / forwarded / pi_* tools.
-// Run: test/run-all.sh test/permissions.test.ts
+// Run: npm test -- test/permissions.test.ts
 
+import { test } from "vitest";
 import {
   isPiHostPermission,
   kiroToolNameFromPermissionParams,
   mcpServerFromPermissionParams,
   pickPermissionOptionId,
 } from "../src/permissions.ts";
+import { assert } from "./support.ts";
 
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    process.exit(1);
-  }
-  console.log(`✓ ${label}`);
-}
-
-{
+test("reads pi_host permission params", async () => {
   const params = {
     toolCall: {
       _meta: { kiro: { mcpServerName: "pi_host", toolName: "bash" } },
     },
   };
-  assert(mcpServerFromPermissionParams(params) === "pi_host", "reads mcpServer");
+  assert(
+    mcpServerFromPermissionParams(params) === "pi_host",
+    "reads mcpServer",
+  );
   assert(kiroToolNameFromPermissionParams(params) === "bash", "reads toolName");
   assert(
     isPiHostPermission(params, []),
     "pi_host is allowed even with empty catalog",
   );
-}
+});
 
-{
+test("denies Kiro builtins but allows forwarded tools", async () => {
   assert(
-    !isPiHostPermission(
-      { toolCall: { toolName: "subagent" } },
-      ["pi_subagent"],
-    ),
+    !isPiHostPermission({ toolCall: { toolName: "subagent" } }, [
+      "pi_subagent",
+    ]),
     "native subagent is denied even if pi_subagent is forwarded",
   );
   assert(
-    isPiHostPermission({ toolCall: { toolName: "pi_subagent" } }, ["pi_subagent"]),
+    isPiHostPermission({ toolCall: { toolName: "pi_subagent" } }, [
+      "pi_subagent",
+    ]),
     "aliased pi_subagent is allowed when the catalog lists it",
   );
   assert(
@@ -54,9 +52,9 @@ function assert(condition: unknown, label: string): void {
     !isPiHostPermission({ options: [{ id: "allow_always" }] }, ["bash"]),
     "unidentified permission is denied",
   );
-}
+});
 
-{
+test("picks a permission option id", async () => {
   const opts = [{ id: "reject_once" }, { id: "allow_always" }];
   assert(
     pickPermissionOptionId(opts, true) === "allow_always",
@@ -71,10 +69,10 @@ function assert(condition: unknown, label: string): void {
     "deny with no reject option returns null (caller cancels)",
   );
   assert(
-    pickPermissionOptionId([{ id: "reject_once" }, { id: "reject_always" }], true) ===
-      null,
+    pickPermissionOptionId(
+      [{ id: "reject_once" }, { id: "reject_always" }],
+      true,
+    ) === null,
     "allow with reject-only options never picks a reject (caller cancels)",
   );
-}
-
-console.log("✓ all permission tests passed");
+});

@@ -32,7 +32,7 @@ KIRO_E2E_LIVE=full ./test/e2e/live.mjs
 ```
 
 Requirements: `kiro-cli` on PATH and logged in. The probe is **not** part of
-`test/run-all.sh` (it only matches `test/*.test.ts`), and the script refuses
+`npm test` (it only matches `test/*.test.ts`), and the script refuses
 to run without `KIRO_E2E_LIVE` set, so it can never fire accidentally.
 
 Each run creates an isolated throwaway agent dir under `$TMPDIR` (removed on

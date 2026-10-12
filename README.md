@@ -126,17 +126,19 @@ Tuning knobs; defaults work for most setups.
 No build step. Pi loads `src/index.ts` directly.
 
 ```sh
-./test/run-all.sh                          # all tests
-./test/run-all.sh test/usage.test.ts       # selected tests
+npm ci                           # install locked dependencies
+npm test                         # vitest run over test/*.test.ts
+npm test -- test/usage.test.ts   # selected tests
+npm run lint                     # oxlint (warnings fail)
+npm run format                   # oxfmt --write
+npm run format:check             # oxfmt --check
+npm run check                    # lint + format:check + test
 ```
 
-The runner loads tests through pi's own `jiti` and `@earendil-works/pi-ai`. It looks
-in the global npm install by default. For any other pi install, point
-`PI_NODE_MODULES` at pi's `node_modules`:
-
-```sh
-PI_NODE_MODULES=/path/to/pi-coding-agent/node_modules ./test/run-all.sh
-```
+The tests import pi's packages from the local `node_modules`, which npm fills in
+from the `peerDependencies` — no global pi install is needed. Tests need an
+authenticated `kiro-cli` on PATH. Files spawn real CLI processes, so Vitest runs
+them one at a time.
 
 Live end-to-end probes need an authenticated `kiro-cli`. See the
 [live probe guide](test/e2e/README.md).

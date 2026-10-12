@@ -1,11 +1,13 @@
 // Test: conversation transcript building, tool-result extraction, and the
 // fingerprint-keyed session persistence that kiro-acp resumes from.
-// Run: test/run-all.sh test/transcript.test.ts
+// Run: npm test -- test/transcript.test.ts
 
+import { afterAll, test } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
+import { assert } from "./support.ts";
 
 const dataHome = mkdtempSync(join(tmpdir(), "kiro-acp-transcript-"));
 process.env.XDG_DATA_HOME = dataHome;
@@ -26,17 +28,6 @@ const {
   savePersistedKiroSession,
 } = await import("../src/session-persistence.ts");
 
-let failed = false;
-
-function assert(condition: unknown, label: string): void {
-  if (!condition) {
-    console.error(`✗ ${label}`);
-    failed = true;
-    return;
-  }
-  console.log(`✓ ${label}`);
-}
-
 const ctx = (messages: unknown[]): Context => ({ messages }) as any;
 const user = (text: string) => ({ role: "user", content: text });
 const assistantText = (text: string) => ({
@@ -45,7 +36,7 @@ const assistantText = (text: string) => ({
 });
 
 // --- transcript building ---
-{
+test("conversation transcript building", async () => {
   assert(
     buildConversationPrompt(ctx([])) === "",
     "no user message yields an empty prompt",
@@ -167,13 +158,13 @@ const assistantText = (text: string) => ({
     lastUserMessage(ctx([])) === "",
     "lastUserMessage tolerates an empty context",
   );
-}
+});
 
 // --- replay must carry work already done for the current message ---
 // A fresh Kiro session is rebuilt purely from this transcript. Dropping the tool
 // calls made since the last user message made it redo them (relaunching the same
 // subagent over and over).
-{
+test("a replay carries work already done for the current message", async () => {
   const midTurn = buildConversationPrompt(
     ctx([
       user("compare A and B"),
@@ -232,10 +223,10 @@ const assistantText = (text: string) => ({
     !settled.includes("<work_already_done>"),
     "a turn with nothing done yet omits the block",
   );
-}
+});
 
 // --- recovery prompt for a tools/call Kiro abandoned ---
-{
+test("the recovery prompt for an abandoned tools/call", async () => {
   const recovery = buildToolResultRecoveryPrompt([
     {
       toolCallId: "c1",
@@ -274,10 +265,10 @@ const assistantText = (text: string) => ({
     long.includes("[...truncated 1000 chars...]"),
     "oversized recovered results are truncated",
   );
-}
+});
 
 // --- image blocks carried by tool results ---
-{
+test("image blocks carried by tool results", async () => {
   const images = imagesFromToolResults([
     { toolCallId: "c1", toolName: "a", text: "t", isError: false },
     {
@@ -295,10 +286,10 @@ const assistantText = (text: string) => ({
     images.length === 1 && images[0].data === "AAA",
     "only image blocks are collected from tool results",
   );
-}
+});
 
 // --- tool-result extraction (drives resumption routing) ---
-{
+test("tool-result extraction", async () => {
   const results = extractToolResults(
     ctx([
       user("q"),
@@ -366,10 +357,10 @@ const assistantText = (text: string) => ({
     stopsAtAssistant.length === 0,
     "extraction stops at the last assistant message",
   );
-}
+});
 
 // --- history fingerprints ---
-{
+test("history fingerprints", async () => {
   const base = [user("first"), assistantText("answer"), user("current")];
   const fp = historyFingerprintBeforeCurrentUser(ctx(base));
   assert(
@@ -490,10 +481,10 @@ const assistantText = (text: string) => ({
       ),
     "the post-turn fingerprint matches the next turn's pre-turn fingerprint",
   );
-}
+});
 
 // --- persisted session store ---
-{
+test("the persisted session store", async () => {
   const key = persistenceKeyForSession("pi-session-1", "/tmp/project");
   assert(key.includes("/"), "the persistence key is namespaced by cwd hash");
   assert(
@@ -563,9 +554,6 @@ const assistantText = (text: string) => ({
   assert(loadPersistedKiroSession(key) === null, "clearing removes the record");
   clearPersistedKiroSession(key);
   assert(true, "clearing a missing record is a no-op");
-}
+});
 
-rmSync(dataHome, { recursive: true, force: true });
-
-if (failed) process.exit(1);
-console.log("✓ all transcript tests passed");
+afterAll(() => rmSync(dataHome, { recursive: true, force: true }));
