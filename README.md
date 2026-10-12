@@ -1,15 +1,20 @@
 # kiro-acp (Pi)
 
-This directory is the **Pi** copy of the Kiro ACP provider. Edit it when the
-host is `pi`. Chezmoi maps it to `~/.pi/agent/extensions/kiro-acp`.
+This repository is the **Pi** copy of the Kiro ACP provider, extracted from the
+dotfiles repository.
+
+## Install
+
+```sh
+pi install ~/projects/personal/pi-kiro-acp
+```
 
 It is **not** the Oh My Pi copy. The two trees started as the same extension
 and then diverged. A change here does not appear in omp.
 
 | | Pi (this tree) | Oh My Pi |
 |---|---|---|
-| Repo | [`home/dot_pi/private_agent/extensions/kiro-acp`](.) | [`home/dot_omp/private_agent/extensions/kiro-acp`](../../../../dot_omp/private_agent/extensions/kiro-acp) |
-| Loaded from | `~/.pi/agent/extensions/kiro-acp` | `~/.omp/agent/extensions/kiro-acp` |
+| Repo | this repository | `dotfiles: home/dot_omp/private_agent/extensions/kiro-acp` |
 | Config | `~/.pi/agent/kiro-acp.json` | `~/.omp/agent/kiro-acp.json` |
 | Host binary | `pi` | `omp` |
 
@@ -20,7 +25,7 @@ and then diverged. A change here does not appear in omp.
 - [Debug logging](docs/DEBUG-LOGGING.md)
 - [E2E live probe](test/e2e/README.md)
 
-## Runtime paths (this copy)
+## Runtime paths
 
 | What | Path |
 |---|---|
