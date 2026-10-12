@@ -2,7 +2,7 @@
 // import after cleanup would silently remove every kiro-acp model from pi).
 // Run: test/run-all.sh test/extension-load.test.ts
 
-import { KIRO_ACP_PROVIDER } from "../overflow.ts";
+import { KIRO_ACP_PROVIDER } from "../src/overflow.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {
@@ -28,7 +28,7 @@ const pi = {
   },
 } as any;
 
-const register = (await import("../index.ts")).default;
+const register = (await import("../src/index.ts")).default;
 assert(
   typeof register === "function",
   "index.ts exports a default registration function",

@@ -5,8 +5,8 @@
 process.env.XDG_DATA_HOME ??= "/tmp/kiro-acp-test-data";
 
 import { tmpdir } from "node:os";
-import { AcpSession } from "../session.ts";
-import { appendKiroMetadataDiagnostic, estimateUsage, sumMeteringCredits } from "../helpers.ts";
+import { AcpSession } from "../src/session.ts";
+import { appendKiroMetadataDiagnostic, estimateUsage, sumMeteringCredits } from "../src/helpers.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {

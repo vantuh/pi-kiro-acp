@@ -1,8 +1,8 @@
 // Test: streamKiroAcp streams text from a real Kiro ACP session.
 // Run: test/run-all.sh test/stream.test.ts
 
-import { SessionManager } from "../session-manager.ts";
-import { streamKiroAcp } from "../stream.ts";
+import { SessionManager } from "../src/session-manager.ts";
+import { streamKiroAcp } from "../src/stream.ts";
 import { assert, kiroContext, kiroModel } from "./support.ts";
 
 const sessionManager = new SessionManager();

@@ -5,7 +5,7 @@
 // an env var before stream.ts is imported.
 import type { Context, Model } from "@earendil-works/pi-ai";
 import { request as httpRequest, type ClientRequest } from "node:http";
-import { AcpSession } from "../session.ts";
+import { AcpSession } from "../src/session.ts";
 
 // --- assertions ---
 

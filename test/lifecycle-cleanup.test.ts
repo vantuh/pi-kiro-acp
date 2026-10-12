@@ -10,11 +10,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   KiroSessionRuntimeRegistry,
   SessionManager,
-} from "../session-manager.ts";
-import { AcpSession } from "../session.ts";
-import { startToolBridge, type ToolBridge } from "../tool-bridge.ts";
-import { buildForwardedToolCatalog } from "../tool-catalog.ts";
-import type { PendingToolCall, ToolResultInfo } from "../types.ts";
+} from "../src/session-manager.ts";
+import { AcpSession } from "../src/session.ts";
+import { startToolBridge, type ToolBridge } from "../src/tool-bridge.ts";
+import { buildForwardedToolCatalog } from "../src/tool-catalog.ts";
+import type { PendingToolCall, ToolResultInfo } from "../src/types.ts";
 
 const emptyContext: Context = { messages: [] };
 

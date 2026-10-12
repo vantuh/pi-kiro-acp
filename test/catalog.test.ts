@@ -6,7 +6,7 @@ import {
   buildForwardedToolCatalog,
   hostToolCatalog,
   isKiroToolName,
-} from "../tool-catalog.ts";
+} from "../src/tool-catalog.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {

@@ -6,7 +6,7 @@ import {
   kiroToolNameFromPermissionParams,
   mcpServerFromPermissionParams,
   pickPermissionOptionId,
-} from "../permissions.ts";
+} from "../src/permissions.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {

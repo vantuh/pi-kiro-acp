@@ -2,7 +2,7 @@
 // turn instead of killing the pi process.
 // Run: test/run-all.sh test/prompt-failure.test.ts
 
-import { AcpSession } from "../session.ts";
+import { AcpSession } from "../src/session.ts";
 import { assert, fakeSession, tick } from "./support.ts";
 
 async function main(): Promise<void> {

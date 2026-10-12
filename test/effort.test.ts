@@ -7,9 +7,9 @@
 // Keep session-persistence's import hermetic before it loads.
 process.env.XDG_DATA_HOME ??= "/tmp/kiro-acp-test-data";
 
-import { AcpSession, toKiroEffort } from "../session.ts";
-import type { ForwardedToolCatalog } from "../tool-catalog.ts";
-import type { SessionUpdate } from "../types.ts";
+import { AcpSession, toKiroEffort } from "../src/session.ts";
+import type { ForwardedToolCatalog } from "../src/tool-catalog.ts";
+import type { SessionUpdate } from "../src/types.ts";
 import { assert, fakeSession, parseLines, tick, wait } from "./support.ts";
 
 // pi's logging module resolves DEBUG once at load with no env override, so the

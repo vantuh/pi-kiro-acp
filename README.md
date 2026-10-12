@@ -123,7 +123,7 @@ Tuning knobs; defaults work for most setups.
 
 ## Development
 
-No build step. Pi loads `index.ts` directly.
+No build step. Pi loads `src/index.ts` directly.
 
 ```sh
 ./test/run-all.sh                          # all tests

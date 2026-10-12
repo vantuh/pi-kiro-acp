@@ -5,13 +5,13 @@
 // Run: test/run-all.sh test/forwarded-transport.test.ts
 
 import { readFileSync } from "node:fs";
-import { AcpSession } from "../session.ts";
-import { stableJson } from "../helpers.ts";
+import { AcpSession } from "../src/session.ts";
+import { stableJson } from "../src/helpers.ts";
 import {
   agentConfigFingerprint,
   canRestorePersisted,
-} from "../session-persistence.ts";
-import type { ToolBridgeCall } from "../tool-bridge.ts";
+} from "../src/session-persistence.ts";
+import type { ToolBridgeCall } from "../src/tool-bridge.ts";
 
 let failed = false;
 

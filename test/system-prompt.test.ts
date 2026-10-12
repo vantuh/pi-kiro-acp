@@ -2,7 +2,7 @@
 // Run: test/run-all.sh test/system-prompt.test.ts
 
 import { normalizeContext } from "@earendil-works/pi-ai";
-import { buildPromptParts } from "../helpers.ts";
+import { buildPromptParts } from "../src/helpers.ts";
 import { assert, fakeSession } from "./support.ts";
 
 const SYSTEM_PROMPT = "AGENTS.md instructions";

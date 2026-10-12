@@ -9,7 +9,7 @@
 
 process.env.PI_KIRO_ACP_REFUSAL_RETRY_MS = "20";
 
-import { SessionManager } from "../session-manager.ts";
+import { SessionManager } from "../src/session-manager.ts";
 
 let failed = false;
 
@@ -63,7 +63,7 @@ const toolResultContext = () =>
 
 async function main(): Promise<void> {
   // Imported after the env override above so the retry delay is picked up.
-  const { streamKiroAcp } = await import("../stream.ts");
+  const { streamKiroAcp } = await import("../src/stream.ts");
   const sessionManager = new SessionManager();
 
   try {

@@ -16,7 +16,7 @@ const {
   extractToolResults,
   imagesFromToolResults,
   lastUserMessage,
-} = await import("../helpers.ts");
+} = await import("../src/helpers.ts");
 const {
   clearPersistedKiroSession,
   historyFingerprintAfterAssistantTurn,
@@ -24,7 +24,7 @@ const {
   loadPersistedKiroSession,
   persistenceKeyForSession,
   savePersistedKiroSession,
-} = await import("../session-persistence.ts");
+} = await import("../src/session-persistence.ts");
 
 let failed = false;
 

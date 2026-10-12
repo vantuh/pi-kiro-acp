@@ -1,8 +1,8 @@
 // Test: newline-delimited JSON-RPC framing and stdout dispatch in AcpSession.
 // Run: test/run-all.sh test/framing.test.ts
 
-import type { SessionUpdate } from "../types.ts";
-import { AcpSession } from "../session.ts";
+import type { SessionUpdate } from "../src/types.ts";
+import { AcpSession } from "../src/session.ts";
 import { assert, fakeSession, parseLines, settled } from "./support.ts";
 async function main(): Promise<void> {
   // --- outbound framing ---

@@ -1,7 +1,7 @@
 // Test: parsing of `kiro-cli chat --no-interactive /usage` output.
 // Run: test/run-all.sh test/usage.test.ts
 
-import { parseKiroUsage } from "../usage.ts";
+import { parseKiroUsage } from "../src/usage.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {

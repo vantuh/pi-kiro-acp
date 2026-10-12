@@ -1,8 +1,8 @@
 // Test: streamKiroAcp handles AbortSignal without hanging.
 // Run: test/run-all.sh test/abort.test.ts
 
-import { SessionManager } from "../session-manager.ts";
-import { streamKiroAcp } from "../stream.ts";
+import { SessionManager } from "../src/session-manager.ts";
+import { streamKiroAcp } from "../src/stream.ts";
 import { assert, kiroContext, kiroModel } from "./support.ts";
 
 const sessionManager = new SessionManager();

@@ -7,7 +7,7 @@ import {
   isNativeToolTextFrameLine,
   stripAssistantContentFrames,
   stripNativeToolFrames,
-} from "../native-tool-frame.ts";
+} from "../src/native-tool-frame.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {

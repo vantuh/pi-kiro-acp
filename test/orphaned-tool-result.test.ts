@@ -7,8 +7,8 @@
 
 import type { Context } from "@earendil-works/pi-ai";
 
-import { SessionManager } from "../session-manager.ts";
-import { AcpSession } from "../session.ts";
+import { SessionManager } from "../src/session-manager.ts";
+import { AcpSession } from "../src/session.ts";
 import { fakeSession, tick } from "./support.ts";
 
 const sessionManager = new SessionManager();

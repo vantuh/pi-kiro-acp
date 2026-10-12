@@ -4,7 +4,7 @@
 import {
   resolveLoggerConfig,
   resolveUsageFooterConfig,
-} from "../config.ts";
+} from "../src/config.ts";
 
 function assert(condition: unknown, label: string): void {
   if (!condition) {

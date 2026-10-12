@@ -1,8 +1,8 @@
 // Test: authenticated loopback Streamable HTTP MCP adapter.
 // Run: test/run-all.sh test/tool-bridge.test.ts
 
-import { buildForwardedToolCatalog } from "../tool-catalog.ts";
-import { startToolBridge } from "../tool-bridge.ts";
+import { buildForwardedToolCatalog } from "../src/tool-catalog.ts";
+import { startToolBridge } from "../src/tool-bridge.ts";
 import {
   assert,
   del,

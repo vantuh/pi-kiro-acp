@@ -7,7 +7,7 @@
 // finished turn — the orchestrator stopped right after its subagent returned.
 // Run: test/run-all.sh test/stranded-tool-call.test.ts
 
-import { AcpSession } from "../session.ts";
+import { AcpSession } from "../src/session.ts";
 import { fakeSession, tick } from "./support.ts";
 
 let failed = false;
