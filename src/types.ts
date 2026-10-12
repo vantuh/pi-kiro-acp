@@ -7,8 +7,8 @@ export interface PendingRpc {
 }
 
 export type ToolResultContentBlock =
-  | { type: "text"; text: string }
-  | { type: "image"; data: string; mimeType: string };
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
 
 export interface PendingToolCall {
   callId: string;

@@ -1,14 +1,15 @@
-import { getCurrentSystemPrompt } from "@earendil-works/pi-ai";
+import { getCurrentSystemPrompt } from '@earendil-works/pi-ai';
 import type {
   AssistantMessage,
   Context,
   TranscriptContext,
-} from "@earendil-works/pi-ai";
+} from '@earendil-works/pi-ai';
+
 import type {
   SessionMetadata,
   ToolResultContentBlock,
   ToolResultInfo,
-} from "./types.ts";
+} from './types.ts';
 
 const MAX_HISTORY_TEXT_CHARS = 12000;
 const MAX_TOOL_RESULT_CHARS = 20000;
@@ -16,14 +17,14 @@ const MAX_TOOL_RESULT_CHARS = 20000;
 export function lastUserMessage(context: Context): string {
   const msgs = context.messages || [];
   const i = findLastUserIndex(context);
-  return i < 0 ? "" : messageText(msgs[i], Infinity);
+  return i < 0 ? '' : messageText(msgs[i], Infinity);
 }
 
 export function buildConversationPrompt(context: Context): string {
   const msgs = context.messages || [];
   const lastUserIdx = findLastUserIndex(context);
 
-  if (lastUserIdx < 0) return "";
+  if (lastUserIdx < 0) return '';
 
   const history = msgs.slice(0, lastUserIdx);
   const current = messageText(msgs[lastUserIdx], Infinity);
@@ -35,8 +36,8 @@ export function buildConversationPrompt(context: Context): string {
   const historyText = history
     .map(formatHistoryMessage)
     .filter(Boolean)
-    .join("\n\n");
-  const doneText = done.map(formatHistoryMessage).filter(Boolean).join("\n\n");
+    .join('\n\n');
+  const doneText = done.map(formatHistoryMessage).filter(Boolean).join('\n\n');
 
   const parts: string[] = [];
   if (historyText)
@@ -51,12 +52,12 @@ export function buildConversationPrompt(context: Context): string {
       `<work_already_done>\n${WORK_ALREADY_DONE_NOTE}\n\n${doneText}\n</work_already_done>`,
     );
 
-  return parts.join("\n\n");
+  return parts.join('\n\n');
 }
 
 const WORK_ALREADY_DONE_NOTE =
-  "You already ran the steps below while answering the current message, and their results are final. " +
-  "Continue from them instead of repeating any of them.";
+  'You already ran the steps below while answering the current message, and their results are final. ' +
+  'Continue from them instead of repeating any of them.';
 
 /**
  * Prompt used when Kiro dropped an in-flight pi_host tools/call (its MCP client
@@ -69,62 +70,62 @@ export function buildToolResultRecoveryPrompt(
   const blocks = toolResults
     .map(
       (tr) =>
-        `<tool_result name="${escapeAttr(tr.toolName)}" is_error="${tr.isError ? "true" : "false"}">\n` +
+        `<tool_result name="${escapeAttr(tr.toolName)}" is_error="${tr.isError ? 'true' : 'false'}">\n` +
         `${escapeText(truncate(tr.text, MAX_TOOL_RESULT_CHARS))}\n</tool_result>`,
     )
-    .join("\n\n");
+    .join('\n\n');
 
   return (
-    "<dropped_tool_result>\n" +
-    "The tool call(s) you issued below did not return before your side of the connection gave up, " +
-    "so you never saw the result. The tool did run to completion — its output follows. " +
-    "Treat it exactly as the return value of your own tool call and continue the turn from there. " +
-    "Do not call the tool again.\n\n" +
+    '<dropped_tool_result>\n' +
+    'The tool call(s) you issued below did not return before your side of the connection gave up, ' +
+    'so you never saw the result. The tool did run to completion — its output follows. ' +
+    'Treat it exactly as the return value of your own tool call and continue the turn from there. ' +
+    'Do not call the tool again.\n\n' +
     `${blocks}\n` +
-    "</dropped_tool_result>"
+    '</dropped_tool_result>'
   );
 }
 
 function findLastUserIndex(context: Context): number {
   const msgs = context.messages || [];
   for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === "user") return i;
+    if (msgs[i].role === 'user') return i;
   }
   return -1;
 }
 
-function formatHistoryMessage(msg: Context["messages"][number]): string {
-  if (msg.role === "user") {
+function formatHistoryMessage(msg: Context['messages'][number]): string {
+  if (msg.role === 'user') {
     return `<message role="user">\n${escapeText(messageText(msg, MAX_HISTORY_TEXT_CHARS))}\n</message>`;
   }
 
-  if (msg.role === "assistant") {
+  if (msg.role === 'assistant') {
     const parts: string[] = [];
     for (const block of msg.content) {
-      if (block.type === "text") {
+      if (block.type === 'text') {
         parts.push(
           `<text>\n${escapeText(truncate(block.text, MAX_HISTORY_TEXT_CHARS))}\n</text>`,
         );
-      } else if (block.type === "toolCall") {
+      } else if (block.type === 'toolCall') {
         parts.push(
           `<tool_call id="${escapeAttr(block.id)}" name="${escapeAttr(block.name)}">\n${escapeText(safeJson(block.arguments))}\n</tool_call>`,
         );
       }
     }
     return parts.length
-      ? `<message role="assistant">\n${parts.join("\n")}\n</message>`
-      : "";
+      ? `<message role="assistant">\n${parts.join('\n')}\n</message>`
+      : '';
   }
 
-  if (msg.role === "toolResult") {
-    return `<tool_result id="${escapeAttr(msg.toolCallId)}" name="${escapeAttr(msg.toolName)}" is_error="${msg.isError ? "true" : "false"}">\n${escapeText(messageText(msg, MAX_TOOL_RESULT_CHARS))}\n</tool_result>`;
+  if (msg.role === 'toolResult') {
+    return `<tool_result id="${escapeAttr(msg.toolCallId)}" name="${escapeAttr(msg.toolName)}" is_error="${msg.isError ? 'true' : 'false'}">\n${escapeText(messageText(msg, MAX_TOOL_RESULT_CHARS))}\n</tool_result>`;
   }
 
-  return "";
+  return '';
 }
 
 /** Image blocks in the latest user message, for prompts that re-attach them. */
-type ImageBlock = { type: "image"; data: string; mimeType: string };
+type ImageBlock = { type: 'image'; data: string; mimeType: string };
 
 export function buildPromptParts(
   context: TranscriptContext,
@@ -135,9 +136,9 @@ export function buildPromptParts(
   const images: ImageBlock[] = [];
   if (lastUserIdx >= 0 && Array.isArray(msgs[lastUserIdx].content)) {
     for (const block of msgs[lastUserIdx].content as any[]) {
-      if (block.type === "image")
+      if (block.type === 'image')
         images.push({
-          type: "image",
+          type: 'image',
           data: block.data,
           mimeType: block.mimeType,
         });
@@ -155,23 +156,23 @@ export function buildPromptParts(
 }
 
 function messageText(
-  msg: Context["messages"][number],
+  msg: Context['messages'][number],
   maxChars = MAX_HISTORY_TEXT_CHARS,
 ): string {
   const content = msg.content;
   const text =
-    typeof content === "string"
+    typeof content === 'string'
       ? content
       : (content as any[])
-          .filter((c: any) => c.type === "text")
-          .map((c: any) => c.text || "")
-          .join("\n");
+          .filter((c: any) => c.type === 'text')
+          .map((c: any) => c.text || '')
+          .join('\n');
   return truncate(text, maxChars);
 }
 
 /** Deep-sort object keys so structurally equal values serialize identically. */
 export function stableValue(value: unknown): unknown {
-  if (value === null || typeof value !== "object") return value;
+  if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(stableValue);
   const sorted: Record<string, unknown> = {};
   for (const key of Object.keys(value as Record<string, unknown>).sort()) {
@@ -198,14 +199,14 @@ function safeJson(value: unknown): string {
 }
 
 function escapeAttr(value: string): string {
-  return escapeText(value).replace(/"/g, "&quot;");
+  return escapeText(value).replace(/"/g, '&quot;');
 }
 
 function escapeText(value: string): string {
   return value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 export function extractToolResults(context: Context): ToolResultInfo[] {
@@ -214,13 +215,13 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
 
   for (let i = msgs.length - 1; i >= 0; i--) {
     const msg = msgs[i];
-    if (msg.role === "toolResult") {
+    if (msg.role === 'toolResult') {
       const content = normalizeToolResultContent(msg.content as any[]);
       const text = content
-        .filter((c) => c.type === "text")
+        .filter((c) => c.type === 'text')
         .map((c) => c.text)
-        .join("\n");
-      const hasImages = content.some((c) => c.type === "image");
+        .join('\n');
+      const hasImages = content.some((c) => c.type === 'image');
       results.push({
         toolCallId: msg.toolCallId,
         toolName: msg.toolName,
@@ -228,7 +229,7 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
         ...(hasImages ? { content } : {}),
         isError: msg.isError,
       });
-    } else if (msg.role === "assistant") {
+    } else if (msg.role === 'assistant') {
       break;
     }
   }
@@ -239,11 +240,11 @@ export function extractToolResults(context: Context): ToolResultInfo[] {
 /** Image blocks carried by tool results, for prompts that must re-attach them. */
 export function imagesFromToolResults(
   toolResults: ToolResultInfo[],
-): { type: "image"; data: string; mimeType: string }[] {
+): { type: 'image'; data: string; mimeType: string }[] {
   return toolResults.flatMap((tr) =>
     (tr.content ?? []).filter(
-      (b): b is { type: "image"; data: string; mimeType: string } =>
-        b.type === "image",
+      (b): b is { type: 'image'; data: string; mimeType: string } =>
+        b.type === 'image',
     ),
   );
 }
@@ -251,15 +252,15 @@ export function imagesFromToolResults(
 function normalizeToolResultContent(content: any[]): ToolResultContentBlock[] {
   const blocks: ToolResultContentBlock[] = [];
   for (const block of content || []) {
-    if (block?.type === "text" && typeof block.text === "string") {
-      blocks.push({ type: "text", text: block.text });
+    if (block?.type === 'text' && typeof block.text === 'string') {
+      blocks.push({ type: 'text', text: block.text });
     } else if (
-      block?.type === "image" &&
-      typeof block.data === "string" &&
-      typeof block.mimeType === "string"
+      block?.type === 'image' &&
+      typeof block.data === 'string' &&
+      typeof block.mimeType === 'string'
     ) {
       blocks.push({
-        type: "image",
+        type: 'image',
         data: block.data,
         mimeType: block.mimeType,
       });
@@ -275,7 +276,7 @@ export function sumMeteringCredits(
   if (!meteringUsage) return 0;
   let sum = 0;
   for (const m of meteringUsage) {
-    if (m.unit !== "credit" && m.unit !== "credits") continue;
+    if (m.unit !== 'credit' && m.unit !== 'credits') continue;
     if (!Number.isFinite(m.value) || m.value <= 0) continue;
     sum += m.value;
   }
@@ -289,15 +290,15 @@ export function estimateUsage(
 ) {
   let chars = 0;
   for (const b of output.content) {
-    if (b.type === "text") chars += b.text.length;
-    else if (b.type === "thinking") chars += b.thinking.length;
+    if (b.type === 'text') chars += b.text.length;
+    else if (b.type === 'thinking') chars += b.thinking.length;
   }
 
   const outputTokens = Math.round(chars / 4);
   const reportedContextTokens =
-    typeof metadata?.contextUsed === "number"
+    typeof metadata?.contextUsed === 'number'
       ? Math.max(0, Math.round(metadata.contextUsed))
-      : typeof metadata?.contextUsagePercentage === "number" && contextWindow
+      : typeof metadata?.contextUsagePercentage === 'number' && contextWindow
         ? Math.round(
             (Math.max(0, metadata.contextUsagePercentage) / 100) *
               contextWindow,
@@ -323,7 +324,7 @@ export function appendKiroMetadataDiagnostic(
   output.diagnostics = [
     ...(output.diagnostics ?? []),
     {
-      type: "kiro_metadata",
+      type: 'kiro_metadata',
       timestamp: Date.now(),
       details: {
         sessionId: metadata.sessionId,
@@ -341,7 +342,7 @@ export function appendKiroMetadataDiagnostic(
 
 export function createOutputMessage(model: any): AssistantMessage {
   return {
-    role: "assistant",
+    role: 'assistant',
     content: [],
     api: model.api,
     provider: model.provider,
@@ -354,7 +355,7 @@ export function createOutputMessage(model: any): AssistantMessage {
       totalTokens: 0,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-    stopReason: "stop",
+    stopReason: 'stop',
     timestamp: Date.now(),
   };
 }

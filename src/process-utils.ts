@@ -1,4 +1,4 @@
-import { execFileSync, type ChildProcess } from "node:child_process";
+import { execFileSync, type ChildProcess } from 'node:child_process';
 
 /** Gracefully stop a spawned process tree: close stdin, wait for exit, SIGTERM
  * the root and every known descendant. Resolves either way.
@@ -19,7 +19,7 @@ export async function terminateProcessTree(
       killProcessTree(rootPid);
       resolve();
     }, timeoutMs);
-    proc.once("exit", () => {
+    proc.once('exit', () => {
       clearTimeout(timer);
       resolve();
     });
@@ -32,7 +32,7 @@ function killProcessTree(pid?: number): void {
   const children = getChildPids(pid);
   for (const child of children) killProcessTree(child);
   try {
-    process.kill(pid, "SIGTERM");
+    process.kill(pid, 'SIGTERM');
   } catch {}
 }
 
@@ -45,10 +45,10 @@ export function getDescendantPids(pid: number): number[] {
 }
 
 function getChildPids(pid: number): number[] {
-  if (process.platform === "win32") return [];
+  if (process.platform === 'win32') return [];
   try {
-    return execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" })
-      .split("\n")
+    return execFileSync('pgrep', ['-P', String(pid)], { encoding: 'utf8' })
+      .split('\n')
       .map((s) => Number(s.trim()))
       .filter((n) => Number.isInteger(n) && n > 0);
   } catch {

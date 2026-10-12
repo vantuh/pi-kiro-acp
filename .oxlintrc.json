@@ -1,0 +1,25 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "import"],
+  "categories": { "correctness": "error" },
+  "rules": {
+    "no-warning-comments": [
+      "error",
+      {
+        "terms": [
+          "story",
+          "stories",
+          "epic",
+          "epics",
+          "ticket",
+          "tickets",
+          "later",
+          "for now",
+          "yet"
+        ],
+        "location": "anywhere"
+      }
+    ]
+  },
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**"]
+}

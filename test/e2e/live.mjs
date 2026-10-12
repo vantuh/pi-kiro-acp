@@ -13,49 +13,49 @@
 //
 // See test/e2e/README.md for what each check verifies and what failures mean.
 
-import { spawn } from "node:child_process";
-import http from "node:http";
+import { spawn } from 'node:child_process';
 import {
   mkdtempSync,
   mkdirSync,
   rmSync,
   unlinkSync,
   writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+} from 'node:fs';
+import http from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const GUARD = process.env.KIRO_E2E_LIVE;
 if (!GUARD) {
   console.error(
-    "live probe spawns kiro-cli (and T5 spends credits).\n" +
-      "Run with KIRO_E2E_LIVE=1 (free checks) or KIRO_E2E_LIVE=full (incl. T5 model call).",
+    'live probe spawns kiro-cli (and T5 spends credits).\n' +
+      'Run with KIRO_E2E_LIVE=1 (free checks) or KIRO_E2E_LIVE=full (incl. T5 model call).',
   );
   process.exit(1);
 }
-const WITH_MODEL = GUARD === "full";
+const WITH_MODEL = GUARD === 'full';
 
 // ESC comes from its code point so the pattern carries no control character.
-const ANSI_SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+const ANSI_SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
 // ---------- isolated workspace ----------
-const AGENT_DIR = mkdtempSync(join(tmpdir(), "kiro-e2e-"));
-const GATE_CONFIG = join(AGENT_DIR, ".kiro", "agents", "test-gate.json");
+const AGENT_DIR = mkdtempSync(join(tmpdir(), 'kiro-e2e-'));
+const GATE_CONFIG = join(AGENT_DIR, '.kiro', 'agents', 'test-gate.json');
 const GATE_CONFIG_BODY = JSON.stringify(
   {
-    name: "test-gate",
-    tools: ["@pi_host"],
-    allowedTools: ["@pi_host"],
+    name: 'test-gate',
+    tools: ['@pi_host'],
+    allowedTools: ['@pi_host'],
     includeMcpJson: false,
     mcpServers: {},
     prompt:
-      "You are a tool-calling probe. Follow the user instruction exactly.",
+      'You are a tool-calling probe. Follow the user instruction exactly.',
   },
   null,
   2,
 );
 const restoreGateConfig = () => {
-  mkdirSync(join(AGENT_DIR, ".kiro", "agents"), { recursive: true });
+  mkdirSync(join(AGENT_DIR, '.kiro', 'agents'), { recursive: true });
   writeFileSync(GATE_CONFIG, GATE_CONFIG_BODY);
 };
 restoreGateConfig();
@@ -65,29 +65,29 @@ let mcpToolCalls = 0;
 const mcpTools = [
   {
     // collides with the Kiro builtin FsRead — drives the NameCollision check
-    name: "read",
-    description: "Reads a file. Call when the user asks to read a file.",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    name: 'read',
+    description: 'Reads a file. Call when the user asks to read a file.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     // no collision — proves non-colliding specs survive
-    name: "pi_probe_tool",
-    description: "Probe tool without a name collision.",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    name: 'pi_probe_tool',
+    description: 'Probe tool without a name collision.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
   },
   {
     // the aliased form of the colliding `read` — must survive a fallback
     // NameCollision while plain `read` is dropped (aliasing defense)
-    name: "pi_read",
-    description: "Aliased probe tool; survives builtin name collisions.",
-    inputSchema: { type: "object", properties: {}, required: [] },
+    name: 'pi_read',
+    description: 'Aliased probe tool; survives builtin name collisions.',
+    inputSchema: { type: 'object', properties: {}, required: [] },
   },
 ];
 function startMcp() {
   const server = http.createServer((req, res) => {
-    let body = "";
-    req.on("data", (c) => (body += c));
-    req.on("end", () => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
       let msg;
       try {
         msg = JSON.parse(body);
@@ -96,50 +96,50 @@ function startMcp() {
         res.end();
         return;
       }
-      if (msg.method === "tools/call") mcpToolCalls++;
-      res.writeHead(200, { "Content-Type": "application/json" });
-      if (msg.method === "initialize")
+      if (msg.method === 'tools/call') mcpToolCalls++;
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (msg.method === 'initialize')
         res.end(
           JSON.stringify({
-            jsonrpc: "2.0",
+            jsonrpc: '2.0',
             id: msg.id,
             result: {
-              protocolVersion: "2025-06-18",
+              protocolVersion: '2025-06-18',
               capabilities: { tools: {} },
-              serverInfo: { name: "mini", version: "0.0.1" },
+              serverInfo: { name: 'mini', version: '0.0.1' },
             },
           }),
         );
-      else if (msg.method === "tools/list")
+      else if (msg.method === 'tools/list')
         res.end(
           JSON.stringify({
-            jsonrpc: "2.0",
+            jsonrpc: '2.0',
             id: msg.id,
             result: { tools: mcpTools },
           }),
         );
-      else if (msg.method === "tools/call")
+      else if (msg.method === 'tools/call')
         res.end(
           JSON.stringify({
-            jsonrpc: "2.0",
+            jsonrpc: '2.0',
             id: msg.id,
-            result: { content: [{ type: "text", text: "tool executed ok" }] },
+            result: { content: [{ type: 'text', text: 'tool executed ok' }] },
           }),
         );
       else if (msg.id !== undefined)
-        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: {} }));
-      else res.end(JSON.stringify({ jsonrpc: "2.0", id: 0, result: {} }));
+        res.end(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: {} }));
+      else res.end(JSON.stringify({ jsonrpc: '2.0', id: 0, result: {} }));
     });
   });
   return new Promise((ok) =>
-    server.listen(0, "127.0.0.1", () => ok(server.address().port)),
+    server.listen(0, '127.0.0.1', () => ok(server.address().port)),
   );
 }
 const mcpServer = (port) => ({
-  type: "http",
-  name: "pi_host",
+  type: 'http',
+  name: 'pi_host',
   url: `http://127.0.0.1:${port}`,
-  headers: [{ name: "Authorization", value: "Bearer x" }],
+  headers: [{ name: 'Authorization', value: 'Bearer x' }],
 });
 
 // ---------- kiro-cli ACP harness ----------
@@ -154,15 +154,15 @@ class Kiro {
     this.modelText = [];
   }
   start() {
-    this.proc = spawn("kiro-cli", ["acp", ...this.spawnArgs, "-v"], {
+    this.proc = spawn('kiro-cli', ['acp', ...this.spawnArgs, '-v'], {
       cwd: AGENT_DIR,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
-    let buf = "";
-    this.proc.stdout.on("data", (d) => {
+    let buf = '';
+    this.proc.stdout.on('data', (d) => {
       buf += d;
       let i;
-      while ((i = buf.indexOf("\n")) >= 0) {
+      while ((i = buf.indexOf('\n')) >= 0) {
         const line = buf.slice(0, i).trim();
         buf = buf.slice(i + 1);
         if (!line) continue;
@@ -171,26 +171,26 @@ class Kiro {
           const msg = JSON.parse(line);
           if (msg.method) {
             this.notifications.push(msg);
-            if (msg.method === "session/request_permission") {
+            if (msg.method === 'session/request_permission') {
               this.permissionCount++;
               // auto-allow so the probe never blocks; the count is the signal
               const allow =
-                msg.params?.options?.find((o) => o.id === "allow_always")?.id ??
-                "allow_once";
+                msg.params?.options?.find((o) => o.id === 'allow_always')?.id ??
+                'allow_once';
               this.send({
-                jsonrpc: "2.0",
+                jsonrpc: '2.0',
                 id: msg.id,
-                result: { outcome: { outcome: "selected", optionId: allow } },
+                result: { outcome: { outcome: 'selected', optionId: allow } },
               });
             }
             if (
-              msg.method === "session/update" ||
-              msg.method === "_kiro.dev/session/update"
+              msg.method === 'session/update' ||
+              msg.method === '_kiro.dev/session/update'
             ) {
               const u = msg.params?.update ?? {};
               if (
-                u.sessionUpdate === "tool_call" ||
-                u.sessionUpdate === "tool_call_update"
+                u.sessionUpdate === 'tool_call' ||
+                u.sessionUpdate === 'tool_call_update'
               )
                 this.events.push({
                   kind: u.sessionUpdate,
@@ -198,24 +198,24 @@ class Kiro {
                   server: u._meta?.kiro?.mcpServerName ?? null,
                   status: u.status ?? null,
                 });
-              if (u.sessionUpdate === "agent_message_chunk" && u.content?.text)
+              if (u.sessionUpdate === 'agent_message_chunk' && u.content?.text)
                 this.modelText.push(u.content.text);
             }
           }
         } catch {
-          this.verbose.push(line.replace(ANSI_SGR_RE, ""));
+          this.verbose.push(line.replace(ANSI_SGR_RE, ''));
         }
       }
     });
-    this.proc.stderr.on("data", () => {});
+    this.proc.stderr.on('data', () => {});
   }
   send(msg) {
-    this.proc.stdin.write(JSON.stringify(msg) + "\n");
+    this.proc.stdin.write(JSON.stringify(msg) + '\n');
   }
   async rpc(method, params, timeoutMs = 45000) {
     const myId = Math.floor(Math.random() * 1e6) + 1;
     const start = this.lines.length;
-    this.send({ jsonrpc: "2.0", id: myId, method, params });
+    this.send({ jsonrpc: '2.0', id: myId, method, params });
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       for (let i = start; i < this.lines.length; i++) {
@@ -241,7 +241,7 @@ class Kiro {
     while (Date.now() < deadline) {
       const avail = [...this.notifications]
         .reverse()
-        .find((n) => n.method === "_kiro.dev/commands/available");
+        .find((n) => n.method === '_kiro.dev/commands/available');
       const tools = avail?.params?.tools;
       const snapshot = tools ? JSON.stringify(tools) : null;
       if (snapshot !== null && snapshot === last && tools.length > 0)
@@ -255,7 +255,7 @@ class Kiro {
     const deadline = Date.now() + 15000;
     while (Date.now() < deadline) {
       const n = this.notifications.find(
-        (x) => x.method === "_kiro.dev/agent/not_found",
+        (x) => x.method === '_kiro.dev/agent/not_found',
       );
       if (n) return n.params;
       await new Promise((r) => setTimeout(r, 100));
@@ -264,7 +264,7 @@ class Kiro {
   }
   kill() {
     try {
-      this.proc.kill("SIGKILL");
+      this.proc.kill('SIGKILL');
     } catch {}
   }
 }
@@ -273,10 +273,10 @@ async function withKiro(spawnArgs, port, fn) {
   const k = new Kiro(spawnArgs);
   k.start();
   try {
-    await k.rpc("initialize", {
+    await k.rpc('initialize', {
       protocolVersion: 1,
       clientCapabilities: {},
-      clientInfo: { name: "kiro-acp-e2e", version: "1.0.0" },
+      clientInfo: { name: 'kiro-acp-e2e', version: '1.0.0' },
     });
     return await fn(k);
   } finally {
@@ -288,10 +288,10 @@ async function withKiro(spawnArgs, port, fn) {
 const summarizeTools = (params) => {
   if (!params?.tools) return null;
   const builtins = params.tools
-    .filter((t) => t.source === "built-in")
+    .filter((t) => t.source === 'built-in')
     .map((t) => t.name);
   const mcp = params.tools
-    .filter((t) => String(t.source ?? "").startsWith("mcp:"))
+    .filter((t) => String(t.source ?? '').startsWith('mcp:'))
     .map((t) => `${t.name}(${t.source})`);
   return { total: params.tools.length, builtins, mcp };
 };
@@ -301,7 +301,7 @@ const results = []; // { name, pass } — executed checks only
 const skipped = []; // { name, why }
 const check = (name, pass, detail) => {
   results.push({ name, pass });
-  console.log(`${pass ? "✓" : "✗"} ${name}${detail ? ` — ${detail}` : ""}`);
+  console.log(`${pass ? '✓' : '✗'} ${name}${detail ? ` — ${detail}` : ''}`);
 };
 const skip = (name, why) => {
   skipped.push({ name, why });
@@ -313,68 +313,68 @@ const mcp = mcpServer(port);
 
 // T1: fresh session under the gate config — zero builtins, pi_host tools only
 await withKiro(
-  ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+  ['--agent', 'test-gate', '--trust-tools', '@pi_host'],
   port,
   async (k) => {
-    await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
+    await k.rpc('session/new', { cwd: AGENT_DIR, mcpServers: [mcp] });
     const s = summarizeTools(await k.latestTools());
     check(
-      "T1a fresh session: zero built-in tools",
+      'T1a fresh session: zero built-in tools',
       s && s.builtins.length === 0,
       JSON.stringify(s),
     );
     check(
-      "T1b pi_host tools visible",
+      'T1b pi_host tools visible',
       s &&
-        s.mcp.includes("read(mcp:pi_host)") &&
-        s.mcp.includes("pi_probe_tool(mcp:pi_host)") &&
-        s.mcp.includes("pi_read(mcp:pi_host)"),
+        s.mcp.includes('read(mcp:pi_host)') &&
+        s.mcp.includes('pi_probe_tool(mcp:pi_host)') &&
+        s.mcp.includes('pi_read(mcp:pi_host)'),
       JSON.stringify(s),
     );
     check(
-      "T1c no NameCollision with gate config",
-      !k.verbose.some((l) => l.includes("NameCollision")),
+      'T1c no NameCollision with gate config',
+      !k.verbose.some((l) => l.includes('NameCollision')),
     );
   },
 );
 
 // T2 + T3: missing agent -> not_found fallback -> all builtins + NameCollision
 await withKiro(
-  ["--agent", "no-such-agent-e2e", "--trust-all-tools"],
+  ['--agent', 'no-such-agent-e2e', '--trust-all-tools'],
   port,
   async (k) => {
-    await k.rpc("session/new", { cwd: AGENT_DIR, mcpServers: [mcp] });
+    await k.rpc('session/new', { cwd: AGENT_DIR, mcpServers: [mcp] });
     const nf = await k.notFound();
-    check("T2a agent/not_found emitted", !!nf, JSON.stringify(nf));
+    check('T2a agent/not_found emitted', !!nf, JSON.stringify(nf));
     check(
-      "T2b fallback is kiro_default",
-      nf?.fallbackAgent === "kiro_default",
-      nf?.fallbackAgent ?? "none",
+      'T2b fallback is kiro_default',
+      nf?.fallbackAgent === 'kiro_default',
+      nf?.fallbackAgent ?? 'none',
     );
     const s = summarizeTools(await k.latestTools());
     check(
-      "T2c fallback registers builtins",
+      'T2c fallback registers builtins',
       s && s.builtins.length >= 10,
-      `${s?.builtins.length} builtins: ${s?.builtins.slice(0, 8).join(",")}…`,
+      `${s?.builtins.length} builtins: ${s?.builtins.slice(0, 8).join(',')}…`,
     );
     let collision = null;
     const collisionDeadline = Date.now() + 10000;
     while (Date.now() < collisionDeadline) {
-      collision = k.verbose.find((l) => l.includes("NameCollision"));
+      collision = k.verbose.find((l) => l.includes('NameCollision'));
       if (collision) break;
       await new Promise((r) => setTimeout(r, 200));
     }
     check(
-      "T3 NameCollision(BuiltIn(FsRead)) under fallback",
-      !!collision && collision.includes("BuiltIn(FsRead)"),
-      collision ? collision.slice(0, 100) : "no collision line in 10s",
+      'T3 NameCollision(BuiltIn(FsRead)) under fallback',
+      !!collision && collision.includes('BuiltIn(FsRead)'),
+      collision ? collision.slice(0, 100) : 'no collision line in 10s',
     );
     const sAliased = summarizeTools(await k.latestTools());
     check(
-      "T3b aliased pi_read survives the fallback collision",
+      'T3b aliased pi_read survives the fallback collision',
       sAliased &&
-        sAliased.mcp.includes("pi_read(mcp:pi_host)") &&
-        !sAliased.mcp.includes("read(mcp:pi_host)"),
+        sAliased.mcp.includes('pi_read(mcp:pi_host)') &&
+        !sAliased.mcp.includes('read(mcp:pi_host)'),
       JSON.stringify(sAliased),
     );
   },
@@ -383,10 +383,10 @@ await withKiro(
 // T4-alt: restore across processes with the config still present — no leak
 let gateSessionId = null;
 await withKiro(
-  ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+  ['--agent', 'test-gate', '--trust-tools', '@pi_host'],
   port,
   async (k) => {
-    const sn = await k.rpc("session/new", {
+    const sn = await k.rpc('session/new', {
       cwd: AGENT_DIR,
       mcpServers: [mcp],
     });
@@ -394,18 +394,18 @@ await withKiro(
   },
 );
 await withKiro(
-  ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+  ['--agent', 'test-gate', '--trust-tools', '@pi_host'],
   port,
   async (k) => {
     try {
-      await k.rpc("session/load", {
+      await k.rpc('session/load', {
         sessionId: gateSessionId,
         cwd: AGENT_DIR,
         mcpServers: [mcp],
       });
     } catch (e) {
       check(
-        "T4-alt restore with config present: no leak",
+        'T4-alt restore with config present: no leak',
         false,
         `session/load failed: ${e.message}`,
       );
@@ -413,7 +413,7 @@ await withKiro(
     }
     const s = summarizeTools(await k.latestTools());
     check(
-      "T4-alt restore with config present: no leak",
+      'T4-alt restore with config present: no leak',
       s && s.builtins.length === 0,
       JSON.stringify(s),
     );
@@ -421,23 +421,23 @@ await withKiro(
 );
 
 // T4: the production leak mechanism — agent config DELETED before restore
-// (the extension removes agent files on stop; a persisted session resumed
-// later finds no config) -> agent fallback -> builtins leak into the model
+// (the extension removes agent files on stop; resuming a persisted session
+// finds no config) -> agent fallback -> builtins leak into the model
 unlinkSync(GATE_CONFIG);
 try {
   await withKiro(
-    ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+    ['--agent', 'test-gate', '--trust-tools', '@pi_host'],
     port,
     async (k) => {
       try {
-        await k.rpc("session/load", {
+        await k.rpc('session/load', {
           sessionId: gateSessionId,
           cwd: AGENT_DIR,
           mcpServers: [mcp],
         });
       } catch (e) {
         check(
-          "T4 restore with deleted config leaks builtins",
+          'T4 restore with deleted config leaks builtins',
           false,
           `session/load failed: ${e.message}`,
         );
@@ -446,9 +446,9 @@ try {
       const nf = await k.notFound();
       const s = summarizeTools(await k.latestTools());
       check(
-        "T4 restore with deleted config leaks builtins",
+        'T4 restore with deleted config leaks builtins',
         s && s.builtins.length > 0,
-        `not_found=${JSON.stringify(nf)}; ${s?.builtins.length ?? "?"} builtins leaked: ${s?.builtins.slice(0, 8).join(",") || "none"}`,
+        `not_found=${JSON.stringify(nf)}; ${s?.builtins.length ?? '?'} builtins leaked: ${s?.builtins.slice(0, 8).join(',') || 'none'}`,
       );
     },
   );
@@ -459,21 +459,21 @@ try {
 // T5: real model-driven tools/call round-trip under the gate (spends credits)
 if (WITH_MODEL) {
   await withKiro(
-    ["--agent", "test-gate", "--trust-tools", "@pi_host"],
+    ['--agent', 'test-gate', '--trust-tools', '@pi_host'],
     port,
     async (k) => {
-      const sn = await k.rpc("session/new", {
+      const sn = await k.rpc('session/new', {
         cwd: AGENT_DIR,
         mcpServers: [mcp],
       });
       await k.latestTools(); // ensure the model has the pi_host tools registered
       await k.rpc(
-        "session/prompt",
+        'session/prompt',
         {
           sessionId: sn.sessionId,
           prompt: [
             {
-              type: "text",
+              type: 'text',
               text: 'Call the read tool exactly once with arguments {"path": "notes.txt"}. Do not use any other tool. When it returns, reply with exactly: DONE',
             },
           ],
@@ -481,38 +481,38 @@ if (WITH_MODEL) {
         120000,
       );
       check(
-        "T5a forwarded tool executed by the MCP host",
+        'T5a forwarded tool executed by the MCP host',
         mcpToolCalls >= 1,
-        `${mcpToolCalls} tools/call(s) received; model: "${k.modelText.join("").trim().slice(0, 40)}"`,
+        `${mcpToolCalls} tools/call(s) received; model: "${k.modelText.join('').trim().slice(0, 40)}"`,
       );
       const piHostCalls = k.events.filter(
-        (e) => e.kind === "tool_call" && e.server === "pi_host",
+        (e) => e.kind === 'tool_call' && e.server === 'pi_host',
       );
       check(
-        "T5b tool_call tagged pi_host",
+        'T5b tool_call tagged pi_host',
         piHostCalls.length >= 1,
         JSON.stringify(piHostCalls[0] ?? null),
       );
       check(
-        "T5c zero permission RPCs for pi_host tools",
+        'T5c zero permission RPCs for pi_host tools',
         k.permissionCount === 0,
         `${k.permissionCount} permission request(s)`,
       );
     },
   );
 } else {
-  skip("T5 model tools/call round-trip (a/b/c)", "run with KIRO_E2E_LIVE=full");
+  skip('T5 model tools/call round-trip (a/b/c)', 'run with KIRO_E2E_LIVE=full');
 }
 
 // ---------- cleanup + summary ----------
 rmSync(AGENT_DIR, { recursive: true, force: true });
 
-console.log("\n==== E2E SUMMARY ====");
+console.log('\n==== E2E SUMMARY ====');
 const failed = results.filter((r) => !r.pass);
-for (const r of results) console.log(`${r.pass ? "PASS" : "FAIL"}  ${r.name}`);
+for (const r of results) console.log(`${r.pass ? 'PASS' : 'FAIL'}  ${r.name}`);
 for (const s of skipped) console.log(`SKIP   ${s.name} (${s.why})`);
 console.log(
   `\n${results.length - failed.length}/${results.length} checks passed` +
-    (skipped.length ? `, ${skipped.length} skipped` : ""),
+    (skipped.length ? `, ${skipped.length} skipped` : ''),
 );
 process.exit(failed.length ? 1 : 0);

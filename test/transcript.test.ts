@@ -2,14 +2,16 @@
 // fingerprint-keyed session persistence that kiro-acp resumes from.
 // Run: npm test -- test/transcript.test.ts
 
-import { afterAll, test } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import type { AssistantMessage, Context } from "@earendil-works/pi-ai";
-import { assert } from "./support.ts";
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-const dataHome = mkdtempSync(join(tmpdir(), "kiro-acp-transcript-"));
+import type { AssistantMessage, Context } from '@earendil-works/pi-ai';
+import { afterAll, test } from 'vitest';
+
+import { assert } from './support.ts';
+
+const dataHome = mkdtempSync(join(tmpdir(), 'kiro-acp-transcript-'));
 process.env.XDG_DATA_HOME = dataHome;
 
 const {
@@ -18,7 +20,7 @@ const {
   extractToolResults,
   imagesFromToolResults,
   lastUserMessage,
-} = await import("../src/helpers.ts");
+} = await import('../src/helpers.ts');
 const {
   clearPersistedKiroSession,
   historyFingerprintAfterAssistantTurn,
@@ -26,137 +28,137 @@ const {
   loadPersistedKiroSession,
   persistenceKeyForSession,
   savePersistedKiroSession,
-} = await import("../src/session-persistence.ts");
+} = await import('../src/session-persistence.ts');
 
 const ctx = (messages: unknown[]): Context => ({ messages }) as any;
-const user = (text: string) => ({ role: "user", content: text });
+const user = (text: string) => ({ role: 'user', content: text });
 const assistantText = (text: string) => ({
-  role: "assistant",
-  content: [{ type: "text", text }],
+  role: 'assistant',
+  content: [{ type: 'text', text }],
 });
 
 // --- transcript building ---
-test("conversation transcript building", async () => {
+test('conversation transcript building', async () => {
   assert(
-    buildConversationPrompt(ctx([])) === "",
-    "no user message yields an empty prompt",
+    buildConversationPrompt(ctx([])) === '',
+    'no user message yields an empty prompt',
   );
   assert(
-    buildConversationPrompt(ctx([assistantText("orphan")])) === "",
-    "assistant-only history yields an empty prompt",
+    buildConversationPrompt(ctx([assistantText('orphan')])) === '',
+    'assistant-only history yields an empty prompt',
   );
 
-  const single = buildConversationPrompt(ctx([user("hello")]));
+  const single = buildConversationPrompt(ctx([user('hello')]));
   assert(
-    single === "<current_user_message>\nhello\n</current_user_message>",
-    "a lone user message needs no history block",
+    single === '<current_user_message>\nhello\n</current_user_message>',
+    'a lone user message needs no history block',
   );
 
   const withHistory = buildConversationPrompt(
-    ctx([user("first"), assistantText("answer"), user("second")]),
+    ctx([user('first'), assistantText('answer'), user('second')]),
   );
   assert(
-    withHistory.includes("<conversation_history>"),
-    "prior turns are wrapped in conversation_history",
+    withHistory.includes('<conversation_history>'),
+    'prior turns are wrapped in conversation_history',
   );
   assert(
     withHistory.includes('<message role="user">\nfirst\n</message>'),
-    "history keeps earlier user turns",
+    'history keeps earlier user turns',
   );
   assert(
-    withHistory.includes("<text>\nanswer\n</text>"),
-    "history keeps assistant text",
+    withHistory.includes('<text>\nanswer\n</text>'),
+    'history keeps assistant text',
   );
   assert(
     withHistory.endsWith(
-      "<current_user_message>\nsecond\n</current_user_message>",
+      '<current_user_message>\nsecond\n</current_user_message>',
     ),
-    "the latest user message ends the prompt",
+    'the latest user message ends the prompt',
   );
   assert(
     !withHistory.includes('<message role="user">\nsecond'),
-    "the current message is not duplicated into history",
+    'the current message is not duplicated into history',
   );
 
-  const escaped = buildConversationPrompt(ctx([user("a & b <tag> c")]));
+  const escaped = buildConversationPrompt(ctx([user('a & b <tag> c')]));
   assert(
-    escaped.includes("a &amp; b &lt;tag&gt; c"),
-    "user text is XML-escaped",
+    escaped.includes('a &amp; b &lt;tag&gt; c'),
+    'user text is XML-escaped',
   );
 
   const toolCallHistory = buildConversationPrompt(
     ctx([
-      user("q"),
+      user('q'),
       {
-        role: "assistant",
+        role: 'assistant',
         content: [
           {
-            type: "toolCall",
+            type: 'toolCall',
             id: 'c"1',
-            name: "web_search",
-            arguments: { query: "x" },
+            name: 'web_search',
+            arguments: { query: 'x' },
           },
         ],
       },
       {
-        role: "toolResult",
+        role: 'toolResult',
         toolCallId: 'c"1',
-        toolName: "web_search",
+        toolName: 'web_search',
         isError: true,
-        content: [{ type: "text", text: "failed <hard>" }],
+        content: [{ type: 'text', text: 'failed <hard>' }],
       },
-      user("q2"),
+      user('q2'),
     ]),
   );
   assert(
     toolCallHistory.includes('<tool_call id="c&quot;1" name="web_search">'),
-    "tool call attributes are escaped",
+    'tool call attributes are escaped',
   );
   assert(
     toolCallHistory.includes('is_error="true"'),
-    "tool result errors are marked in history",
+    'tool result errors are marked in history',
   );
   assert(
-    toolCallHistory.includes("failed &lt;hard&gt;"),
-    "tool result text is escaped",
+    toolCallHistory.includes('failed &lt;hard&gt;'),
+    'tool result text is escaped',
   );
 
-  const long = "x".repeat(13000);
+  const long = 'x'.repeat(13000);
   const truncated = buildConversationPrompt(
-    ctx([user(long), assistantText("ok"), user("now")]),
+    ctx([user(long), assistantText('ok'), user('now')]),
   );
   assert(
-    truncated.includes("[...truncated 1000 chars...]"),
-    "long history messages are truncated",
+    truncated.includes('[...truncated 1000 chars...]'),
+    'long history messages are truncated',
   );
   const currentLong = buildConversationPrompt(ctx([user(long)]));
   assert(
-    !currentLong.includes("truncated"),
-    "the current user message is never truncated",
+    !currentLong.includes('truncated'),
+    'the current user message is never truncated',
   );
 
   assert(
-    lastUserMessage(ctx([user("a"), assistantText("b"), user("c")])) === "c",
-    "lastUserMessage returns the latest user turn",
+    lastUserMessage(ctx([user('a'), assistantText('b'), user('c')])) === 'c',
+    'lastUserMessage returns the latest user turn',
   );
   assert(
     lastUserMessage(
       ctx([
         {
-          role: "user",
+          role: 'user',
           content: [
-            { type: "text", text: "part1" },
-            { type: "image", data: "zz", mimeType: "image/png" },
-            { type: "text", text: "part2" },
+            { type: 'text', text: 'part1' },
+            { type: 'image', data: 'zz', mimeType: 'image/png' },
+            { type: 'text', text: 'part2' },
           ],
         },
       ]),
-    ) === "part1\npart2",
-    "lastUserMessage joins text blocks and skips images",
+    ) === 'part1\npart2',
+    'lastUserMessage joins text blocks and skips images',
   );
   assert(
-    lastUserMessage(ctx([])) === "",
-    "lastUserMessage tolerates an empty context",
+    lastUserMessage(ctx([])) === '',
+    'lastUserMessage tolerates an empty context',
   );
 });
 
@@ -164,396 +166,396 @@ test("conversation transcript building", async () => {
 // A fresh Kiro session is rebuilt purely from this transcript. Dropping the tool
 // calls made since the last user message made it redo them (relaunching the same
 // subagent over and over).
-test("a replay carries work already done for the current message", async () => {
+test('a replay carries work already done for the current message', async () => {
   const midTurn = buildConversationPrompt(
     ctx([
-      user("compare A and B"),
+      user('compare A and B'),
       {
-        role: "assistant",
+        role: 'assistant',
         content: [
           {
-            type: "toolCall",
-            id: "c1",
-            name: "probe_tool",
-            arguments: { task: "compare" },
+            type: 'toolCall',
+            id: 'c1',
+            name: 'probe_tool',
+            arguments: { task: 'compare' },
           },
         ],
       },
       {
-        role: "toolResult",
-        toolCallId: "c1",
-        toolName: "probe_tool",
+        role: 'toolResult',
+        toolCallId: 'c1',
+        toolName: 'probe_tool',
         isError: false,
-        content: [{ type: "text", text: "the report" }],
+        content: [{ type: 'text', text: 'the report' }],
       },
     ]),
   );
   assert(
     midTurn.includes(
-      "<current_user_message>\ncompare A and B\n</current_user_message>",
+      '<current_user_message>\ncompare A and B\n</current_user_message>',
     ),
-    "the current message is still present mid-turn",
+    'the current message is still present mid-turn',
   );
   assert(
-    midTurn.includes("<work_already_done>"),
-    "work performed for the current message is replayed",
+    midTurn.includes('<work_already_done>'),
+    'work performed for the current message is replayed',
   );
   assert(
     midTurn.includes('<tool_call id="c1" name="probe_tool">'),
-    "the already-issued tool call is replayed",
+    'the already-issued tool call is replayed',
   );
   assert(
-    midTurn.includes("the report"),
-    "the already-received tool result is replayed",
+    midTurn.includes('the report'),
+    'the already-received tool result is replayed',
   );
   assert(
-    midTurn.indexOf("<current_user_message>") <
-      midTurn.indexOf("<work_already_done>"),
-    "completed work follows the current message",
+    midTurn.indexOf('<current_user_message>') <
+      midTurn.indexOf('<work_already_done>'),
+    'completed work follows the current message',
   );
   assert(
-    !midTurn.includes("<conversation_history>"),
-    "a first-turn replay needs no history block",
+    !midTurn.includes('<conversation_history>'),
+    'a first-turn replay needs no history block',
   );
 
   const settled = buildConversationPrompt(
-    ctx([user("a"), assistantText("b"), user("c")]),
+    ctx([user('a'), assistantText('b'), user('c')]),
   );
   assert(
-    !settled.includes("<work_already_done>"),
-    "a turn with nothing done yet omits the block",
+    !settled.includes('<work_already_done>'),
+    'a turn with nothing done yet omits the block',
   );
 });
 
 // --- recovery prompt for a tools/call Kiro abandoned ---
-test("the recovery prompt for an abandoned tools/call", async () => {
+test('the recovery prompt for an abandoned tools/call', async () => {
   const recovery = buildToolResultRecoveryPrompt([
     {
-      toolCallId: "c1",
-      toolName: "probe_tool",
-      text: "report <body>",
+      toolCallId: 'c1',
+      toolName: 'probe_tool',
+      text: 'report <body>',
       isError: false,
     },
-    { toolCallId: "c2", toolName: "web_search", text: "boom", isError: true },
+    { toolCallId: 'c2', toolName: 'web_search', text: 'boom', isError: true },
   ]);
   assert(
-    recovery.includes("Do not call the tool again."),
-    "the recovery prompt forbids re-running the tool",
+    recovery.includes('Do not call the tool again.'),
+    'the recovery prompt forbids re-running the tool',
   );
   assert(
     recovery.includes('<tool_result name="probe_tool" is_error="false">'),
-    "each recovered result is labelled",
+    'each recovered result is labelled',
   );
   assert(
-    recovery.includes("report &lt;body&gt;"),
-    "recovered result text is escaped",
+    recovery.includes('report &lt;body&gt;'),
+    'recovered result text is escaped',
   );
   assert(
     recovery.includes('is_error="true"'),
-    "recovered errors stay marked as errors",
+    'recovered errors stay marked as errors',
   );
 
   const long = buildToolResultRecoveryPrompt([
     {
-      toolCallId: "c1",
-      toolName: "t",
-      text: "y".repeat(21000),
+      toolCallId: 'c1',
+      toolName: 't',
+      text: 'y'.repeat(21000),
       isError: false,
     },
   ]);
   assert(
-    long.includes("[...truncated 1000 chars...]"),
-    "oversized recovered results are truncated",
+    long.includes('[...truncated 1000 chars...]'),
+    'oversized recovered results are truncated',
   );
 });
 
 // --- image blocks carried by tool results ---
-test("image blocks carried by tool results", async () => {
+test('image blocks carried by tool results', async () => {
   const images = imagesFromToolResults([
-    { toolCallId: "c1", toolName: "a", text: "t", isError: false },
+    { toolCallId: 'c1', toolName: 'a', text: 't', isError: false },
     {
-      toolCallId: "c2",
-      toolName: "b",
-      text: "t",
+      toolCallId: 'c2',
+      toolName: 'b',
+      text: 't',
       isError: false,
       content: [
-        { type: "text", text: "t" },
-        { type: "image", data: "AAA", mimeType: "image/png" },
+        { type: 'text', text: 't' },
+        { type: 'image', data: 'AAA', mimeType: 'image/png' },
       ],
     },
   ]);
   assert(
-    images.length === 1 && images[0].data === "AAA",
-    "only image blocks are collected from tool results",
+    images.length === 1 && images[0].data === 'AAA',
+    'only image blocks are collected from tool results',
   );
 });
 
 // --- tool-result extraction (drives resumption routing) ---
-test("tool-result extraction", async () => {
+test('tool-result extraction', async () => {
   const results = extractToolResults(
     ctx([
-      user("q"),
-      assistantText("thinking"),
+      user('q'),
+      assistantText('thinking'),
       {
-        role: "toolResult",
-        toolCallId: "id-1",
-        toolName: "web_search",
+        role: 'toolResult',
+        toolCallId: 'id-1',
+        toolName: 'web_search',
         isError: false,
-        content: [{ type: "text", text: "one" }],
+        content: [{ type: 'text', text: 'one' }],
       },
       {
-        role: "toolResult",
-        toolCallId: "id-2",
-        toolName: "fetch_content",
+        role: 'toolResult',
+        toolCallId: 'id-2',
+        toolName: 'fetch_content',
         isError: true,
-        content: [{ type: "text", text: "two" }],
+        content: [{ type: 'text', text: 'two' }],
       },
     ]),
   );
-  assert(results.length === 2, "trailing tool results are collected");
+  assert(results.length === 2, 'trailing tool results are collected');
   assert(
-    results[0].toolCallId === "id-1" && results[1].toolCallId === "id-2",
-    "tool results keep transcript order",
+    results[0].toolCallId === 'id-1' && results[1].toolCallId === 'id-2',
+    'tool results keep transcript order',
   );
-  assert(results[1].isError === true, "error flags survive extraction");
+  assert(results[1].isError === true, 'error flags survive extraction');
   assert(
     results[0].content === undefined,
-    "text-only results carry no content blocks",
+    'text-only results carry no content blocks',
   );
 
   const withImage = extractToolResults(
     ctx([
       {
-        role: "toolResult",
-        toolCallId: "id-3",
-        toolName: "shell",
+        role: 'toolResult',
+        toolCallId: 'id-3',
+        toolName: 'shell',
         isError: false,
         content: [
-          { type: "text", text: "shot" },
-          { type: "image", data: "AAA", mimeType: "image/png" },
+          { type: 'text', text: 'shot' },
+          { type: 'image', data: 'AAA', mimeType: 'image/png' },
         ],
       },
     ]),
   );
   assert(
     withImage[0].content?.length === 2,
-    "image results keep their content blocks",
+    'image results keep their content blocks',
   );
-  assert(withImage[0].text === "shot", "image results still expose their text");
+  assert(withImage[0].text === 'shot', 'image results still expose their text');
 
   const stopsAtAssistant = extractToolResults(
     ctx([
       {
-        role: "toolResult",
-        toolCallId: "old",
-        toolName: "web_search",
+        role: 'toolResult',
+        toolCallId: 'old',
+        toolName: 'web_search',
         isError: false,
-        content: [{ type: "text", text: "old" }],
+        content: [{ type: 'text', text: 'old' }],
       },
-      assistantText("newer turn"),
+      assistantText('newer turn'),
     ]),
   );
   assert(
     stopsAtAssistant.length === 0,
-    "extraction stops at the last assistant message",
+    'extraction stops at the last assistant message',
   );
 });
 
 // --- history fingerprints ---
-test("history fingerprints", async () => {
-  const base = [user("first"), assistantText("answer"), user("current")];
+test('history fingerprints', async () => {
+  const base = [user('first'), assistantText('answer'), user('current')];
   const fp = historyFingerprintBeforeCurrentUser(ctx(base));
   assert(
     fp === historyFingerprintBeforeCurrentUser(ctx([...base])),
-    "fingerprints are stable for identical history",
+    'fingerprints are stable for identical history',
   );
   assert(
     fp !==
       historyFingerprintBeforeCurrentUser(
-        ctx([user("first"), assistantText("other"), user("current")]),
+        ctx([user('first'), assistantText('other'), user('current')]),
       ),
-    "changed history changes the fingerprint",
+    'changed history changes the fingerprint',
   );
   assert(
     fp ===
       historyFingerprintBeforeCurrentUser(
         ctx([
-          user("first"),
-          assistantText("answer"),
-          user("different current"),
+          user('first'),
+          assistantText('answer'),
+          user('different current'),
         ]),
       ),
-    "the current user message is excluded",
+    'the current user message is excluded',
   );
 
   const withThinking = ctx([
-    user("first"),
+    user('first'),
     {
-      role: "assistant",
+      role: 'assistant',
       content: [
-        { type: "thinking", thinking: "secret" },
-        { type: "text", text: "answer" },
+        { type: 'thinking', thinking: 'secret' },
+        { type: 'text', text: 'answer' },
       ],
     },
-    user("current"),
+    user('current'),
   ]);
   assert(
     fp === historyFingerprintBeforeCurrentUser(withThinking),
-    "thinking blocks are ignored (they are not replayed)",
+    'thinking blocks are ignored (they are not replayed)',
   );
 
   const withDisplayCard = ctx([
-    user("first"),
+    user('first'),
     {
-      role: "assistant",
+      role: 'assistant',
       content: [
-        { type: "text", text: "answer" },
+        { type: 'text', text: 'answer' },
         // Legacy native-tool card, as emitted by the removed mirror.
         {
-          type: "text",
-          text: "<!--kiro-tool-->\n🔧 ls\nfile\n<!--/kiro-tool-->\n",
+          type: 'text',
+          text: '<!--kiro-tool-->\n🔧 ls\nfile\n<!--/kiro-tool-->\n',
         },
       ],
     },
-    user("current"),
+    user('current'),
   ]);
   assert(
     fp === historyFingerprintBeforeCurrentUser(withDisplayCard),
-    "display-only native tool cards are ignored",
+    'display-only native tool cards are ignored',
   );
 
   const withDisplayTextFrame = ctx([
-    user("first"),
+    user('first'),
     {
-      role: "assistant",
+      role: 'assistant',
       content: [
-        { type: "text", text: "answer" },
+        { type: 'text', text: 'answer' },
         // Legacy one-liner frame, as emitted by the removed mirror.
-        { type: "text", text: "🔧 read foo ✓\n" },
+        { type: 'text', text: '🔧 read foo ✓\n' },
       ],
     },
-    user("current"),
+    user('current'),
   ]);
   assert(
     fp === historyFingerprintBeforeCurrentUser(withDisplayTextFrame),
-    "display-only native tool text frames are ignored",
+    'display-only native tool text frames are ignored',
   );
 
   const argsOrderA = ctx([
-    user("q"),
+    user('q'),
     {
-      role: "assistant",
+      role: 'assistant',
       content: [
-        { type: "toolCall", id: "c1", name: "t", arguments: { a: 1, b: 2 } },
+        { type: 'toolCall', id: 'c1', name: 't', arguments: { a: 1, b: 2 } },
       ],
     },
-    user("c"),
+    user('c'),
   ]);
   const argsOrderB = ctx([
-    user("q"),
+    user('q'),
     {
-      role: "assistant",
+      role: 'assistant',
       content: [
-        { type: "toolCall", id: "c1", name: "t", arguments: { b: 2, a: 1 } },
+        { type: 'toolCall', id: 'c1', name: 't', arguments: { b: 2, a: 1 } },
       ],
     },
-    user("c"),
+    user('c'),
   ]);
   assert(
     historyFingerprintBeforeCurrentUser(argsOrderA) ===
       historyFingerprintBeforeCurrentUser(argsOrderB),
-    "tool-call argument key order does not change the fingerprint",
+    'tool-call argument key order does not change the fingerprint',
   );
 
   const assistant: AssistantMessage = {
-    role: "assistant",
-    content: [{ type: "text", text: "reply" }],
+    role: 'assistant',
+    content: [{ type: 'text', text: 'reply' }],
   } as any;
   const after = historyFingerprintAfterAssistantTurn(ctx(base), assistant);
   assert(
     after !== fp,
-    "the post-turn fingerprint differs from the pre-turn one",
+    'the post-turn fingerprint differs from the pre-turn one',
   );
   assert(
     after ===
       historyFingerprintBeforeCurrentUser(
-        ctx([...base, assistant, user("next")]),
+        ctx([...base, assistant, user('next')]),
       ),
     "the post-turn fingerprint matches the next turn's pre-turn fingerprint",
   );
 });
 
 // --- persisted session store ---
-test("the persisted session store", async () => {
-  const key = persistenceKeyForSession("pi-session-1", "/tmp/project");
-  assert(key.includes("/"), "the persistence key is namespaced by cwd hash");
+test('the persisted session store', async () => {
+  const key = persistenceKeyForSession('pi-session-1', '/tmp/project');
+  assert(key.includes('/'), 'the persistence key is namespaced by cwd hash');
   assert(
-    key !== persistenceKeyForSession("pi-session-1", "/tmp/other"),
-    "the same pi session in another cwd gets another key",
+    key !== persistenceKeyForSession('pi-session-1', '/tmp/other'),
+    'the same pi session in another cwd gets another key',
   );
   assert(
-    persistenceKeyForSession("a/b:c", "/tmp/project").endsWith("a_b_c"),
-    "unsafe id characters are sanitized",
+    persistenceKeyForSession('a/b:c', '/tmp/project').endsWith('a_b_c'),
+    'unsafe id characters are sanitized',
   );
 
   assert(
     loadPersistedKiroSession(key) === null,
-    "loading an unknown key yields null",
+    'loading an unknown key yields null',
   );
 
   savePersistedKiroSession(key, {
     version: 1,
-    kiroSessionId: "acp-42",
-    historyFingerprint: "fp-1",
-    modelId: "claude-opus-5",
+    kiroSessionId: 'acp-42',
+    historyFingerprint: 'fp-1',
+    modelId: 'claude-opus-5',
     createdAt: Date.now(),
     lastUsed: Date.now(),
   });
   const loaded = loadPersistedKiroSession(key);
-  assert(loaded?.kiroSessionId === "acp-42", "a saved session round-trips");
+  assert(loaded?.kiroSessionId === 'acp-42', 'a saved session round-trips');
   assert(
-    loaded?.historyFingerprint === "fp-1",
-    "the history fingerprint round-trips",
+    loaded?.historyFingerprint === 'fp-1',
+    'the history fingerprint round-trips',
   );
-  assert(loaded?.modelId === "claude-opus-5", "the model id round-trips");
+  assert(loaded?.modelId === 'claude-opus-5', 'the model id round-trips');
 
   savePersistedKiroSession(key, {
     version: 1,
-    kiroSessionId: "acp-stale",
-    historyFingerprint: "fp-1",
+    kiroSessionId: 'acp-stale',
+    historyFingerprint: 'fp-1',
     createdAt: 0,
     lastUsed: Date.now() - 25 * 60 * 60 * 1000,
   });
   assert(
     loadPersistedKiroSession(key) === null,
-    "sessions older than the TTL are ignored",
+    'sessions older than the TTL are ignored',
   );
 
   savePersistedKiroSession(key, {
     version: 2,
-    kiroSessionId: "acp-future",
-    historyFingerprint: "fp",
+    kiroSessionId: 'acp-future',
+    historyFingerprint: 'fp',
   } as any);
   assert(
     loadPersistedKiroSession(key) === null,
-    "unknown persistence versions are ignored",
+    'unknown persistence versions are ignored',
   );
 
   savePersistedKiroSession(key, {
     version: 1,
-    kiroSessionId: "acp-99",
-    historyFingerprint: "fp-2",
+    kiroSessionId: 'acp-99',
+    historyFingerprint: 'fp-2',
     createdAt: Date.now(),
     lastUsed: Date.now(),
   });
   assert(
-    loadPersistedKiroSession(key)?.kiroSessionId === "acp-99",
-    "saving overwrites the previous record",
+    loadPersistedKiroSession(key)?.kiroSessionId === 'acp-99',
+    'saving overwrites the previous record',
   );
   clearPersistedKiroSession(key);
-  assert(loadPersistedKiroSession(key) === null, "clearing removes the record");
+  assert(loadPersistedKiroSession(key) === null, 'clearing removes the record');
   clearPersistedKiroSession(key);
-  assert(true, "clearing a missing record is a no-op");
+  assert(true, 'clearing a missing record is a no-op');
 });
 
 afterAll(() => rmSync(dataHome, { recursive: true, force: true }));

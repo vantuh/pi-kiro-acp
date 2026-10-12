@@ -1,6 +1,6 @@
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
 
-export const KIRO_ACP_PROVIDER = "kiro-acp";
+export const KIRO_ACP_PROVIDER = 'kiro-acp';
 
 /** Kiro/ACP context-limit errors — avoid rate-limit / throttle phrases. */
 const KIRO_CONTEXT_OVERFLOW_PATTERN =
@@ -19,8 +19,8 @@ export function normalizeKiroContextOverflow(
   message: AssistantErrorMessage,
   ctx: ExtensionContext,
 ): { message: AssistantErrorMessage } | undefined {
-  if (message.role !== "assistant") return;
-  if (message.stopReason !== "error") return;
+  if (message.role !== 'assistant') return;
+  if (message.stopReason !== 'error') return;
   if (
     message.provider !== KIRO_ACP_PROVIDER &&
     ctx.model?.provider !== KIRO_ACP_PROVIDER
@@ -28,8 +28,8 @@ export function normalizeKiroContextOverflow(
     return;
   }
 
-  const errorMessage = message.errorMessage ?? "";
-  if (errorMessage.includes("context_length_exceeded")) return;
+  const errorMessage = message.errorMessage ?? '';
+  if (errorMessage.includes('context_length_exceeded')) return;
   if (RATE_LIMIT_PATTERN.test(errorMessage)) return;
   if (!KIRO_CONTEXT_OVERFLOW_PATTERN.test(errorMessage)) return;
 

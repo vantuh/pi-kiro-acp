@@ -1,11 +1,11 @@
-import type { Context, SimpleStreamOptions } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Context, SimpleStreamOptions } from '@earendil-works/pi-ai';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
-import { extractToolResults } from "./helpers.ts";
-import { log } from "./logging.ts";
-import { persistenceKeyForSession } from "./session-persistence.ts";
-import { AcpSession } from "./session.ts";
-import type { ToolResultInfo } from "./types.ts";
+import { extractToolResults } from './helpers.ts';
+import { log } from './logging.ts';
+import { persistenceKeyForSession } from './session-persistence.ts';
+import { AcpSession } from './session.ts';
+import type { ToolResultInfo } from './types.ts';
 
 export interface RoutedSession {
   session: AcpSession;
@@ -20,7 +20,7 @@ export interface RoutedSession {
    *   longer be answered into that MCP request, so it has to be handed back
    *   as a follow-up prompt instead.
    */
-  kind: "prompt" | "resumption" | "orphaned";
+  kind: 'prompt' | 'resumption' | 'orphaned';
 }
 
 export type KiroStreamOptions = SimpleStreamOptions & {
@@ -50,11 +50,11 @@ async function routeSession(
 ): Promise<RoutedSession> {
   const toolResults = extractToolResults(context);
   const sessionId =
-    typeof options?.sessionId === "string" && options.sessionId
+    typeof options?.sessionId === 'string' && options.sessionId
       ? options.sessionId
       : undefined;
   const requestedCwd = options?.cwd ?? process.cwd();
-  let kind: RoutedSession["kind"] = "prompt";
+  let kind: RoutedSession['kind'] = 'prompt';
 
   if (toolResults.length > 0) {
     const matches = [...sessions.values()]
@@ -66,7 +66,7 @@ async function routeSession(
       .sort((a, b) => b.matches - a.matches);
 
     if (matches[0]) {
-      log("route resumption", {
+      log('route resumption', {
         session: matches[0].session.id,
         matches: matches[0].matches,
         toolResults: toolResults.length,
@@ -74,7 +74,7 @@ async function routeSession(
       return {
         session: matches[0].session,
         toolResults,
-        kind: "resumption",
+        kind: 'resumption',
       };
     }
 
@@ -82,8 +82,8 @@ async function routeSession(
     // here: a brand-new Kiro session would redo the work the tool just did.
     // Reuse the live session that still remembers the conversation and let the
     // stream deliver the result as a follow-up prompt instead.
-    kind = "orphaned";
-    log("route: no resumption match found", {
+    kind = 'orphaned';
+    log('route: no resumption match found', {
       toolResults: toolResults.length,
       toolNames: toolResults.map((t) => t.toolName),
       pendingSessions: [...sessions.entries()].map(([k, s]) => ({
@@ -103,7 +103,7 @@ async function routeSession(
           sessionId,
           requestedCwd,
         );
-      log("route orphaned tool result to live session", {
+      log('route orphaned tool result to live session', {
         session: reusable.id,
         acpSessionId: reusable.acpSessionId,
         toolNames: toolResults.map((t) => t.toolName),
@@ -114,7 +114,7 @@ async function routeSession(
         kind,
       };
     }
-    log("route orphaned tool result: no live session to recover into", {
+    log('route orphaned tool result: no live session to recover into', {
       sessionId,
       cwd: requestedCwd,
     });
@@ -132,7 +132,7 @@ async function routeSession(
     }
     if (existing && !existing.busy) {
       existing.persistenceKey = persistenceKey;
-      log("route existing keyed session", {
+      log('route existing keyed session', {
         session: existing.id,
         key,
         cwd: requestedCwd,
@@ -150,7 +150,7 @@ async function routeSession(
     const actualKey = existing?.busy ? `${key}:parallel:${created.id}` : key;
     created.persistenceKey = actualKey === key ? persistenceKey : null;
     sessions.set(actualKey, created);
-    log("route new keyed session", {
+    log('route new keyed session', {
       session: created.id,
       key: actualKey,
       originalKey: key,
@@ -170,7 +170,7 @@ async function routeSession(
   );
   if (idleSameCwd) {
     idleSameCwd.persistenceKey = null;
-    log("route idle same-cwd session", {
+    log('route idle same-cwd session', {
       session: idleSameCwd.id,
       cwd: requestedCwd,
     });
@@ -184,7 +184,7 @@ async function routeSession(
   const created = new AcpSession(requestedCwd);
   created.persistenceKey = null;
   sessions.set(`anon:${created.id}`, created);
-  log("route new anon session", {
+  log('route new anon session', {
     session: created.id,
     cwd: requestedCwd,
     activeSessions: sessions.size,
@@ -211,7 +211,7 @@ function pruneIdleSessions(
   const now = Date.now();
   for (const [key, session] of sessions) {
     if (!session.busy && now - session.lastUsedAt > maxIdleMs) {
-      log("pruning idle session", {
+      log('pruning idle session', {
         session: session.id,
         idleMs: now - session.lastUsedAt,
         key,

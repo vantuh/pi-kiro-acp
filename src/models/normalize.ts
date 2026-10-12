@@ -3,7 +3,7 @@ import {
   KIRO_MODELS,
   KIRO_THINKING_LEVEL_MAP,
   type KiroModelConfig,
-} from "./fallback.ts";
+} from './fallback.ts';
 
 type AvailableKiroModel = {
   modelId?: string;
@@ -17,9 +17,9 @@ export function normalizeDiscoveredModel(
   model: AvailableKiroModel,
 ): KiroModelConfig | null {
   const id =
-    typeof model.modelId === "string"
+    typeof model.modelId === 'string'
       ? model.modelId
-      : typeof model.id === "string"
+      : typeof model.id === 'string'
         ? model.id
         : undefined;
   if (!id) return null;
@@ -34,7 +34,7 @@ export function normalizeDiscoveredModel(
     name: formatModelName(model.name || id),
     reasoning: true,
     thinkingLevelMap: KIRO_THINKING_LEVEL_MAP,
-    input: supportsImages(id) ? (["text", "image"] as any) : (["text"] as any),
+    input: supportsImages(id) ? (['text', 'image'] as any) : (['text'] as any),
     cost: ZERO_COST,
     contextWindow: inferContextWindow(id),
     maxTokens: inferMaxTokens(id),
@@ -53,26 +53,26 @@ export function dedupeModels(models: KiroModelConfig[]): KiroModelConfig[] {
 }
 
 function formatModelName(name: string): string {
-  const displayName = name === "auto" ? "Auto" : name;
+  const displayName = name === 'auto' ? 'Auto' : name;
   return /\(Kiro\)$/i.test(displayName) ? displayName : `${displayName} (Kiro)`;
 }
 
 function supportsImages(id: string): boolean {
-  return id === "auto" || id.startsWith("claude-");
+  return id === 'auto' || id.startsWith('claude-');
 }
 
 function inferContextWindow(id: string): number {
-  if (id === "auto") return 1000000;
+  if (id === 'auto') return 1000000;
   if (/^claude-(opus|sonnet)-4\.[6-9]/.test(id)) return 1000000;
-  if (id.startsWith("deepseek-")) return 164000;
-  if (id.startsWith("minimax-")) return 196000;
-  if (id.startsWith("qwen")) return 256000;
+  if (id.startsWith('deepseek-')) return 164000;
+  if (id.startsWith('minimax-')) return 196000;
+  if (id.startsWith('qwen')) return 256000;
   return 200000;
 }
 
 function inferMaxTokens(id: string): number {
-  if (id === "auto") return 32000;
-  if (id.startsWith("claude-opus-")) return 32000;
-  if (id.startsWith("claude-sonnet-")) return 16384;
+  if (id === 'auto') return 32000;
+  if (id.startsWith('claude-opus-')) return 32000;
+  if (id.startsWith('claude-sonnet-')) return 16384;
   return 8192;
 }

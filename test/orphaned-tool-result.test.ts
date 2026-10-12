@@ -5,22 +5,22 @@
 // spawning a fresh Kiro session that replayed only the user's question.
 // Run: npm test -- test/orphaned-tool-result.test.ts
 
-import { afterAll, test } from "vitest";
-import type { Context } from "@earendil-works/pi-ai";
+import type { Context } from '@earendil-works/pi-ai';
+import { afterAll, test } from 'vitest';
 
-import { SessionManager } from "../src/session-manager.ts";
-import { AcpSession } from "../src/session.ts";
-import { assert, fakeSession, tick } from "./support.ts";
+import { SessionManager } from '../src/session-manager.ts';
+import { AcpSession } from '../src/session.ts';
+import { assert, fakeSession, tick } from './support.ts';
 
 const sessionManager = new SessionManager();
 
-const CWD = "/tmp/kiro-acp-orphan";
+const CWD = '/tmp/kiro-acp-orphan';
 const opts = (sessionId: string) => ({ sessionId, cwd: CWD }) as any;
 
 const askedContext = (): Context =>
   ({
-    messages: [{ role: "user", content: "compare A and B" }],
-    systemPrompt: "",
+    messages: [{ role: 'user', content: 'compare A and B' }],
+    systemPrompt: '',
     tools: [],
   }) as any;
 
@@ -28,22 +28,22 @@ const askedContext = (): Context =>
 const toolResultContext = (): Context =>
   ({
     messages: [
-      { role: "user", content: "compare A and B" },
+      { role: 'user', content: 'compare A and B' },
       {
-        role: "assistant",
+        role: 'assistant',
         content: [
-          { type: "toolCall", id: "c1", name: "probe_tool", arguments: {} },
+          { type: 'toolCall', id: 'c1', name: 'probe_tool', arguments: {} },
         ],
       },
       {
-        role: "toolResult",
-        toolCallId: "c1",
-        toolName: "probe_tool",
+        role: 'toolResult',
+        toolCallId: 'c1',
+        toolName: 'probe_tool',
         isError: false,
-        content: [{ type: "text", text: "the report" }],
+        content: [{ type: 'text', text: 'the report' }],
       },
     ],
-    systemPrompt: "",
+    systemPrompt: '',
     tools: [],
   }) as any;
 
@@ -53,38 +53,38 @@ function markLive(session: AcpSession, acpSessionId: string): void {
   session.acpSessionId = acpSessionId;
 }
 
-test("recovery when Kiro abandons its own pi_host tools/call", async () => {
+test('recovery when Kiro abandons its own pi_host tools/call', async () => {
   // --- an orphaned tool result reuses the live session instead of forking ---
   {
-    const first = await sessionManager.routeSession(askedContext(), opts("S1"));
-    markLive(first.session, "acp-1");
-    assert(first.kind === "prompt", "a plain turn is not flagged as orphaned");
+    const first = await sessionManager.routeSession(askedContext(), opts('S1'));
+    markLive(first.session, 'acp-1');
+    assert(first.kind === 'prompt', 'a plain turn is not flagged as orphaned');
 
     // Kiro dropped its tools/call, so nothing is pending when the result lands.
     assert(
       first.session.pendingToolCalls.size === 0,
-      "no pending bridge call remains after the drop",
+      'no pending bridge call remains after the drop',
     );
 
     const recovered = await sessionManager.routeSession(
       toolResultContext(),
-      opts("S1"),
+      opts('S1'),
     );
     assert(
       recovered.session === first.session,
-      "the orphaned result is routed back to the live session",
+      'the orphaned result is routed back to the live session',
     );
     assert(
-      recovered.kind !== "resumption",
-      "there is no MCP request left to resume",
+      recovered.kind !== 'resumption',
+      'there is no MCP request left to resume',
     );
     assert(
-      recovered.kind === "orphaned",
-      "the orphaned result is flagged for recovery",
+      recovered.kind === 'orphaned',
+      'the orphaned result is flagged for recovery',
     );
     assert(
       recovered.toolResults.length === 1,
-      "the tool result is carried through",
+      'the tool result is carried through',
     );
     await sessionManager.stopAllSessions();
   }
@@ -93,12 +93,12 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
   {
     const routed = await sessionManager.routeSession(
       askedContext(),
-      opts("S2"),
+      opts('S2'),
     );
-    markLive(routed.session, "acp-2");
-    routed.session.pendingToolCalls.set("c1", {
-      callId: "c1",
-      toolName: "probe_tool",
+    markLive(routed.session, 'acp-2');
+    routed.session.pendingToolCalls.set('c1', {
+      callId: 'c1',
+      toolName: 'probe_tool',
       args: {},
       receivedAt: Date.now(),
       resolve: () => {},
@@ -106,19 +106,19 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
 
     const resumed = await sessionManager.routeSession(
       toolResultContext(),
-      opts("S2"),
+      opts('S2'),
     );
     assert(
       resumed.session === routed.session,
-      "resumption stays on the same session",
+      'resumption stays on the same session',
     );
     assert(
-      resumed.kind === "resumption",
-      "a matching pending call resumes normally",
+      resumed.kind === 'resumption',
+      'a matching pending call resumes normally',
     );
     assert(
-      resumed.kind !== "orphaned",
-      "resumption is not treated as orphaned",
+      resumed.kind !== 'orphaned',
+      'resumption is not treated as orphaned',
     );
     await sessionManager.stopAllSessions();
   }
@@ -127,16 +127,16 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
   {
     const routed = await sessionManager.routeSession(
       toolResultContext(),
-      opts("S3"),
+      opts('S3'),
     );
-    assert(routed.kind !== "resumption", "a cold start cannot resume");
+    assert(routed.kind !== 'resumption', 'a cold start cannot resume');
     assert(
-      routed.kind === "orphaned",
-      "a cold start with tool results is flagged as orphaned",
+      routed.kind === 'orphaned',
+      'a cold start with tool results is flagged as orphaned',
     );
     assert(
       routed.session.acpSessionId === null,
-      "the cold session has no ACP conversation yet",
+      'the cold session has no ACP conversation yet',
     );
     await sessionManager.stopAllSessions();
   }
@@ -162,76 +162,76 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
     const bridgeCall = (args: Record<string, unknown>) => {
       const abort = new AbortController();
       const result = (session as any).handleBridgeToolCall({
-        kiroName: "probe_tool",
-        piName: "probe_tool",
+        kiroName: 'probe_tool',
+        piName: 'probe_tool',
         arguments: args,
         signal: abort.signal,
       }) as Promise<{ content: { text?: string }[]; isError?: boolean }>;
       return { abort, result };
     };
 
-    const first = bridgeCall({ agent: "reviewer", task: "compare" });
-    assert(dispatched.length === 1, "the first call is dispatched to pi");
-    assert(session.pendingToolCalls.size === 1, "the first call is pending");
+    const first = bridgeCall({ agent: 'reviewer', task: 'compare' });
+    assert(dispatched.length === 1, 'the first call is dispatched to pi');
+    assert(session.pendingToolCalls.size === 1, 'the first call is pending');
     first.abort.abort();
     const aborted = await first.result;
-    assert(aborted.isError === true, "the abandoned call resolves as an error");
+    assert(aborted.isError === true, 'the abandoned call resolves as an error');
     assert(
       session.pendingToolCalls.size === 0,
-      "the abandoned call stops being pending",
+      'the abandoned call stops being pending',
     );
 
     // Same call, arguments written in a different order.
-    const retry = bridgeCall({ task: "compare", agent: "reviewer" });
+    const retry = bridgeCall({ task: 'compare', agent: 'reviewer' });
     const retryResult = await retry.result;
     assert(
       dispatched.length === 1,
-      "the retry is not dispatched to pi a second time",
+      'the retry is not dispatched to pi a second time',
     );
-    assert(retryResult.isError === true, "the retry is answered as an error");
+    assert(retryResult.isError === true, 'the retry is answered as an error');
     assert(
-      (retryResult.content[0]?.text ?? "").includes("already running"),
-      "the retry is told the call is already running",
+      (retryResult.content[0]?.text ?? '').includes('already running'),
+      'the retry is told the call is already running',
     );
     assert(
-      (retryResult.content[0]?.text ?? "").includes("end your turn"),
-      "the retry is told to stop instead of finding another way",
+      (retryResult.content[0]?.text ?? '').includes('end your turn'),
+      'the retry is told to stop instead of finding another way',
     );
 
-    const different = bridgeCall({ agent: "reviewer", task: "something else" });
+    const different = bridgeCall({ agent: 'reviewer', task: 'something else' });
     assert(
       dispatched.length === 2,
-      "a genuinely different call is still dispatched",
+      'a genuinely different call is still dispatched',
     );
     different.abort.abort();
     await different.result;
 
     session.clearAbandonedToolCalls([
       {
-        toolCallId: "x",
-        toolName: "probe_tool",
-        text: "done",
+        toolCallId: 'x',
+        toolName: 'probe_tool',
+        text: 'done',
         isError: false,
       },
     ]);
-    const afterRecovery = bridgeCall({ agent: "reviewer", task: "compare" });
+    const afterRecovery = bridgeCall({ agent: 'reviewer', task: 'compare' });
     assert(
       dispatched.length === 3,
-      "after recovery the same call may run again",
+      'after recovery the same call may run again',
     );
     afterRecovery.abort.abort();
     await afterRecovery.result;
 
     // A stopped session must not keep suppressing calls.
     session.started = false;
-    const onDeadSession = bridgeCall({ agent: "reviewer", task: "dead" });
+    const onDeadSession = bridgeCall({ agent: 'reviewer', task: 'dead' });
     onDeadSession.abort.abort();
     await onDeadSession.result;
     session.started = true;
-    const afterRestart = bridgeCall({ agent: "reviewer", task: "dead" });
+    const afterRestart = bridgeCall({ agent: 'reviewer', task: 'dead' });
     assert(
       dispatched.length === 5,
-      "a call aborted while stopped leaves no dedup record",
+      'a call aborted while stopped leaves no dedup record',
     );
     afterRestart.abort.abort();
     await afterRestart.result;
@@ -241,30 +241,30 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
   {
     const { session, written } = fakeSession({
       cwd: CWD,
-      acpSessionId: "acp-4",
-      currentModelId: "m1",
+      acpSessionId: 'acp-4',
+      currentModelId: 'm1',
     });
 
-    await session.startPrompt("m1", "", "hi");
+    await session.startPrompt('m1', '', 'hi');
     const frame = JSON.parse(written[0]);
-    assert(session.busy === true, "a session with an in-flight prompt is busy");
+    assert(session.busy === true, 'a session with an in-flight prompt is busy');
 
     // Kiro finishes its turn while pi is still executing the tool it asked for.
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: frame.id,
-        result: { stopReason: "end_turn" },
+        result: { stopReason: 'end_turn' },
       }),
     );
     await tick();
     assert(
       session.activePromptDone === null,
-      "a settled prompt is no longer recorded as active",
+      'a settled prompt is no longer recorded as active',
     );
     assert(
       session.busy === false,
-      "the session becomes reusable instead of busy forever",
+      'the session becomes reusable instead of busy forever',
     );
   }
 
@@ -272,27 +272,27 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
   {
     const { session, written } = fakeSession({
       cwd: CWD,
-      acpSessionId: "acp-5",
-      currentModelId: "m1",
+      acpSessionId: 'acp-5',
+      currentModelId: 'm1',
     });
 
-    await session.startPrompt("m1", "", "first");
+    await session.startPrompt('m1', '', 'first');
     const firstFrame = JSON.parse(written[0]);
     void session.activePromptDone?.catch(() => {});
-    await session.startPrompt("m1", "", "second");
+    await session.startPrompt('m1', '', 'second');
     const secondPrompt = session.activePromptDone;
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: firstFrame.id,
-        result: { stopReason: "end_turn" },
+        result: { stopReason: 'end_turn' },
       }),
     );
     await tick();
     assert(
       session.activePromptDone === secondPrompt,
-      "an older prompt settling leaves the newer one in place",
+      'an older prompt settling leaves the newer one in place',
     );
   }
 
@@ -303,57 +303,57 @@ test("recovery when Kiro abandons its own pi_host tools/call", async () => {
   {
     const { session, written } = fakeSession({
       cwd: CWD,
-      acpSessionId: "acp-6",
-      currentModelId: "m1",
+      acpSessionId: 'acp-6',
+      currentModelId: 'm1',
       started: true,
     });
 
-    await session.startPrompt("m1", "", "original question");
+    await session.startPrompt('m1', '', 'original question');
     const firstFrame = JSON.parse(written[0]);
-    assert(session.busy === true, "the original prompt is still in flight");
+    assert(session.busy === true, 'the original prompt is still in flight');
 
     const followUp = session.cancelAndStartFollowUp(
-      "m1",
-      "",
-      "<dropped_tool_result>the report</dropped_tool_result>",
+      'm1',
+      '',
+      '<dropped_tool_result>the report</dropped_tool_result>',
       [],
       200,
       undefined,
-      "orphaned tool result",
+      'orphaned tool result',
     );
     await tick();
     assert(
       session.busy === true,
-      "the session stays busy while the old prompt is cancelled",
+      'the session stays busy while the old prompt is cancelled',
     );
     const methods = written.map((line) => JSON.parse(line).method);
     assert(
-      methods.includes("session/cancel"),
-      "an in-flight prompt is cancelled before recovery",
+      methods.includes('session/cancel'),
+      'an in-flight prompt is cancelled before recovery',
     );
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: firstFrame.id,
-        result: { stopReason: "cancelled" },
+        result: { stopReason: 'cancelled' },
       }),
     );
     await followUp;
 
     const frames = written.map((line) => JSON.parse(line));
-    const prompts = frames.filter((frame) => frame.method === "session/prompt");
+    const prompts = frames.filter((frame) => frame.method === 'session/prompt');
     assert(
       prompts.length === 2,
-      "recovery sends a new prompt after cancel, not on top of it",
+      'recovery sends a new prompt after cancel, not on top of it',
     );
     assert(
-      String(prompts[1].params.prompt[0].text).includes("dropped_tool_result"),
-      "the follow-up prompt carries the dropped tool result",
+      String(prompts[1].params.prompt[0].text).includes('dropped_tool_result'),
+      'the follow-up prompt carries the dropped tool result',
     );
     assert(
       session.busy === true,
-      "the recovery prompt is now the in-flight one",
+      'the recovery prompt is now the in-flight one',
     );
   }
 });

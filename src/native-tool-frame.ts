@@ -10,7 +10,7 @@
  * markers before content reaches the model or persistence.
  */
 
-export const KIRO_TOOL_FRAME_PREFIX = "<!--kiro-tool-->";
+export const KIRO_TOOL_FRAME_PREFIX = '<!--kiro-tool-->';
 
 function nativeToolFrameRegex(): RegExp {
   return /^<!--kiro-tool-->\r?\n([\s\S]*?)\r?\n<!--\/kiro-tool-->[ \t]*\r?$/gm;
@@ -19,8 +19,8 @@ function nativeToolFrameRegex(): RegExp {
 /** Remove display-only native tool cards before messages reach the model. */
 export function stripNativeToolFrames(text: string): string {
   return text
-    .replace(nativeToolFrameRegex(), "")
-    .replace(/\n{3,}/g, "\n\n")
+    .replace(nativeToolFrameRegex(), '')
+    .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
@@ -42,8 +42,8 @@ export function stripAssistantContentFrames(content: unknown): {
   const next: unknown[] = [];
   for (const block of content as any[]) {
     if (
-      block?.type !== "text" ||
-      typeof block.text !== "string" ||
+      block?.type !== 'text' ||
+      typeof block.text !== 'string' ||
       (!block.text.includes(KIRO_TOOL_FRAME_PREFIX) &&
         !TEXT_FRAME_REGEX.test(block.text))
     ) {

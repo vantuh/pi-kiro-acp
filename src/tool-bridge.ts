@@ -1,12 +1,13 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes } from 'node:crypto';
 import {
   createServer,
   type IncomingMessage,
   type ServerResponse,
-} from "node:http";
-import type { ForwardedTool, ForwardedToolCatalog } from "./tool-catalog.ts";
+} from 'node:http';
 
-const MCP_PROTOCOL_VERSION = "2025-06-18";
+import type { ForwardedTool, ForwardedToolCatalog } from './tool-catalog.ts';
+
+const MCP_PROTOCOL_VERSION = '2025-06-18';
 const MAX_BODY_BYTES = 64 * 1024;
 /** How often a still-running tool call gets a keepalive on the SSE response. */
 const DEFAULT_KEEPALIVE_MS = 20_000;
@@ -77,7 +78,7 @@ function jsonRpcResult(
   id: JsonRpcId,
   result: unknown,
 ): Record<string, unknown> {
-  return { jsonrpc: "2.0", id, result };
+  return { jsonrpc: '2.0', id, result };
 }
 
 function jsonRpcError(
@@ -85,7 +86,7 @@ function jsonRpcError(
   code: number,
   message: string,
 ): Record<string, unknown> {
-  return { jsonrpc: "2.0", id: id ?? null, error: { code, message } };
+  return { jsonrpc: '2.0', id: id ?? null, error: { code, message } };
 }
 
 function sendJson(
@@ -101,7 +102,7 @@ function sendJson(
     return;
   }
   const payload = JSON.stringify(body);
-  res.writeHead(status, { "content-type": "application/json", ...headers });
+  res.writeHead(status, { 'content-type': 'application/json', ...headers });
   res.end(payload);
 }
 
@@ -109,12 +110,12 @@ async function readBody(
   req: IncomingMessage,
   maxBytes: number,
 ): Promise<string> {
-  let body = "";
+  let body = '';
   for await (const chunk of req) {
     body +=
-      typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
-    if (Buffer.byteLength(body, "utf8") > maxBytes)
-      throw new Error("request body too large");
+      typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8');
+    if (Buffer.byteLength(body, 'utf8') > maxBytes)
+      throw new Error('request body too large');
   }
   return body;
 }
@@ -122,20 +123,20 @@ async function readBody(
 function isJsonRpcId(value: unknown): value is JsonRpcId {
   return (
     value === null ||
-    typeof value === "string" ||
-    (typeof value === "number" && Number.isInteger(value))
+    typeof value === 'string' ||
+    (typeof value === 'number' && Number.isInteger(value))
   );
 }
 
 function textResult(text: string, isError = false): ToolBridgeResult {
   return {
-    content: [{ type: "text", text }],
+    content: [{ type: 'text', text }],
     ...(isError ? { isError: true } : {}),
   };
 }
 
 function resolveCatalog(source: ToolBridgeCatalog): ForwardedToolCatalog {
-  return typeof source === "function" ? source() : source;
+  return typeof source === 'function' ? source() : source;
 }
 
 function validOrigin(
@@ -149,12 +150,12 @@ function validOrigin(
 
 function validAccept(header: string | undefined): boolean {
   if (!header) return true;
-  return header.split(",").some((part) => {
-    const mediaType = part.split(";", 1)[0]?.trim().toLowerCase();
+  return header.split(',').some((part) => {
+    const mediaType = part.split(';', 1)[0]?.trim().toLowerCase();
     return (
-      mediaType === "application/json" ||
-      mediaType === "text/event-stream" ||
-      mediaType === "*/*"
+      mediaType === 'application/json' ||
+      mediaType === 'text/event-stream' ||
+      mediaType === '*/*'
     );
   });
 }
@@ -163,17 +164,17 @@ function validAccept(header: string | undefined): boolean {
 function acceptsEventStream(header: string | undefined): boolean {
   if (!header) return false;
   return header
-    .split(",")
+    .split(',')
     .some(
       (part) =>
-        part.split(";", 1)[0]?.trim().toLowerCase() === "text/event-stream",
+        part.split(';', 1)[0]?.trim().toLowerCase() === 'text/event-stream',
     );
 }
 
 function progressTokenOf(params: unknown): string | number | undefined {
   const token = (params as { _meta?: { progressToken?: unknown } } | undefined)
     ?._meta?.progressToken;
-  return typeof token === "string" || typeof token === "number"
+  return typeof token === 'string' || typeof token === 'number'
     ? token
     : undefined;
 }
@@ -181,9 +182,9 @@ function progressTokenOf(params: unknown): string | number | undefined {
 /** Open an SSE response and stream JSON-RPC messages over it. */
 function openEventStream(res: ServerResponse): (message: unknown) => void {
   res.writeHead(200, {
-    "content-type": "text/event-stream",
-    "cache-control": "no-cache, no-transform",
-    connection: "keep-alive",
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache, no-transform',
+    connection: 'keep-alive',
   });
   res.flushHeaders?.();
   return (message: unknown) => {
@@ -196,7 +197,7 @@ function openEventStream(res: ServerResponse): (message: unknown) => void {
 export async function startToolBridge(
   options: ToolBridgeOptions,
 ): Promise<ToolBridge> {
-  const token = randomBytes(32).toString("hex");
+  const token = randomBytes(32).toString('hex');
   const allowedOrigins = new Set(options.allowedOrigins ?? []);
   const maxBodyBytes = options.maxBodyBytes ?? MAX_BODY_BYTES;
   const keepaliveMs = options.keepaliveMs ?? DEFAULT_KEEPALIVE_MS;
@@ -204,9 +205,9 @@ export async function startToolBridge(
   let closed = false;
 
   const server = createServer(async (req, res) => {
-    const pathname = new URL(req.url || "/", "http://127.0.0.1").pathname;
-    if (pathname !== "/mcp") {
-      sendJson(res, 404, jsonRpcError(null, -32601, "Not found"));
+    const pathname = new URL(req.url || '/', 'http://127.0.0.1').pathname;
+    if (pathname !== '/mcp') {
+      sendJson(res, 404, jsonRpcError(null, -32601, 'Not found'));
       return;
     }
 
@@ -215,30 +216,30 @@ export async function startToolBridge(
       sendJson(
         res,
         401,
-        { error: "Unauthorized" },
-        { "www-authenticate": "Bearer" },
+        { error: 'Unauthorized' },
+        { 'www-authenticate': 'Bearer' },
       );
       return;
     }
     if (!validOrigin(req.headers.origin, allowedOrigins)) {
-      sendJson(res, 403, { error: "Origin not allowed" });
+      sendJson(res, 403, { error: 'Origin not allowed' });
       return;
     }
     if (!validAccept(req.headers.accept)) {
       sendJson(res, 406, {
-        error: "Accept must include application/json or text/event-stream",
+        error: 'Accept must include application/json or text/event-stream',
       });
       return;
     }
 
-    if (req.method === "DELETE") {
+    if (req.method === 'DELETE') {
       sendJson(res, 202);
       void closeBridge();
       return;
     }
-    if (req.method !== "POST") {
-      sendJson(res, 405, jsonRpcError(null, -32601, "Method not allowed"), {
-        allow: "POST, DELETE",
+    if (req.method !== 'POST') {
+      sendJson(res, 405, jsonRpcError(null, -32601, 'Method not allowed'), {
+        allow: 'POST, DELETE',
       });
       return;
     }
@@ -247,45 +248,45 @@ export async function startToolBridge(
     try {
       const body = await readBody(req, maxBodyBytes);
       const parsed = JSON.parse(body) as unknown;
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-        throw new Error("invalid request");
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))
+        throw new Error('invalid request');
       message = parsed as JsonRpcMessage;
     } catch (error) {
       const tooLarge =
-        error instanceof Error && error.message === "request body too large";
+        error instanceof Error && error.message === 'request body too large';
       sendJson(
         res,
         tooLarge ? 413 : 400,
         jsonRpcError(
           null,
           tooLarge ? -32600 : -32700,
-          tooLarge ? "Request body too large" : "Invalid JSON",
+          tooLarge ? 'Request body too large' : 'Invalid JSON',
         ),
       );
       return;
     }
 
     const id = isJsonRpcId(message.id) ? message.id : undefined;
-    if (message.jsonrpc !== "2.0" || typeof message.method !== "string") {
-      sendJson(res, 400, jsonRpcError(id, -32600, "Invalid JSON-RPC request"));
+    if (message.jsonrpc !== '2.0' || typeof message.method !== 'string') {
+      sendJson(res, 400, jsonRpcError(id, -32600, 'Invalid JSON-RPC request'));
       return;
     }
-    if (message.method === "notifications/initialized") {
+    if (message.method === 'notifications/initialized') {
       sendJson(res, 202);
       return;
     }
     if (id === undefined) {
-      sendJson(res, 400, jsonRpcError(null, -32600, "Request id is required"));
+      sendJson(res, 400, jsonRpcError(null, -32600, 'Request id is required'));
       return;
     }
 
     switch (message.method) {
-      case "initialize": {
+      case 'initialize': {
         const requested = (
           message.params as { protocolVersion?: unknown } | undefined
         )?.protocolVersion;
         const protocolVersion =
-          requested === MCP_PROTOCOL_VERSION || requested === "2024-11-05"
+          requested === MCP_PROTOCOL_VERSION || requested === '2024-11-05'
             ? requested
             : MCP_PROTOCOL_VERSION;
         sendJson(
@@ -294,12 +295,12 @@ export async function startToolBridge(
           jsonRpcResult(id, {
             protocolVersion,
             capabilities: { tools: {} },
-            serverInfo: { name: "pi_host", version: "1.0.0" },
+            serverInfo: { name: 'pi_host', version: '1.0.0' },
           }),
         );
         return;
       }
-      case "tools/list": {
+      case 'tools/list': {
         const catalog = resolveCatalog(options.catalog);
         const tools = catalog.tools.map((tool: ForwardedTool) => ({
           name: tool.kiroName,
@@ -309,32 +310,32 @@ export async function startToolBridge(
         sendJson(res, 200, jsonRpcResult(id, { tools }));
         return;
       }
-      case "prompts/list":
+      case 'prompts/list':
         sendJson(res, 200, jsonRpcResult(id, { prompts: [] }));
         return;
-      case "resources/list":
+      case 'resources/list':
         sendJson(res, 200, jsonRpcResult(id, { resources: [] }));
         return;
-      case "tools/call": {
+      case 'tools/call': {
         const params = message.params as
           | { name?: unknown; arguments?: unknown }
           | undefined;
-        if (typeof params?.name !== "string") {
-          sendJson(res, 200, jsonRpcError(id, -32602, "Tool name is required"));
+        if (typeof params?.name !== 'string') {
+          sendJson(res, 200, jsonRpcError(id, -32602, 'Tool name is required'));
           return;
         }
         const catalog = resolveCatalog(options.catalog);
         const piName = catalog.piNameByKiroName.get(params.name);
         if (!piName) {
-          sendJson(res, 200, jsonRpcError(id, -32602, "Unknown tool"));
+          sendJson(res, 200, jsonRpcError(id, -32602, 'Unknown tool'));
           return;
         }
         const args = params.arguments === undefined ? {} : params.arguments;
-        if (!args || typeof args !== "object" || Array.isArray(args)) {
+        if (!args || typeof args !== 'object' || Array.isArray(args)) {
           sendJson(
             res,
             200,
-            jsonRpcError(id, -32602, "Tool arguments must be an object"),
+            jsonRpcError(id, -32602, 'Tool arguments must be an object'),
           );
           return;
         }
@@ -346,7 +347,7 @@ export async function startToolBridge(
         const streaming = acceptsEventStream(req.headers.accept);
         const progressToken = progressTokenOf(message.params);
         const startedAt = Date.now();
-        options.onDebug?.("bridge tools/call accepted", {
+        options.onDebug?.('bridge tools/call accepted', {
           tool: params.name,
           accept: req.headers.accept,
           streaming,
@@ -373,8 +374,8 @@ export async function startToolBridge(
             res.write(`: keepalive ${Date.now() - startedAt}ms\n\n`);
             if (progressToken !== undefined) {
               sendEvent({
-                jsonrpc: "2.0",
-                method: "notifications/progress",
+                jsonrpc: '2.0',
+                method: 'notifications/progress',
                 params: {
                   progressToken,
                   progress: ++progress,
@@ -403,12 +404,12 @@ export async function startToolBridge(
         pending.set(res, { abort, stopKeepalive });
         // If the client disconnects mid-call, abort pi's execution. The response
         // socket is destroyed either way, so nothing is written back to the client.
-        res.once("close", () => {
+        res.once('close', () => {
           const held = pending.get(res);
           if (res.writableEnded || !held) return;
           stopKeepalive();
           abort.abort();
-          options.onDebug?.("bridge tools/call disconnected by client", {
+          options.onDebug?.('bridge tools/call disconnected by client', {
             tool: params.name,
             streaming,
             waitedMs: Date.now() - startedAt,
@@ -435,7 +436,7 @@ export async function startToolBridge(
         return;
       }
       default:
-        sendJson(res, 200, jsonRpcError(id, -32601, "Method not found"));
+        sendJson(res, 200, jsonRpcError(id, -32601, 'Method not found'));
     }
   });
 
@@ -453,16 +454,16 @@ export async function startToolBridge(
   };
 
   await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.removeListener('error', reject);
       resolve();
     });
   });
   const address = server.address();
-  if (!address || typeof address === "string") {
+  if (!address || typeof address === 'string') {
     await closeBridge();
-    throw new Error("MCP adapter did not bind to a TCP port");
+    throw new Error('MCP adapter did not bind to a TCP port');
   }
   return {
     token,

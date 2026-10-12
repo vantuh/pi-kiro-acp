@@ -7,9 +7,10 @@
 // finished turn — the orchestrator stopped right after its subagent returned.
 // Run: npm test -- test/stranded-tool-call.test.ts
 
-import { test } from "vitest";
-import { AcpSession } from "../src/session.ts";
-import { assert, fakeSession, tick } from "./support.ts";
+import { test } from 'vitest';
+
+import { AcpSession } from '../src/session.ts';
+import { assert, fakeSession, tick } from './support.ts';
 
 /** Long enough to cover the handoff's tool-result drain (default 150ms). */
 const DRAIN_WAIT_MS = (Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150) + 50;
@@ -19,9 +20,9 @@ const DRAIN_WAIT_MS = (Number(process.env.PI_KIRO_ACP_DRAIN_MS) || 150) + 50;
  * as parsed frames. */
 const fakeFrameSession = () =>
   fakeSession({
-    cwd: "/tmp/kiro-acp-stranded",
-    acpSessionId: "acp-1",
-    currentModelId: "m1",
+    cwd: '/tmp/kiro-acp-stranded',
+    acpSessionId: 'acp-1',
+    currentModelId: 'm1',
     started: true,
     parseJson: true,
   });
@@ -29,7 +30,7 @@ const fakeFrameSession = () =>
 function bridgeCall(
   session: AcpSession,
   args: Record<string, unknown>,
-  tool = "probe_tool",
+  tool = 'probe_tool',
 ) {
   const abort = new AbortController();
   const result = (session as any).handleBridgeToolCall({
@@ -41,40 +42,40 @@ function bridgeCall(
   return { abort, result };
 }
 
-test("stranded tool calls and the cancel handoff", async () => {
+test('stranded tool calls and the cancel handoff', async () => {
   // --- a call arriving after the turn closed is answered, and the dead turn ends ---
   {
     const { session, written } = fakeFrameSession();
-    await session.startPrompt("m1", "", "original question");
+    await session.startPrompt('m1', '', 'original question');
     assert(
       session.toolIntakeClosed === false,
-      "a fresh prompt accepts tool calls",
+      'a fresh prompt accepts tool calls',
     );
     void session.activePromptDone?.catch(() => {});
 
     // The stream flushed its batch and closed; Kiro keeps running its prompt.
     session.toolIntakeClosed = true;
 
-    const stranded = bridgeCall(session, { tabLabel: "Scout" });
+    const stranded = bridgeCall(session, { tabLabel: 'Scout' });
     const answer = await stranded.result;
     assert(
       answer.isError === true,
-      "the stranded call is answered instead of hanging",
+      'the stranded call is answered instead of hanging',
     );
     assert(
-      (answer.content[0]?.text ?? "").includes("not executed"),
-      "the answer says the call did not run",
+      (answer.content[0]?.text ?? '').includes('not executed'),
+      'the answer says the call did not run',
     );
     assert(
-      (answer.content[0]?.text ?? "").includes("end your turn"),
-      "the answer tells Kiro to stop rather than improvise",
+      (answer.content[0]?.text ?? '').includes('end your turn'),
+      'the answer tells Kiro to stop rather than improvise',
     );
     assert(
       session.pendingToolCalls.size === 0,
-      "the stranded call is not left pending",
+      'the stranded call is not left pending',
     );
     assert(
-      written.some((frame) => frame.method === "session/cancel"),
+      written.some((frame) => frame.method === 'session/cancel'),
       "Kiro's turn is cancelled once it can no longer reach pi",
     );
   }
@@ -82,7 +83,7 @@ test("stranded tool calls and the cancel handoff", async () => {
   // --- a still-live sibling call keeps the turn alive ---
   {
     const { session, written } = fakeFrameSession();
-    await session.startPrompt("m1", "", "original question");
+    await session.startPrompt('m1', '', 'original question');
     void session.activePromptDone?.catch(() => {});
 
     // One call was flushed into pi and is still running: it can beat Kiro's
@@ -90,20 +91,20 @@ test("stranded tool calls and the cancel handoff", async () => {
     session.onToolCallFromBridge = (call) => {
       call.emitted = true;
     };
-    const live = bridgeCall(session, { agent: "scout", task: "explore" });
+    const live = bridgeCall(session, { agent: 'scout', task: 'explore' });
     session.onToolCallFromBridge = null;
     session.toolIntakeClosed = true;
 
-    const stranded = bridgeCall(session, { tabLabel: "Scout" });
+    const stranded = bridgeCall(session, { tabLabel: 'Scout' });
     assert(
       (await stranded.result).isError === true,
-      "the stranded sibling is still answered",
+      'the stranded sibling is still answered',
     );
     assert(
-      !written.some((frame) => frame.method === "session/cancel"),
-      "the turn survives while another pi tool call is still open",
+      !written.some((frame) => frame.method === 'session/cancel'),
+      'the turn survives while another pi tool call is still open',
     );
-    assert(session.pendingToolCalls.size === 1, "the live call stays pending");
+    assert(session.pendingToolCalls.size === 1, 'the live call stays pending');
     live.abort.abort();
     await live.result;
   }
@@ -111,21 +112,21 @@ test("stranded tool calls and the cancel handoff", async () => {
   // --- a call arriving before the stream attaches is queued, not answered ---
   {
     const { session } = fakeFrameSession();
-    await session.startPrompt("m1", "", "question");
+    await session.startPrompt('m1', '', 'question');
     void session.activePromptDone?.catch(() => {});
     let resolved = false;
-    const early = bridgeCall(session, { agent: "scout", task: "early" });
+    const early = bridgeCall(session, { agent: 'scout', task: 'early' });
     void early.result.then(() => {
       resolved = true;
     });
     await tick();
     assert(
       resolved === false,
-      "a call racing the stream attach is not answered early",
+      'a call racing the stream attach is not answered early',
     );
     assert(
       session.pendingToolCalls.size === 1,
-      "it stays queued for the stream to flush",
+      'it stays queued for the stream to flush',
     );
     early.abort.abort();
     await early.result;
@@ -134,15 +135,15 @@ test("stranded tool calls and the cancel handoff", async () => {
   // --- pending calls are answered before the cancel, not after it ---
   {
     const { session, written } = fakeFrameSession();
-    await session.startPrompt("m1", "", "original question");
+    await session.startPrompt('m1', '', 'original question');
     const promptFrame = written.find(
-      (frame) => frame.method === "session/prompt",
+      (frame) => frame.method === 'session/prompt',
     );
     void session.activePromptDone?.catch(() => {});
     session.onToolCallFromBridge = (call) => {
       call.emitted = true;
     };
-    const held = bridgeCall(session, { agent: "scout", task: "held" });
+    const held = bridgeCall(session, { agent: 'scout', task: 'held' });
     session.onToolCallFromBridge = null;
 
     let answeredAt = -1;
@@ -151,23 +152,23 @@ test("stranded tool calls and the cancel handoff", async () => {
     });
 
     const followUp = session.cancelAndStartFollowUp(
-      "m1",
-      "",
-      "<dropped_tool_result>the report</dropped_tool_result>",
+      'm1',
+      '',
+      '<dropped_tool_result>the report</dropped_tool_result>',
       [],
       200,
       undefined,
-      "orphaned tool result",
+      'orphaned tool result',
     );
     await new Promise<void>((r) => setTimeout(r, DRAIN_WAIT_MS));
     const cancelAt = written.findIndex(
-      (frame) => frame.method === "session/cancel",
+      (frame) => frame.method === 'session/cancel',
     );
     assert(
       answeredAt >= 0,
-      "the outstanding call is answered during the handoff",
+      'the outstanding call is answered during the handoff',
     );
-    assert(cancelAt >= 0, "the in-flight prompt is still cancelled");
+    assert(cancelAt >= 0, 'the in-flight prompt is still cancelled');
     assert(
       answeredAt <= cancelAt,
       `the tool result is delivered before the cancel (answered at ${answeredAt}, cancel at ${cancelAt})`,
@@ -175,18 +176,18 @@ test("stranded tool calls and the cancel handoff", async () => {
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: promptFrame.id,
-        result: { stopReason: "cancelled" },
+        result: { stopReason: 'cancelled' },
       }),
     );
     await followUp;
     const prompts = written.filter(
-      (frame) => frame.method === "session/prompt",
+      (frame) => frame.method === 'session/prompt',
     );
     assert(
       prompts.length === 2,
-      "the follow-up prompt is sent after the cancel settles",
+      'the follow-up prompt is sent after the cancel settles',
     );
   }
 });

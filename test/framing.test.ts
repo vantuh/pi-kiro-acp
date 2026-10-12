@@ -1,112 +1,113 @@
 // Test: newline-delimited JSON-RPC framing and stdout dispatch in AcpSession.
 // Run: npm test -- test/framing.test.ts
 
-import { test } from "vitest";
-import type { SessionUpdate } from "../src/types.ts";
-import { AcpSession } from "../src/session.ts";
-import { assert, fakeSession, parseLines, settled } from "./support.ts";
+import { test } from 'vitest';
 
-test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
+import { AcpSession } from '../src/session.ts';
+import type { SessionUpdate } from '../src/types.ts';
+import { assert, fakeSession, parseLines, settled } from './support.ts';
+
+test('newline-delimited JSON-RPC framing and stdout dispatch', async () => {
   // --- outbound framing ---
   {
     const { session, written } = fakeSession();
     const first = settled(
-      session.rpcSend("initialize", { protocolVersion: 1 }),
+      session.rpcSend('initialize', { protocolVersion: 1 }),
     );
-    const second = settled(session.rpcSend("session/new", { cwd: "/tmp" }));
-    session.rpcNotify("notifications/initialized", {});
+    const second = settled(session.rpcSend('session/new', { cwd: '/tmp' }));
+    session.rpcNotify('notifications/initialized', {});
     session.rpcRespond(7, { ok: true });
 
     const frames = parseLines(written);
-    assert(frames.length === 4, "one line written per rpc call");
+    assert(frames.length === 4, 'one line written per rpc call');
     assert(
       written.every(
-        (line) => line.endsWith("\n") && !line.slice(0, -1).includes("\n"),
+        (line) => line.endsWith('\n') && !line.slice(0, -1).includes('\n'),
       ),
-      "each write is a single newline-delimited frame",
+      'each write is a single newline-delimited frame',
     );
     assert(
-      frames.every((f) => f.jsonrpc === "2.0"),
-      "every frame carries jsonrpc 2.0",
+      frames.every((f) => f.jsonrpc === '2.0'),
+      'every frame carries jsonrpc 2.0',
     );
     assert(
-      frames[0].id === 0 && frames[0].method === "initialize",
-      "first request uses id 0",
+      frames[0].id === 0 && frames[0].method === 'initialize',
+      'first request uses id 0',
     );
     assert(
-      frames[1].id === 1 && frames[1].method === "session/new",
-      "request ids increment",
+      frames[1].id === 1 && frames[1].method === 'session/new',
+      'request ids increment',
     );
-    assert(!("id" in frames[2]), "notifications carry no id");
+    assert(!('id' in frames[2]), 'notifications carry no id');
     assert(
       frames[3].id === 7 && frames[3].result.ok === true,
-      "responses echo the request id",
+      'responses echo the request id',
     );
     assert(
       session.rpcPending.size === 2,
-      "requests stay pending until answered",
+      'requests stay pending until answered',
     );
 
     // id 0 must match: a falsy-id check would leak this response as an orphan.
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 0,
         result: { agentCapabilities: {} },
       }),
     );
     const firstResult = await first;
-    assert(firstResult.ok, "response for id 0 resolves its pending request");
+    assert(firstResult.ok, 'response for id 0 resolves its pending request');
     assert(
       (firstResult.value as any).agentCapabilities !== undefined,
-      "resolved value is the result payload",
+      'resolved value is the result payload',
     );
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 1,
-        error: { code: -32603, message: "boom" },
+        error: { code: -32603, message: 'boom' },
       }),
     );
     const secondResult = await second;
     assert(
-      !secondResult.ok && secondResult.error?.message === "boom",
-      "error response rejects with its message",
+      !secondResult.ok && secondResult.error?.message === 'boom',
+      'error response rejects with its message',
     );
     assert(
       session.rpcPending.size === 0,
-      "answered requests are removed from the pending map",
+      'answered requests are removed from the pending map',
     );
   }
 
   // --- out-of-order and malformed input ---
   {
     const { session } = fakeSession();
-    const a = settled(session.rpcSend("a", {}));
-    const b = settled(session.rpcSend("b", {}));
+    const a = settled(session.rpcSend('a', {}));
+    const b = settled(session.rpcSend('b', {}));
 
-    session.handleStdoutLine("");
-    session.handleStdoutLine("   ");
-    session.handleStdoutLine("not json at all");
+    session.handleStdoutLine('');
+    session.handleStdoutLine('   ');
+    session.handleStdoutLine('not json at all');
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: 99, result: 1 }),
+      JSON.stringify({ jsonrpc: '2.0', id: 99, result: 1 }),
     );
     assert(
       session.rpcPending.size === 2,
-      "blank, malformed, and orphan lines leave pending requests intact",
+      'blank, malformed, and orphan lines leave pending requests intact',
     );
 
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: 1, result: "second" }),
+      JSON.stringify({ jsonrpc: '2.0', id: 1, result: 'second' }),
     );
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: 0, result: "first" }),
+      JSON.stringify({ jsonrpc: '2.0', id: 0, result: 'first' }),
     );
     const [ra, rb] = [await a, await b];
     assert(
-      ra.value === "first" && rb.value === "second",
-      "out-of-order responses resolve the right request",
+      ra.value === 'first' && rb.value === 'second',
+      'out-of-order responses resolve the right request',
     );
   }
 
@@ -115,42 +116,42 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     const { session, written } = fakeSession();
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 5,
-        method: "session/request_permission",
-        params: { options: [{ id: "reject_once" }, { id: "allow_always" }] },
+        method: 'session/request_permission',
+        params: { options: [{ id: 'reject_once' }, { id: 'allow_always' }] },
       }),
     );
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 6,
-        method: "session/request_permission",
-        params: { options: [{ id: "allow_once" }] },
+        method: 'session/request_permission',
+        params: { options: [{ id: 'allow_once' }] },
       }),
     );
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 7,
-        method: "some/unknown",
+        method: 'some/unknown',
         params: {},
       }),
     );
 
     const frames = parseLines(written);
-    assert(frames.length === 3, "every inbound request gets exactly one reply");
+    assert(frames.length === 3, 'every inbound request gets exactly one reply');
     assert(
-      frames[0].id === 5 && frames[0].result.outcome.optionId === "reject_once",
-      "unidentified permission is denied (reject_once)",
+      frames[0].id === 5 && frames[0].result.outcome.optionId === 'reject_once',
+      'unidentified permission is denied (reject_once)',
     );
     assert(
-      frames[1].result.outcome.outcome === "cancelled",
-      "denied permission with no reject option is cancelled",
+      frames[1].result.outcome.outcome === 'cancelled',
+      'denied permission with no reject option is cancelled',
     );
     assert(
       frames[2].id === 7 && frames[2].result === null,
-      "unknown inbound requests are answered with null",
+      'unknown inbound requests are answered with null',
     );
   }
 
@@ -158,43 +159,43 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     const { session, written } = fakeSession();
     session.catalogProvider = () =>
       ({
-        tools: [{ kiroName: "bash", piName: "bash" }],
-        piNameByKiroName: new Map([["bash", "bash"]]),
-        fingerprint: "test",
+        tools: [{ kiroName: 'bash', piName: 'bash' }],
+        piNameByKiroName: new Map([['bash', 'bash']]),
+        fingerprint: 'test',
         diagnostics: [],
       }) as any;
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 8,
-        method: "session/request_permission",
+        method: 'session/request_permission',
         params: {
-          options: [{ id: "reject_always" }, { id: "allow_always" }],
+          options: [{ id: 'reject_always' }, { id: 'allow_always' }],
           toolCall: {
-            _meta: { kiro: { mcpServerName: "pi_host", toolName: "bash" } },
+            _meta: { kiro: { mcpServerName: 'pi_host', toolName: 'bash' } },
           },
         },
       }),
     );
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
+        jsonrpc: '2.0',
         id: 9,
-        method: "session/request_permission",
+        method: 'session/request_permission',
         params: {
-          options: [{ id: "reject_always" }, { id: "allow_always" }],
-          toolCall: { toolName: "subagent" },
+          options: [{ id: 'reject_always' }, { id: 'allow_always' }],
+          toolCall: { toolName: 'subagent' },
         },
       }),
     );
     const frames = parseLines(written);
     assert(
-      frames[0].result.outcome.optionId === "allow_always",
-      "pi_host bash is allowed",
+      frames[0].result.outcome.optionId === 'allow_always',
+      'pi_host bash is allowed',
     );
     assert(
-      frames[1].result.outcome.optionId === "reject_always",
-      "native subagent is rejected always",
+      frames[1].result.outcome.optionId === 'reject_always',
+      'native subagent is rejected always',
     );
   }
 
@@ -206,52 +207,52 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "session/update",
+        jsonrpc: '2.0',
+        method: 'session/update',
         params: {
           update: {
-            sessionUpdate: "agent_message_chunk",
-            content: { type: "text", text: "hi" },
+            sessionUpdate: 'agent_message_chunk',
+            content: { type: 'text', text: 'hi' },
           },
         },
       }),
     );
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/session/update",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/session/update',
         params: {
           update: {
-            sessionUpdate: "agent_thought_chunk",
-            content: { type: "text", text: "hmm" },
+            sessionUpdate: 'agent_thought_chunk',
+            content: { type: 'text', text: 'hmm' },
           },
         },
       }),
     );
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", method: "session/update", params: {} }),
+      JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: {} }),
     );
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "unknown/notification",
+        jsonrpc: '2.0',
+        method: 'unknown/notification',
         params: {},
       }),
     );
 
     assert(
       updates.length === 2,
-      "both session/update spellings reach the update handler",
+      'both session/update spellings reach the update handler',
     );
     assert(
-      updates[0].sessionUpdate === "agent_message_chunk",
-      "session/update payload is unwrapped",
+      updates[0].sessionUpdate === 'agent_message_chunk',
+      'session/update payload is unwrapped',
     );
     assert(
-      updates[1].sessionUpdate === "agent_thought_chunk",
-      "_kiro.dev/session/update is treated the same",
+      updates[1].sessionUpdate === 'agent_thought_chunk',
+      '_kiro.dev/session/update is treated the same',
     );
-    assert(written.length === 0, "notifications are never answered");
+    assert(written.length === 0, 'notifications are never answered');
   }
 
   // --- _kiro.dev/agent/not_found + commands/available (leak detection) ---
@@ -261,26 +262,26 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     try {
       session.handleStdoutLine(
         JSON.stringify({
-          jsonrpc: "2.0",
-          method: "_kiro.dev/agent/not_found",
+          jsonrpc: '2.0',
+          method: '_kiro.dev/agent/not_found',
           params: {
-            sessionId: "x",
-            requestedAgent: "pi-kiro-abcd",
-            fallbackAgent: "kiro_default",
+            sessionId: 'x',
+            requestedAgent: 'pi-kiro-abcd',
+            fallbackAgent: 'kiro_default',
           },
         }),
       );
     } catch {
       threw = true;
     }
-    assert(!threw, "agent/not_found dispatches without crashing");
+    assert(!threw, 'agent/not_found dispatches without crashing');
     assert(
       session.recoveryPending === true,
-      "agent/not_found marks the backend as fallen back",
+      'agent/not_found marks the backend as fallen back',
     );
     assert(
       session.backendQuarantined === false,
-      "agent/not_found alone does not quarantine the backend",
+      'agent/not_found alone does not quarantine the backend',
     );
   }
 
@@ -290,45 +291,45 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     const available = (tools: unknown[]) =>
       session.handleStdoutLine(
         JSON.stringify({
-          jsonrpc: "2.0",
-          method: "_kiro.dev/commands/available",
-          params: { sessionId: "x", tools },
+          jsonrpc: '2.0',
+          method: '_kiro.dev/commands/available',
+          params: { sessionId: 'x', tools },
         }),
       );
 
-    available([{ name: "bash", source: "mcp:pi_host" }]);
+    available([{ name: 'bash', source: 'mcp:pi_host' }]);
     assert(
       session.recoveryPending === false,
-      "mcp-only tools list is not a leak",
+      'mcp-only tools list is not a leak',
     );
 
     available([
-      { name: "bash", source: "mcp:pi_host" },
-      { name: "read", source: "built-in" },
-      { name: "subagent", source: "built-in" },
+      { name: 'bash', source: 'mcp:pi_host' },
+      { name: 'read', source: 'built-in' },
+      { name: 'subagent', source: 'built-in' },
     ]);
     assert(
       session.recoveryPending === true,
-      "built-in tool entries mark the leak",
+      'built-in tool entries mark the leak',
     );
 
     // Same list again: fingerprint dedup must not re-handle (state stable).
     available([
-      { name: "bash", source: "mcp:pi_host" },
-      { name: "read", source: "built-in" },
-      { name: "subagent", source: "built-in" },
+      { name: 'bash', source: 'mcp:pi_host' },
+      { name: 'read', source: 'built-in' },
+      { name: 'subagent', source: 'built-in' },
     ]);
     assert(
       session.recoveryPending === true,
-      "repeated identical list is deduplicated",
+      'repeated identical list is deduplicated',
     );
 
     // A clean list on the same process lifts the quarantine (fresh
     // session/new after a leaked restore is sound again).
-    available([{ name: "bash", source: "mcp:pi_host" }]);
+    available([{ name: 'bash', source: 'mcp:pi_host' }]);
     assert(
       session.recoveryPending === false && session.backendQuarantined === false,
-      "clean tools list lifts the leak quarantine",
+      'clean tools list lifts the leak quarantine',
     );
   }
 
@@ -347,43 +348,43 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/commands/available",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/commands/available',
         params: {},
       }),
     );
-    post("missing tools payload does not lift quarantine");
+    post('missing tools payload does not lift quarantine');
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/commands/available",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/commands/available',
         params: { tools: null },
       }),
     );
-    post("null tools payload does not lift quarantine");
+    post('null tools payload does not lift quarantine');
 
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/commands/available",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/commands/available',
         params: { tools: [] },
       }),
     );
-    post("empty tools list does not lift quarantine");
+    post('empty tools list does not lift quarantine');
 
-    session.acpSessionId = "current"; // for the foreign-id scoping check
+    session.acpSessionId = 'current'; // for the foreign-id scoping check
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/commands/available",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/commands/available',
         params: {
-          sessionId: "foreign",
-          tools: [{ name: "bash", source: "mcp:pi_host" }],
+          sessionId: 'foreign',
+          tools: [{ name: 'bash', source: 'mcp:pi_host' }],
         },
       }),
     );
-    post("foreign-session notification does not lift quarantine");
+    post('foreign-session notification does not lift quarantine');
   }
 
   {
@@ -393,23 +394,23 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     session.persistenceKey = null;
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/commands/available",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/commands/available',
         params: {
-          sessionId: "x",
-          tools: [{ name: "read", source: "built-in" }],
+          sessionId: 'x',
+          tools: [{ name: 'read', source: 'built-in' }],
         },
       }),
     );
     assert(
       session.recoveryPending === true && session.backendQuarantined === true,
-      "restored-backend leak quarantines the backend",
+      'restored-backend leak quarantines the backend',
     );
     session.proc = null; // no real process to terminate in this unit test
     await session.stop();
     assert(
       !session.recoveryPending && !session.backendQuarantined,
-      "stop() resets backend-scoped leak state",
+      'stop() resets backend-scoped leak state',
     );
   }
 
@@ -428,32 +429,32 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     session.persistenceKey = null; // no disk writes in this unit test
     session.catalogProvider = null; // skip the real process restart
     session.agentCapabilities = { loadSession: true };
-    const restoring = session.tryRestorePersistedSession("kiro-snap");
-    const loadId = written.find((w) => w.method === "session/load")?.id;
+    const restoring = session.tryRestorePersistedSession('kiro-snap');
+    const loadId = written.find((w) => w.method === 'session/load')?.id;
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/agent/not_found",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/agent/not_found',
         params: {
-          requestedAgent: "pi-kiro-old",
-          fallbackAgent: "kiro_default",
+          requestedAgent: 'pi-kiro-old',
+          fallbackAgent: 'kiro_default',
         },
       }),
     );
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+      JSON.stringify({ jsonrpc: '2.0', id: loadId, result: {} }),
     );
     assert(
       (await restoring) === false,
-      "restore is abandoned when the fallback signal precedes the response",
+      'restore is abandoned when the fallback signal precedes the response',
     );
     assert(
       session.acpSessionId === null,
-      "the suspect snapshot is not bound as the ACP session",
+      'the suspect snapshot is not bound as the ACP session',
     );
     assert(
       session.agentFallbackDetected && session.recoveryPending,
-      "fallback state survives the abandoned restore",
+      'fallback state survives the abandoned restore',
     );
   }
 
@@ -468,29 +469,29 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     session.persistenceKey = null;
     session.catalogProvider = null;
     session.agentCapabilities = { loadSession: true };
-    const restoring = session.tryRestorePersistedSession("kiro-snap");
-    const loadId = written.find((w) => w.method === "session/load")?.id;
+    const restoring = session.tryRestorePersistedSession('kiro-snap');
+    const loadId = written.find((w) => w.method === 'session/load')?.id;
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+      JSON.stringify({ jsonrpc: '2.0', id: loadId, result: {} }),
     );
     await new Promise((resolve) => setTimeout(resolve, 0));
     session.handleStdoutLine(
       JSON.stringify({
-        jsonrpc: "2.0",
-        method: "_kiro.dev/commands/available",
+        jsonrpc: '2.0',
+        method: '_kiro.dev/commands/available',
         params: {
-          sessionId: "x",
-          tools: [{ name: "shell", source: "built-in" }],
+          sessionId: 'x',
+          tools: [{ name: 'shell', source: 'built-in' }],
         },
       }),
     );
     assert(
       (await restoring) === false,
-      "restore is abandoned when the leak signal lands during the drain",
+      'restore is abandoned when the leak signal lands during the drain',
     );
     assert(
       session.acpSessionId === null && session.backendQuarantined,
-      "the leaked restore quarantines instead of binding",
+      'the leaked restore quarantines instead of binding',
     );
   }
 
@@ -505,28 +506,28 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     session.persistenceKey = null;
     session.catalogProvider = null;
     session.agentCapabilities = { loadSession: true };
-    const restoring = session.tryRestorePersistedSession("kiro-snap");
-    const loadId = written.find((w) => w.method === "session/load")?.id;
+    const restoring = session.tryRestorePersistedSession('kiro-snap');
+    const loadId = written.find((w) => w.method === 'session/load')?.id;
     const available = (tools: unknown[]) =>
       session.handleStdoutLine(
         JSON.stringify({
-          jsonrpc: "2.0",
-          method: "_kiro.dev/commands/available",
-          params: { sessionId: "x", tools },
+          jsonrpc: '2.0',
+          method: '_kiro.dev/commands/available',
+          params: { sessionId: 'x', tools },
         }),
       );
-    available([{ name: "shell", source: "built-in" }]); // hazard
-    available([{ name: "bash", source: "mcp:pi_host" }]); // clean list lifts flags
+    available([{ name: 'shell', source: 'built-in' }]); // hazard
+    available([{ name: 'bash', source: 'mcp:pi_host' }]); // clean list lifts flags
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+      JSON.stringify({ jsonrpc: '2.0', id: loadId, result: {} }),
     );
     assert(
       (await restoring) === false,
-      "a clean list during the drain does not un-abandon a hazard snapshot",
+      'a clean list during the drain does not un-abandon a hazard snapshot',
     );
     assert(
       session.acpSessionId === null,
-      "the hazard snapshot is still not bound as the ACP session",
+      'the hazard snapshot is still not bound as the ACP session',
     );
   }
 
@@ -539,17 +540,17 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
     session.persistenceKey = null;
     session.catalogProvider = null;
     session.agentCapabilities = { loadSession: true };
-    const restoring = session.tryRestorePersistedSession("kiro-snap");
-    const loadId = written.find((w) => w.method === "session/load")?.id;
+    const restoring = session.tryRestorePersistedSession('kiro-snap');
+    const loadId = written.find((w) => w.method === 'session/load')?.id;
     session.handleStdoutLine(
-      JSON.stringify({ jsonrpc: "2.0", id: loadId, result: {} }),
+      JSON.stringify({ jsonrpc: '2.0', id: loadId, result: {} }),
     );
     assert(
       (await restoring) === true,
-      "a clean restore still binds the persisted session",
+      'a clean restore still binds the persisted session',
     );
     assert(
-      session.acpSessionId === "kiro-snap",
+      session.acpSessionId === 'kiro-snap',
       "the clean restore's ACP session id is bound",
     );
   }
@@ -557,97 +558,97 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
   // --- usage updates are scoped to the session's own ACP id ---
   {
     const { session } = fakeSession();
-    session.acpSessionId = "acp-1";
+    session.acpSessionId = 'acp-1';
     const usage = (sessionId: string, used: number) =>
       session.handleStdoutLine(
         JSON.stringify({
-          jsonrpc: "2.0",
-          method: "session/update",
+          jsonrpc: '2.0',
+          method: 'session/update',
           params: {
             sessionId,
-            update: { sessionUpdate: "usage_update", used, size: 200 },
+            update: { sessionUpdate: 'usage_update', used, size: 200 },
           },
         }),
       );
 
-    usage("acp-1", 50);
+    usage('acp-1', 50);
     assert(
       session.metadata?.contextUsed === 50,
-      "usage_update records context usage",
+      'usage_update records context usage',
     );
     assert(
       session.metadata?.contextUsagePercentage === 25,
-      "usage percentage is used/size",
+      'usage percentage is used/size',
     );
 
-    usage("acp-other", 180);
+    usage('acp-other', 180);
     assert(
       session.metadata?.contextUsed === 50,
-      "usage for a foreign ACP session id is ignored",
+      'usage for a foreign ACP session id is ignored',
     );
   }
 
   // --- request timeouts ---
   {
     const { session } = fakeSession();
-    const timedOut = await settled(session.rpcSend("slow/method", {}, 10));
-    assert(!timedOut.ok, "an unanswered request rejects on timeout");
+    const timedOut = await settled(session.rpcSend('slow/method', {}, 10));
+    assert(!timedOut.ok, 'an unanswered request rejects on timeout');
     assert(
-      /RPC timeout: slow\/method/.test(timedOut.error?.message || ""),
-      "timeout error names the method",
+      /RPC timeout: slow\/method/.test(timedOut.error?.message || ''),
+      'timeout error names the method',
     );
     assert(
       session.rpcPending.size === 0,
-      "timed-out requests are dropped from the pending map",
+      'timed-out requests are dropped from the pending map',
     );
   }
 
   // --- writes are dropped when the process is gone ---
   {
-    const session = new AcpSession("/tmp");
-    const noProc = await settled(session.rpcSend("initialize", {}));
+    const session = new AcpSession('/tmp');
+    const noProc = await settled(session.rpcSend('initialize', {}));
     assert(
-      !noProc.ok && /not running/.test(noProc.error?.message || ""),
-      "rpcSend rejects without a live process",
+      !noProc.ok && /not running/.test(noProc.error?.message || ''),
+      'rpcSend rejects without a live process',
     );
-    session.rpcNotify("notifications/initialized", {});
+    session.rpcNotify('notifications/initialized', {});
     session.rpcRespond(1, null);
-    assert(true, "notify/respond are no-ops without a live process");
+    assert(true, 'notify/respond are no-ops without a live process');
   }
 
   // --- the agent name survives a process restart ---
   // A kiro session binds the agent name captured at its creation, so a
-  // per-process random name can never be re-resolved by `session/load` later:
+  // per-process random name can never be re-resolved by `session/load`:
   // every cross-restart resume fell back to kiro_default and replayed.
   {
-    const first = new AcpSession("/tmp");
-    first.persistenceKey = "kiro-acp:abc123:/tmp";
+    const first = new AcpSession('/tmp');
+    first.persistenceKey = 'kiro-acp:abc123:/tmp';
     const name = first.agentName;
     assert(
       /^pi-kiro-[0-9a-f]{8}$/.test(name),
-      "the agent name keeps the pi-kiro- shape",
+      'the agent name keeps the pi-kiro- shape',
     );
 
-    const later = new AcpSession("/tmp");
+    const later = new AcpSession('/tmp');
     later.persistenceKey = first.persistenceKey;
     assert(
       later.agentName === name,
-      "a later process resolves the same agent name for the same key",
+      'a later process resolves the same agent name for the same key',
     );
 
-    const other = new AcpSession("/tmp");
-    other.persistenceKey = "kiro-acp:zzz999:/tmp";
+    const other = new AcpSession('/tmp');
+    other.persistenceKey = 'kiro-acp:zzz999:/tmp';
     assert(
       other.agentName !== name,
-      "a different persistence key derives a different agent name",
+      'a different persistence key derives a different agent name',
     );
 
-    const anonymous = new AcpSession("/tmp");
+    const anonymous = new AcpSession('/tmp');
     const anonymousName = anonymous.agentName;
     assert(
       /^pi-kiro-[0-9a-f]{8}$/.test(anonymousName) &&
-        new AcpSession("/tmp").agentName !== anonymousName,
-      "without a persistence key the name stays random per instance",
+        new AcpSession('/tmp').agentName !== anonymousName,
+      'without a persistence key the name stays random per instance',
     );
   }
 
@@ -657,15 +658,15 @@ test("newline-delimited JSON-RPC framing and stdout dispatch", async () => {
   {
     const { session } = fakeSession();
     session.catalogProvider = () => {
-      throw new Error("host runtime not bound");
+      throw new Error('host runtime not bound');
     };
     const catalog = (session as any).currentCatalog();
-    assert(catalog.tools.length === 0, "a throwing provider yields no tools");
+    assert(catalog.tools.length === 0, 'a throwing provider yields no tools');
     assert(
       catalog.diagnostics.some((d: string) =>
-        d.includes("catalog provider threw"),
+        d.includes('catalog provider threw'),
       ),
-      "the provider failure is reported as a catalog diagnostic",
+      'the provider failure is reported as a catalog diagnostic',
     );
   }
 });

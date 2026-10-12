@@ -1,6 +1,8 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
-import { request as httpRequest, type ClientRequest } from "node:http";
-import { AcpSession } from "../src/session.ts";
+import { request as httpRequest, type ClientRequest } from 'node:http';
+
+import type { Context, Model } from '@earendil-works/pi-ai';
+
+import { AcpSession } from '../src/session.ts';
 
 // --- assertions ---
 
@@ -29,7 +31,7 @@ export function fakeSession(opts: FakeSessionOptions = {}): {
   session: AcpSession;
   written: any[];
 } {
-  const session = new AcpSession(opts.cwd ?? "/tmp");
+  const session = new AcpSession(opts.cwd ?? '/tmp');
   const written: any[] = [];
   session.proc = {
     stdin: {
@@ -45,7 +47,7 @@ export function fakeSession(opts: FakeSessionOptions = {}): {
     // stop() closes stdin and waits for the process to exit; a fake process
     // reports the exit as soon as the wait starts.
     once(event: string, handler: () => void) {
-      if (event === "exit") setImmediate(handler);
+      if (event === 'exit') setImmediate(handler);
       return session.proc;
     },
   } as any;
@@ -59,7 +61,7 @@ export function fakeSession(opts: FakeSessionOptions = {}): {
 /** Parses captured writes, requiring each to be exactly one newline-terminated line. */
 export function parseLines(written: string[]): any[] {
   return written.map((line) => {
-    if (!line.endsWith("\n") || line.slice(0, -1).includes("\n")) {
+    if (!line.endsWith('\n') || line.slice(0, -1).includes('\n')) {
       throw new Error(
         `write is not a single newline-delimited frame: ${JSON.stringify(line)}`,
       );
@@ -86,13 +88,13 @@ export const tick = () => new Promise<void>((r) => setTimeout(r, 0));
 /** The pi model descriptor used by the streaming tests. */
 export function kiroModel(): Model<any> {
   return {
-    id: "claude-sonnet-4.6",
-    name: "Claude Sonnet 4.6 (Kiro)",
-    api: "kiro-acp-api",
-    provider: "kiro-acp",
-    baseUrl: "",
+    id: 'claude-sonnet-4.6',
+    name: 'Claude Sonnet 4.6 (Kiro)',
+    api: 'kiro-acp-api',
+    provider: 'kiro-acp',
+    baseUrl: '',
     reasoning: false,
-    input: ["text"],
+    input: ['text'],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: 1000000,
     maxTokens: 16384,
@@ -104,12 +106,12 @@ export function kiroContext(userContent: string): Context {
   return {
     messages: [
       {
-        role: "user",
+        role: 'user',
         content: userContent,
         timestamp: Date.now(),
       },
     ],
-    systemPrompt: "",
+    systemPrompt: '',
     tools: [],
   };
 }
@@ -136,20 +138,20 @@ export function post(
         host: parsed.hostname,
         port: Number(parsed.port),
         path: parsed.pathname,
-        method: "POST",
+        method: 'POST',
         headers: {
           authorization: `Bearer ${token}`,
-          "content-length": Buffer.byteLength(payload),
+          'content-length': Buffer.byteLength(payload),
           ...headers,
         },
       },
       (res) => {
-        let text = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
+        let text = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => {
           text += chunk;
         });
-        res.on("end", () => {
+        res.on('end', () => {
           let parsedBody: any = undefined;
           try {
             parsedBody = text ? JSON.parse(text) : undefined;
@@ -160,7 +162,7 @@ export function post(
         });
       },
     );
-    req.on("error", reject);
+    req.on('error', reject);
     req.end(payload);
   });
 }
@@ -184,19 +186,19 @@ export function rawPost(
       host: parsed.hostname,
       port: Number(parsed.port),
       path: parsed.pathname,
-      method: "POST",
+      method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,
-        "content-length": Buffer.byteLength(payload),
+        'content-length': Buffer.byteLength(payload),
       },
     },
     (res) => {
-      let text = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
         text += chunk;
       });
-      res.on("end", () => {
+      res.on('end', () => {
         let parsedBody: any = undefined;
         try {
           parsedBody = text ? JSON.parse(text) : undefined;
@@ -207,7 +209,7 @@ export function rawPost(
       });
     },
   );
-  req.on("error", rejectResponse);
+  req.on('error', rejectResponse);
   req.end(payload);
   return { request: req, response };
 }
@@ -249,23 +251,23 @@ export function ssePost(
       host: parsed.hostname,
       port: Number(parsed.port),
       path: parsed.pathname,
-      method: "POST",
+      method: 'POST',
       headers: {
         authorization: `Bearer ${token}`,
-        accept: "application/json, text/event-stream",
-        "content-length": Buffer.byteLength(payload),
+        accept: 'application/json, text/event-stream',
+        'content-length': Buffer.byteLength(payload),
       },
     },
     (res) => {
       resolveHeaders(res.headers);
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
+      res.setEncoding('utf8');
+      res.on('data', (chunk) => {
         chunks.push(chunk);
       });
-      res.on("end", () => resolveDone(chunks.join("")));
+      res.on('end', () => resolveDone(chunks.join('')));
     },
   );
-  req.on("error", rejectAll);
+  req.on('error', rejectAll);
   req.end(payload);
   return { chunks, headers, done };
 }
@@ -273,8 +275,8 @@ export function ssePost(
 /** Last JSON-RPC message carried by an SSE body. */
 export function sseMessages(text: string): any[] {
   return text
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
+    .split('\n')
+    .filter((line) => line.startsWith('data:'))
     .map((line) => JSON.parse(line.slice(5).trim()));
 }
 
@@ -286,15 +288,15 @@ export function del(url: string, token: string): Promise<number> {
         host: parsed.hostname,
         port: Number(parsed.port),
         path: parsed.pathname,
-        method: "DELETE",
+        method: 'DELETE',
         headers: { authorization: `Bearer ${token}` },
       },
       (res) => {
         res.resume();
-        res.on("end", () => resolve(res.statusCode || 0));
+        res.on('end', () => resolve(res.statusCode || 0));
       },
     );
-    req.on("error", reject);
+    req.on('error', reject);
     req.end();
   });
 }

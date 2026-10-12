@@ -5,8 +5,9 @@ import {
   type TranscriptContext,
   createAssistantMessageEventStream,
   getCurrentTools,
-} from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+} from '@earendil-works/pi-ai';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+
 import {
   appendKiroMetadataDiagnostic,
   buildPromptParts,
@@ -15,18 +16,18 @@ import {
   estimateUsage,
   imagesFromToolResults,
   lastUserMessage,
-} from "./helpers.ts";
-import { log, msSince } from "./logging.ts";
-import { kiroToolIdentity } from "./permissions.ts";
-import { SessionManager } from "./session-manager.ts";
+} from './helpers.ts';
+import { log, msSince } from './logging.ts';
+import { kiroToolIdentity } from './permissions.ts';
+import { SessionManager } from './session-manager.ts';
 import {
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
   loadPersistedKiroSession,
   savePersistedKiroSession,
-} from "./session-persistence.ts";
-import { toKiroEffort, type AcpSession } from "./session.ts";
-import { hostToolCatalog, KIRO_BUILTIN_NAMES } from "./tool-catalog.ts";
+} from './session-persistence.ts';
+import { toKiroEffort, type AcpSession } from './session.ts';
+import { hostToolCatalog, KIRO_BUILTIN_NAMES } from './tool-catalog.ts';
 
 /**
  * How long to keep collecting tool calls before handing the batch to pi.
@@ -63,7 +64,7 @@ export function streamKiroAcp(
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
   const turnStartedAt = Date.now();
-  log("streamKiroAcp entry", {
+  log('streamKiroAcp entry', {
     modelId: model.id,
     toolsCount: getCurrentTools(context.messages).length,
     messagesCount: context.messages?.length ?? 0,
@@ -101,7 +102,7 @@ export function streamKiroAcp(
       );
       const ensuredAt = Date.now();
 
-      log("streamSimple called", {
+      log('streamSimple called', {
         session: session.id,
         routeKind: routed.kind,
         toolResults: routed.toolResults.length,
@@ -123,7 +124,7 @@ export function streamKiroAcp(
         images: ReturnType<typeof imagesFromToolResults>;
       } | null = null;
 
-      if (routed.kind !== "resumption") {
+      if (routed.kind !== 'resumption') {
         const currentPrompt = buildPromptParts(context, false);
         const replayPrompt = buildPromptParts(context, true);
         // Kiro abandoned its own tools/call for these results, so they can no
@@ -132,11 +133,11 @@ export function streamKiroAcp(
         // subagent), so hand the result back instead: as its own turn when the ACP
         // session still holds the conversation, otherwise as a full replay that
         // now carries the completed work.
-        recoverInPlace = routed.kind === "orphaned" && hadLiveConversation;
+        recoverInPlace = routed.kind === 'orphaned' && hadLiveConversation;
         const recoveryText = recoverInPlace
           ? buildToolResultRecoveryPrompt(routed.toolResults)
           : null;
-        log("prompt parts", {
+        log('prompt parts', {
           session: session.id,
           promptChars: currentPrompt.userMessage.length,
           replayPromptChars: replayPrompt.userMessage.length,
@@ -164,7 +165,7 @@ export function streamKiroAcp(
             recoveryPrompt.images,
             30000,
             undefined,
-            "orphaned tool result",
+            'orphaned tool result',
           );
         } else {
           await session.startPrompt(
@@ -172,7 +173,7 @@ export function streamKiroAcp(
             currentPrompt.systemPrompt,
             currentPrompt.userMessage,
             currentPrompt.images,
-            routed.kind === "orphaned"
+            routed.kind === 'orphaned'
               ? // No live ACP session to recover into: force the replay path so the
                 // completed tool call cannot be dropped by resuming a persisted
                 // session from before it (the fingerprint ignores trailing results).
@@ -188,14 +189,14 @@ export function streamKiroAcp(
 
       if (options?.signal) {
         const handler = () =>
-          session.rpcNotify("session/cancel", {
+          session.rpcNotify('session/cancel', {
             sessionId: session.acpSessionId,
           });
         if (options.signal.aborted) handler();
-        else options.signal.addEventListener("abort", handler, { once: true });
+        else options.signal.addEventListener('abort', handler, { once: true });
       }
 
-      stream.push({ type: "start", partial: output });
+      stream.push({ type: 'start', partial: output });
 
       let suppressUpdates = false;
       let firstThinkingAt: number | null = null;
@@ -211,12 +212,12 @@ export function streamKiroAcp(
        * messageId closes the block so the next delta opens a new one; a text
        * delta always closes an open thinking block and vice versa. */
       const createBlockWriter = (
-        kind: "text" | "thinking",
+        kind: 'text' | 'thinking',
         endOther: () => void,
       ) => {
-        const startType = kind === "text" ? "text_start" : "thinking_start";
-        const deltaType = kind === "text" ? "text_delta" : "thinking_delta";
-        const endType = kind === "text" ? "text_end" : "thinking_end";
+        const startType = kind === 'text' ? 'text_start' : 'thinking_start';
+        const deltaType = kind === 'text' ? 'text_delta' : 'thinking_delta';
+        const endType = kind === 'text' ? 'text_end' : 'thinking_end';
         let started = false;
         let idx = -1;
         let messageId: string | undefined;
@@ -227,7 +228,7 @@ export function streamKiroAcp(
           stream.push({
             type: endType,
             contentIndex: idx,
-            content: kind === "text" ? block.text : block.thinking,
+            content: kind === 'text' ? block.text : block.thinking,
             partial: output,
           });
           started = false;
@@ -239,9 +240,9 @@ export function streamKiroAcp(
           if (started && id && messageId && id !== messageId) end();
           if (!started) {
             output.content.push(
-              kind === "text"
-                ? { type: "text", text: "" }
-                : ({ type: "thinking", thinking: "" } as any),
+              kind === 'text'
+                ? { type: 'text', text: '' }
+                : ({ type: 'thinking', thinking: '' } as any),
             );
             idx = output.content.length - 1;
             stream.push({
@@ -255,7 +256,7 @@ export function streamKiroAcp(
             messageId = id;
           }
           const block = output.content[idx] as any;
-          if (kind === "text") block.text += text;
+          if (kind === 'text') block.text += text;
           else block.thinking += text;
           stream.push({
             type: deltaType,
@@ -270,8 +271,8 @@ export function streamKiroAcp(
 
       let endTextBlock: () => void = () => {};
       let endThinkingBlock: () => void = () => {};
-      const textWriter = createBlockWriter("text", () => endThinkingBlock());
-      const thinkingWriter = createBlockWriter("thinking", () =>
+      const textWriter = createBlockWriter('text', () => endThinkingBlock());
+      const thinkingWriter = createBlockWriter('thinking', () =>
         endTextBlock(),
       );
       endTextBlock = () => textWriter.end();
@@ -287,14 +288,14 @@ export function streamKiroAcp(
 
       session.updateHandler = (update) => {
         if (suppressUpdates) return;
-        if (update.sessionUpdate === "agent_thought_chunk") {
+        if (update.sessionUpdate === 'agent_thought_chunk') {
           const text = (update.content as any)?.text;
           const messageId =
-            typeof update.messageId === "string" ? update.messageId : undefined;
+            typeof update.messageId === 'string' ? update.messageId : undefined;
           if (text) {
             if (firstThinkingAt == null) {
               firstThinkingAt = Date.now();
-              log("timing first thinking", {
+              log('timing first thinking', {
                 session: session.id,
                 ttftMs: firstThinkingAt - turnStartedAt,
                 sincePromptMs: firstThinkingAt - promptReadyAt,
@@ -304,14 +305,14 @@ export function streamKiroAcp(
             thinkingChunks += 1;
             thinkingWriter.delta(text, messageId);
           }
-        } else if (update.sessionUpdate === "agent_message_chunk") {
+        } else if (update.sessionUpdate === 'agent_message_chunk') {
           const text = (update.content as any)?.text;
           const messageId =
-            typeof update.messageId === "string" ? update.messageId : undefined;
+            typeof update.messageId === 'string' ? update.messageId : undefined;
           if (text) {
             if (firstTextAt == null) {
               firstTextAt = Date.now();
-              log("timing first text", {
+              log('timing first text', {
                 session: session.id,
                 ttftMs: firstTextAt - turnStartedAt,
                 sincePromptMs: firstTextAt - promptReadyAt,
@@ -326,14 +327,14 @@ export function streamKiroAcp(
             textWriter.delta(text, messageId);
           }
         } else if (
-          update.sessionUpdate === "tool_call" ||
-          update.sessionUpdate === "tool_call_update"
+          update.sessionUpdate === 'tool_call' ||
+          update.sessionUpdate === 'tool_call_update'
         ) {
           const { mcpServer, toolName: metaToolName } =
             kiroToolIdentity(update);
           const kiroToolName =
             metaToolName ??
-            (typeof (update as any).title === "string"
+            (typeof (update as any).title === 'string'
               ? (update as any).title
               : null);
           // Untagged updates (no mcpServer) are not native by default — missing
@@ -341,15 +342,15 @@ export function streamKiroAcp(
           // when mcpServer is set and not pi_host, or the name is a Kiro builtin
           // (subagent/read/…) without a pi_ prefix.
           const native =
-            (typeof mcpServer === "string" && mcpServer !== "pi_host") ||
+            (typeof mcpServer === 'string' && mcpServer !== 'pi_host') ||
             (mcpServer == null &&
-              typeof kiroToolName === "string" &&
+              typeof kiroToolName === 'string' &&
               KIRO_BUILTIN_NAMES.has(kiroToolName) &&
-              !kiroToolName.startsWith("pi_"));
+              !kiroToolName.startsWith('pi_'));
           log(
             native
-              ? "native ACP tool update (not forwarded to pi)"
-              : "ACP tool update",
+              ? 'native ACP tool update (not forwarded to pi)'
+              : 'ACP tool update',
             {
               session: session.id,
               sessionUpdate: update.sessionUpdate,
@@ -363,18 +364,18 @@ export function streamKiroAcp(
             },
           );
         } else if (update.sessionUpdate) {
-          log("unhandled ACP sessionUpdate", {
+          log('unhandled ACP sessionUpdate', {
             session: session.id,
             sessionUpdate: update.sessionUpdate,
           });
         }
       };
 
-      if (routed.kind === "resumption") {
+      if (routed.kind === 'resumption') {
         const imageBlocks = imagesFromToolResults(routed.toolResults);
 
         if (imageBlocks.length > 0) {
-          log("image FUP: detected images in tool results", {
+          log('image FUP: detected images in tool results', {
             session: session.id,
             imageCount: imageBlocks.length,
             tools: routed.toolResults.map((tr) => tr.toolName),
@@ -384,11 +385,11 @@ export function streamKiroAcp(
 
           const userQ = lastUserMessage(context);
           const imageTools = routed.toolResults.filter((tr) =>
-            (tr.content ?? []).some((b) => b.type === "image"),
+            (tr.content ?? []).some((b) => b.type === 'image'),
           );
           const toolNames = [
             ...new Set(imageTools.map((tr) => tr.toolName)),
-          ].join(", ");
+          ].join(', ');
           const textSummaries = imageTools
             .map((tr) => {
               const txt = tr.text.trim();
@@ -396,13 +397,13 @@ export function streamKiroAcp(
                 ? `[${tr.toolName}]: ${txt}`
                 : `[${tr.toolName}]: (image result)`;
             })
-            .join("\n");
+            .join('\n');
           const followupText =
             `The user asked: ${userQ}\n\n` +
             `Tool(s) ${toolNames} returned image(s) attached to this message.` +
             (textSummaries
               ? `\n\nText summaries from tools:\n${textSummaries}`
-              : "") +
+              : '') +
             `\n\nPlease answer the user's question based on the attached image(s). ` +
             `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.`;
 
@@ -431,10 +432,10 @@ export function streamKiroAcp(
       let promptError: Error | null = null;
       let toolFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
-      const outcome = await new Promise<"toolUse" | "stop" | "error">(
+      const outcome = await new Promise<'toolUse' | 'stop' | 'error'>(
         (resolve) => {
           let settled = false;
-          const finish = (value: "toolUse" | "stop" | "error") => {
+          const finish = (value: 'toolUse' | 'stop' | 'error') => {
             if (settled) return;
             settled = true;
             if (toolFlushTimer) clearTimeout(toolFlushTimer);
@@ -458,7 +459,7 @@ export function streamKiroAcp(
           const flushToolCalls = () => {
             const calls = unemittedToolCalls();
             if (calls.length === 0) return false;
-            log("tool calls → stream", {
+            log('tool calls → stream', {
               session: session.id,
               count: calls.length,
               callIds: calls.map((c) => c.callId),
@@ -469,7 +470,7 @@ export function streamKiroAcp(
             for (const call of calls) {
               call.emitted = true;
               const tc = {
-                type: "toolCall" as const,
+                type: 'toolCall' as const,
                 id: call.callId,
                 name: call.toolName,
                 arguments: call.args,
@@ -477,19 +478,19 @@ export function streamKiroAcp(
               output.content.push(tc);
               const idx = output.content.length - 1;
               stream.push({
-                type: "toolcall_start",
+                type: 'toolcall_start',
                 contentIndex: idx,
                 partial: output,
               });
               stream.push({
-                type: "toolcall_end",
+                type: 'toolcall_end',
                 contentIndex: idx,
                 toolCall: tc,
                 partial: output,
               });
             }
 
-            finish("toolUse");
+            finish('toolUse');
             return true;
           };
 
@@ -504,14 +505,14 @@ export function streamKiroAcp(
           session.onToolCallFromBridge = (call) => {
             if (firstToolAt == null) {
               firstToolAt = Date.now();
-              log("timing first tool", {
+              log('timing first tool', {
                 session: session.id,
                 sinceTurnMs: firstToolAt - turnStartedAt,
                 sincePromptMs: firstToolAt - promptReadyAt,
                 toolName: call.toolName,
               });
             }
-            log("tool call queued", {
+            log('tool call queued', {
               session: session.id,
               callId: call.callId,
               toolName: call.toolName,
@@ -527,7 +528,7 @@ export function streamKiroAcp(
           // returned, waiting for the user to say "continue". A second prompt on the
           // same session goes through — that is exactly what the manual nudge did.
           const isEmptyRefusal = (stopReason: string | undefined) =>
-            stopReason === "refusal" &&
+            stopReason === 'refusal' &&
             thinkingChars === 0 &&
             textChars === 0 &&
             output.content.length === 0;
@@ -536,16 +537,16 @@ export function streamKiroAcp(
 
           const retryAfterRefusal = () => {
             if (!recoveryPrompt || refusalRetries >= REFUSAL_RETRIES) {
-              log("empty refusal → stop", {
+              log('empty refusal → stop', {
                 session: session.id,
                 retried: refusalRetries,
                 recoverable: !!recoveryPrompt,
               });
-              finish("stop");
+              finish('stop');
               return;
             }
             refusalRetries += 1;
-            log("empty refusal → resending recovery prompt", {
+            log('empty refusal → resending recovery prompt', {
               session: session.id,
               attempt: refusalRetries,
               delayMs: REFUSAL_RETRY_DELAY_MS,
@@ -563,11 +564,11 @@ export function streamKiroAcp(
                 .then(attachPromptSettle, (e: Error) => {
                   if (settled || gen !== session.streamGen) return;
                   promptError = e;
-                  log("empty refusal retry failed → error", {
+                  log('empty refusal retry failed → error', {
                     session: session.id,
                     error: e?.message,
                   });
-                  finish("error");
+                  finish('error');
                 });
             }, REFUSAL_RETRY_DELAY_MS);
           };
@@ -581,8 +582,8 @@ export function streamKiroAcp(
                       retryAfterRefusal();
                       return;
                     }
-                    log("prompt done → stop", { session: session.id });
-                    finish("stop");
+                    log('prompt done → stop', { session: session.id });
+                    finish('stop');
                   }
                 }
               },
@@ -590,11 +591,11 @@ export function streamKiroAcp(
                 if (gen === session.streamGen && !settled) {
                   promptError = e;
                   if (!flushToolCalls()) {
-                    log("prompt error → error", {
+                    log('prompt error → error', {
                       session: session.id,
                       error: e?.message,
                     });
-                    finish("error");
+                    finish('error');
                   }
                 }
               },
@@ -605,12 +606,12 @@ export function streamKiroAcp(
               if (!flushToolCalls()) {
                 promptError =
                   session.lastPromptError ??
-                  new Error("Kiro ACP session has no active prompt");
-                log("no active prompt → error", {
+                  new Error('Kiro ACP session has no active prompt');
+                log('no active prompt → error', {
                   session: session.id,
                   error: promptError.message,
                 });
-                finish("error");
+                finish('error');
               }
             }
           }
@@ -624,7 +625,7 @@ export function streamKiroAcp(
 
       const turnMs = msSince(turnStartedAt);
       const streamMs = Math.max(0, turnMs - (promptReadyAt - turnStartedAt));
-      log("outcome", {
+      log('outcome', {
         session: session.id,
         outcome,
         gen,
@@ -651,7 +652,7 @@ export function streamKiroAcp(
         },
       });
 
-      if (recoverInPlace && outcome !== "error") {
+      if (recoverInPlace && outcome !== 'error') {
         session.clearAbandonedToolCalls(routed.toolResults);
       }
 
@@ -662,22 +663,22 @@ export function streamKiroAcp(
       );
       appendKiroMetadataDiagnostic(output, session.metadata);
 
-      if (outcome === "toolUse") {
-        output.stopReason = "toolUse";
-        stream.push({ type: "done", reason: "toolUse", message: output });
-      } else if (outcome === "error") {
+      if (outcome === 'toolUse') {
+        output.stopReason = 'toolUse';
+        stream.push({ type: 'done', reason: 'toolUse', message: output });
+      } else if (outcome === 'error') {
         session.activePromptDone = null;
-        output.stopReason = "error";
-        output.errorMessage = promptError?.message || "Kiro ACP prompt failed";
-        stream.push({ type: "error", reason: "error", error: output });
+        output.stopReason = 'error';
+        output.errorMessage = promptError?.message || 'Kiro ACP prompt failed';
+        stream.push({ type: 'error', reason: 'error', error: output });
       } else {
         session.activePromptDone = null;
-        output.stopReason = "stop";
+        output.stopReason = 'stop';
         if (session.backendQuarantined) {
           // The backend's snapshot leaked Kiro builtins; persisting it would
           // re-resume the leak next turn (config fingerprint matches). The
           // record was already cleared; the next turn restarts fresh.
-          log("skip persisting kiro session (backend quarantined)", {
+          log('skip persisting kiro session (backend quarantined)', {
             session: session.id,
             acpSessionId: session.acpSessionId,
           });
@@ -699,19 +700,19 @@ export function streamKiroAcp(
             lastUsed: now,
           });
         }
-        stream.push({ type: "done", reason: "stop", message: output });
+        stream.push({ type: 'done', reason: 'stop', message: output });
       }
 
       stream.end();
     } catch (error) {
-      log("streamKiroAcp FATAL error", {
+      log('streamKiroAcp FATAL error', {
         error:
           error instanceof Error ? error.stack || error.message : String(error),
       });
-      output.stopReason = "error";
+      output.stopReason = 'error';
       output.errorMessage =
         error instanceof Error ? error.message : String(error);
-      stream.push({ type: "error", reason: "error", error: output });
+      stream.push({ type: 'error', reason: 'error', error: output });
       stream.end();
     } finally {
       // Clear the handlers on every exit path (normal end and fatal catch),

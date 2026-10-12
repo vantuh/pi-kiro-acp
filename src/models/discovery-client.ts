@@ -1,10 +1,10 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess } from 'node:child_process';
 import {
   createInterface,
   type Interface as ReadlineInterface,
-} from "node:readline";
+} from 'node:readline';
 
-import { terminateProcessTree } from "../process-utils.ts";
+import { terminateProcessTree } from '../process-utils.ts';
 
 type JsonRpcResponse = {
   id?: number;
@@ -16,7 +16,7 @@ export class DiscoveryClient {
   private proc: ChildProcess | null = null;
   private rl: ReadlineInterface | null = null;
   private nextId = 1;
-  private stderr = "";
+  private stderr = '';
   private readonly pending = new Map<
     number,
     {
@@ -29,18 +29,18 @@ export class DiscoveryClient {
   constructor(private readonly cwd: string) {}
 
   async start(): Promise<void> {
-    this.proc = spawn("kiro-cli", ["acp"], {
+    this.proc = spawn('kiro-cli', ['acp'], {
       cwd: this.cwd,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
-    this.proc.stderr?.on("data", (chunk) => {
+    this.proc.stderr?.on('data', (chunk) => {
       this.stderr = (this.stderr + String(chunk)).slice(-4000);
     });
 
-    this.proc.on("exit", (code, signal) => {
+    this.proc.on('exit', (code, signal) => {
       const error = new Error(
-        `kiro-cli exited during model discovery (code=${code}, signal=${signal})${this.stderr ? `: ${this.stderr.trim()}` : ""}`,
+        `kiro-cli exited during model discovery (code=${code}, signal=${signal})${this.stderr ? `: ${this.stderr.trim()}` : ''}`,
       );
       for (const [id, pending] of this.pending) {
         if (pending.timer) clearTimeout(pending.timer);
@@ -49,7 +49,7 @@ export class DiscoveryClient {
       }
     });
 
-    this.proc.on("error", (error) => {
+    this.proc.on('error', (error) => {
       for (const [id, pending] of this.pending) {
         if (pending.timer) clearTimeout(pending.timer);
         pending.reject(error);
@@ -58,7 +58,7 @@ export class DiscoveryClient {
     });
 
     this.rl = createInterface({ input: this.proc.stdout! });
-    this.rl.on("line", (line) => this.handleLine(line));
+    this.rl.on('line', (line) => this.handleLine(line));
   }
 
   request(
@@ -68,21 +68,21 @@ export class DiscoveryClient {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.proc?.stdin?.writable)
-        return reject(new Error("kiro-cli not running"));
+        return reject(new Error('kiro-cli not running'));
 
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
         reject(
           new Error(
-            `model discovery RPC timeout: ${method}${this.stderr ? `: ${this.stderr.trim()}` : ""}`,
+            `model discovery RPC timeout: ${method}${this.stderr ? `: ${this.stderr.trim()}` : ''}`,
           ),
         );
       }, timeoutMs);
 
       this.pending.set(id, { resolve, reject, timer });
       this.proc.stdin.write(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+        JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n',
       );
     });
   }
@@ -105,7 +105,7 @@ export class DiscoveryClient {
       return;
     }
 
-    if (typeof msg.id !== "number") return;
+    if (typeof msg.id !== 'number') return;
     const pending = this.pending.get(msg.id);
     if (!pending) return;
 
@@ -115,7 +115,7 @@ export class DiscoveryClient {
     if (msg.error) {
       pending.reject(
         new Error(
-          msg.error.message || `JSON-RPC error ${msg.error.code ?? "unknown"}`,
+          msg.error.message || `JSON-RPC error ${msg.error.code ?? 'unknown'}`,
         ),
       );
     } else {

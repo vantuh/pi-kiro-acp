@@ -2,21 +2,21 @@
 // No cross-session tool-call mixing, no leaked HTTP ports.
 // Run: npm test -- test/lifecycle-cleanup.test.ts
 
-import { test } from "vitest";
-import { connect } from "node:net";
+import { connect } from 'node:net';
 
-import type { Context } from "@earendil-works/pi-ai";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { Context } from '@earendil-works/pi-ai';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
+import { test } from 'vitest';
 
 import {
   KiroSessionRuntimeRegistry,
   SessionManager,
-} from "../src/session-manager.ts";
-import { AcpSession } from "../src/session.ts";
-import { startToolBridge, type ToolBridge } from "../src/tool-bridge.ts";
-import { buildForwardedToolCatalog } from "../src/tool-catalog.ts";
-import type { PendingToolCall, ToolResultInfo } from "../src/types.ts";
-import { assert } from "./support.ts";
+} from '../src/session-manager.ts';
+import { AcpSession } from '../src/session.ts';
+import { startToolBridge, type ToolBridge } from '../src/tool-bridge.ts';
+import { buildForwardedToolCatalog } from '../src/tool-catalog.ts';
+import type { PendingToolCall, ToolResultInfo } from '../src/types.ts';
+import { assert } from './support.ts';
 
 const emptyContext: Context = { messages: [] };
 
@@ -24,22 +24,22 @@ const catalog = () =>
   buildForwardedToolCatalog(
     [
       {
-        name: "web_search",
-        description: "search",
+        name: 'web_search',
+        description: 'search',
         parameters: {
-          type: "object",
-          properties: { query: { type: "string" } },
+          type: 'object',
+          properties: { query: { type: 'string' } },
         },
-        sourceInfo: { source: "package" },
+        sourceInfo: { source: 'package' },
       },
     ],
-    ["web_search"],
+    ['web_search'],
   );
 
 function attachBridge(session: AcpSession): Promise<ToolBridge> {
   return startToolBridge({
     catalog,
-    onToolCall: async () => ({ content: [{ type: "text", text: "unused" }] }),
+    onToolCall: async () => ({ content: [{ type: 'text', text: 'unused' }] }),
   }).then((bridge) => {
     session.toolBridge = bridge;
     return bridge;
@@ -48,15 +48,15 @@ function attachBridge(session: AcpSession): Promise<ToolBridge> {
 
 function isListening(port: number): Promise<boolean> {
   return new Promise((resolve) => {
-    const socket = connect({ host: "127.0.0.1", port });
+    const socket = connect({ host: '127.0.0.1', port });
     const done = (listening: boolean) => {
       socket.destroy();
       resolve(listening);
     };
     socket.setTimeout(1000);
-    socket.once("connect", () => done(true));
-    socket.once("timeout", () => done(false));
-    socket.once("error", () => done(false));
+    socket.once('connect', () => done(true));
+    socket.once('timeout', () => done(false));
+    socket.once('error', () => done(false));
   });
 }
 
@@ -100,7 +100,7 @@ function pendingCall(
 const toolResult = (
   toolCallId: string,
   toolName: string,
-  text = "ok",
+  text = 'ok',
 ): ToolResultInfo => ({
   toolCallId,
   toolName,
@@ -108,61 +108,61 @@ const toolResult = (
   isError: false,
 });
 
-test("per-session bridge isolation and cleanup on stop / idle prune", async () => {
+test('per-session bridge isolation and cleanup on stop / idle prune', async () => {
   const managerA = new SessionManager();
   const managerB = new SessionManager();
 
   // --- each session gets its own bridge port and token ---
-  const a = new AcpSession("/tmp");
-  const b = new AcpSession("/tmp");
+  const a = new AcpSession('/tmp');
+  const b = new AcpSession('/tmp');
   const bridgeA = await attachBridge(a);
   const bridgeB = await attachBridge(b);
 
   assert(
     bridgeA.port !== bridgeB.port,
-    "concurrent sessions listen on different ports",
+    'concurrent sessions listen on different ports',
   );
   assert(
     bridgeA.token !== bridgeB.token,
-    "concurrent sessions use different bearer tokens",
+    'concurrent sessions use different bearer tokens',
   );
-  assert(a.id !== b.id, "sessions have distinct ids");
-  assert(await isListening(bridgeA.port), "session A bridge is listening");
-  assert(await isListening(bridgeB.port), "session B bridge is listening");
+  assert(a.id !== b.id, 'sessions have distinct ids');
+  assert(await isListening(bridgeA.port), 'session A bridge is listening');
+  assert(await isListening(bridgeB.port), 'session B bridge is listening');
 
   // --- tool-call ids are namespaced per session ---
-  const callA = pendingCall(a, 1, "web_search");
+  const callA = pendingCall(a, 1, 'web_search');
   assert(
     callA.callId.startsWith(`${a.id}-`),
-    "pending tool call ids carry the session prefix",
+    'pending tool call ids carry the session prefix',
   );
 
   // A result minted by another session must not be matched by name.
-  a.deliverToolResults([toolResult(`${b.id}-1`, "web_search")]);
+  a.deliverToolResults([toolResult(`${b.id}-1`, 'web_search')]);
   assert(
     a.pendingToolCalls.size === 1,
     "a foreign-prefixed tool result cannot resolve another session's call",
   );
 
   // Own-prefixed but unknown id falls back to a unique name match (image-follow-up case).
-  a.deliverToolResults([toolResult(`${a.id}-99`, "web_search", "delivered")]);
+  a.deliverToolResults([toolResult(`${a.id}-99`, 'web_search', 'delivered')]);
   const deliveredA = await callA.settled;
   assert(
-    deliveredA.result === "delivered",
-    "own-prefixed id resolves via unique tool-name match",
+    deliveredA.result === 'delivered',
+    'own-prefixed id resolves via unique tool-name match',
   );
-  assert(a.pendingToolCalls.size === 0, "resolved calls leave the pending map");
+  assert(a.pendingToolCalls.size === 0, 'resolved calls leave the pending map');
 
   // matchingToolResults is what routeSession uses to pick a resumption target.
-  const callB = pendingCall(b, 1, "web_search");
+  const callB = pendingCall(b, 1, 'web_search');
   assert(
-    b.matchingToolResults([toolResult(callB.callId, "web_search")]).length ===
+    b.matchingToolResults([toolResult(callB.callId, 'web_search')]).length ===
       1,
-    "own tool result matches its session",
+    'own tool result matches its session',
   );
   assert(
-    b.matchingToolResults([toolResult(`${a.id}-1`, "web_search")]).length === 0,
-    "foreign tool result matches no session",
+    b.matchingToolResults([toolResult(`${a.id}-1`, 'web_search')]).length === 0,
+    'foreign tool result matches no session',
   );
 
   // --- stop() closes the bridge and settles everything in flight ---
@@ -172,20 +172,20 @@ test("per-session bridge isolation and cleanup on stop / idle prune", async () =
       reject: resolve,
       timer: null,
       startedAt: Date.now(),
-      method: "session/prompt",
+      method: 'session/prompt',
     } as any);
   });
 
   await b.stop();
   const settledB = await callB.settled;
-  assert(settledB.isError === true, "pending tool calls are failed on stop");
+  assert(settledB.isError === true, 'pending tool calls are failed on stop');
   assert(
     /Shutting down/.test(settledB.result),
-    "stopped calls report shutdown",
+    'stopped calls report shutdown',
   );
   assert(
     /Stopped/.test((await rejected).message),
-    "in-flight RPCs are rejected on stop",
+    'in-flight RPCs are rejected on stop',
   );
   assert(b.toolBridge === null, "stop clears the session's bridge reference");
   assert(await waitForPortClosed(bridgeB.port), "stop closes session B's port");
@@ -198,22 +198,22 @@ test("per-session bridge isolation and cleanup on stop / idle prune", async () =
   assert(await waitForPortClosed(bridgeA.port), "stop closes session A's port");
 
   // --- idle prune closes bridges of sessions it drops ---
-  const routed = await managerA.routeSession(emptyContext, { cwd: "/tmp" });
+  const routed = await managerA.routeSession(emptyContext, { cwd: '/tmp' });
   const bridgeC = await attachBridge(routed.session);
   routed.session.lastUsedAt = Date.now() - 60_000;
   managerA.pruneIdleSessions(1000);
   assert(
     await waitForPortClosed(bridgeC.port),
-    "pruned idle sessions release their port",
+    'pruned idle sessions release their port',
   );
 
   // --- stopAllSessions leaves nothing behind ---
-  const routed2 = await managerA.routeSession(emptyContext, { cwd: "/tmp" });
+  const routed2 = await managerA.routeSession(emptyContext, { cwd: '/tmp' });
   const bridgeD = await attachBridge(routed2.session);
   await managerA.stopAllSessions();
   assert(
     await waitForPortClosed(bridgeD.port),
-    "stopAllSessions releases every port",
+    'stopAllSessions releases every port',
   );
 
   // --- shared provider routing preserves extension-instance ownership ---
@@ -222,27 +222,27 @@ test("per-session bridge isolation and cleanup on stop / idle prune", async () =
   const unusedPi = {} as unknown as ExtensionAPI;
   const runtimeA = { pi: unusedPi, sessionManager: managerA };
   const runtimeB = { pi: unusedPi, sessionManager: managerB };
-  runtimeRegistry.register("session-a", runtimeA);
-  runtimeRegistry.register("session-b", runtimeB);
+  runtimeRegistry.register('session-a', runtimeA);
+  runtimeRegistry.register('session-b', runtimeB);
   const ownedByA = await runtimeRegistry
-    .resolve("session-a")
-    .sessionManager.routeSession(emptyContext, { cwd: "/tmp/a" });
+    .resolve('session-a')
+    .sessionManager.routeSession(emptyContext, { cwd: '/tmp/a' });
   const ownedByB = await runtimeRegistry
-    .resolve("session-b")
-    .sessionManager.routeSession(emptyContext, { cwd: "/tmp/b" });
+    .resolve('session-b')
+    .sessionManager.routeSession(emptyContext, { cwd: '/tmp/b' });
   const ownedBridgeA = await attachBridge(ownedByA.session);
   const ownedBridgeB = await attachBridge(ownedByB.session);
 
-  runtimeRegistry.unregister("session-a", runtimeA);
+  runtimeRegistry.unregister('session-a', runtimeA);
 
   await managerA.stopAllSessions();
   assert(
     await waitForPortClosed(ownedBridgeA.port),
-    "manager shutdown closes its own session",
+    'manager shutdown closes its own session',
   );
   assert(
-    runtimeRegistry.resolve("session-b") === runtimeB,
-    "shared provider routing keeps the surviving session owner",
+    runtimeRegistry.resolve('session-b') === runtimeB,
+    'shared provider routing keeps the surviving session owner',
   );
   assert(
     await isListening(ownedBridgeB.port),
@@ -251,6 +251,6 @@ test("per-session bridge isolation and cleanup on stop / idle prune", async () =
   await managerB.stopAllSessions();
   assert(
     await waitForPortClosed(ownedBridgeB.port),
-    "second manager can shut down its surviving session",
+    'second manager can shut down its surviving session',
   );
 });

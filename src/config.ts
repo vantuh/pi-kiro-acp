@@ -1,6 +1,6 @@
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 
 interface KiroAcpConfig {
   logger?: {
@@ -17,12 +17,12 @@ interface KiroAcpConfig {
   };
 }
 
-const CONFIG_PATH = join(homedir(), ".pi", "agent", "kiro-acp.json");
+const CONFIG_PATH = join(homedir(), '.pi', 'agent', 'kiro-acp.json');
 
 /** Reads ~/.pi/agent/kiro-acp.json; empty object when missing/invalid. */
 export function loadKiroAcpConfig(): KiroAcpConfig {
   try {
-    return JSON.parse(readFileSync(CONFIG_PATH, "utf-8")) as KiroAcpConfig;
+    return JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as KiroAcpConfig;
   } catch {
     return {};
   }
@@ -53,7 +53,7 @@ export function resolveUsageFooterConfig(
   const enabled = config.usageFooter?.enabled;
   const pollMinutes = Number(config.usageFooter?.pollMinutes);
   return {
-    enabled: typeof enabled === "boolean" ? enabled : false,
+    enabled: typeof enabled === 'boolean' ? enabled : false,
     pollMinutes:
       Number.isFinite(pollMinutes) && pollMinutes > 0 ? pollMinutes : 10,
   };

@@ -1,6 +1,6 @@
-import { KIRO_MODELS, type KiroModelConfig } from "./fallback.ts";
-import { normalizeDiscoveredModel, dedupeModels } from "./normalize.ts";
-import { DiscoveryClient } from "./discovery-client.ts";
+import { DiscoveryClient } from './discovery-client.ts';
+import { KIRO_MODELS, type KiroModelConfig } from './fallback.ts';
+import { normalizeDiscoveredModel, dedupeModels } from './normalize.ts';
 
 export async function discoverKiroModels(
   cwd = process.cwd(),
@@ -9,17 +9,17 @@ export async function discoverKiroModels(
   try {
     await client.start();
     await client.request(
-      "initialize",
+      'initialize',
       {
         protocolVersion: 1,
         clientCapabilities: {},
-        clientInfo: { name: "pi-kiro-acp-model-discovery", version: "1.0.0" },
+        clientInfo: { name: 'pi-kiro-acp-model-discovery', version: '1.0.0' },
       },
       30000,
     );
 
     const session = (await client.request(
-      "session/new",
+      'session/new',
       { cwd, mcpServers: [] },
       30000,
     )) as any;

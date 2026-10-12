@@ -1,37 +1,39 @@
-import { execFile, spawn, type ChildProcess } from "node:child_process";
-import { createHash, randomBytes } from "node:crypto";
-import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   createInterface,
   type Interface as ReadlineInterface,
-} from "node:readline";
-import { tmpdir } from "node:os";
-import type { SimpleStreamOptions } from "@earendil-works/pi-ai";
-import { KIRO_THINKING_LEVEL_MAP } from "./models/fallback.ts";
-import { stableJson, sumMeteringCredits } from "./helpers.ts";
-import { log, msSince } from "./logging.ts";
-import { loadKiroAcpConfig, resolveLoggerConfig } from "./config.ts";
-import { getDescendantPids, terminateProcessTree } from "./process-utils.ts";
+} from 'node:readline';
+
+import type { SimpleStreamOptions } from '@earendil-works/pi-ai';
+
+import { loadKiroAcpConfig, resolveLoggerConfig } from './config.ts';
+import { stableJson, sumMeteringCredits } from './helpers.ts';
+import { log, msSince } from './logging.ts';
+import { KIRO_THINKING_LEVEL_MAP } from './models/fallback.ts';
+import {
+  isPiHostPermission,
+  kiroToolIdentity,
+  pickPermissionOptionId,
+} from './permissions.ts';
+import { getDescendantPids, terminateProcessTree } from './process-utils.ts';
 import {
   agentConfigFingerprint,
   canRestorePersisted,
   clearPersistedKiroSession,
   loadPersistedKiroSession,
-} from "./session-persistence.ts";
+} from './session-persistence.ts';
 import {
   startToolBridge,
   type ToolBridge,
   type ToolBridgeCall,
   type ToolBridgeContent,
   type ToolBridgeResult,
-} from "./tool-bridge.ts";
-import {
-  isPiHostPermission,
-  kiroToolIdentity,
-  pickPermissionOptionId,
-} from "./permissions.ts";
-import type { ForwardedToolCatalog } from "./tool-catalog.ts";
+} from './tool-bridge.ts';
+import type { ForwardedToolCatalog } from './tool-catalog.ts';
 import type {
   PendingRpc,
   PendingToolCall,
@@ -39,14 +41,14 @@ import type {
   SessionUpdate,
   ToolResultContentBlock,
   ToolResultInfo,
-} from "./types.ts";
+} from './types.ts';
 
 interface StartPromptOptions {
   expectedHistoryFingerprint?: string;
   replayUserMessage?: string;
 }
 
-type KiroEffort = "low" | "medium" | "high" | "xhigh" | "max";
+type KiroEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** Builds the current tool catalog exposed to Kiro via pi_host. */
 type CatalogProvider = () => ForwardedToolCatalog;
@@ -58,10 +60,10 @@ const KIRO_VERBOSITY = resolveLoggerConfig(loadKiroAcpConfig()).verbose;
 
 /** kiro-cli colours its verbose output; keep the debug log readable. */
 // ESC comes from its code point so the pattern carries no control character.
-const ANSI_SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g");
+const ANSI_SGR_RE = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g');
 
 function stripAnsi(text: string): string {
-  return text.replace(ANSI_SGR_RE, "");
+  return text.replace(ANSI_SGR_RE, '');
 }
 
 /** Process-wide: kiro-cli settings are global; configure once per pi process.
@@ -113,9 +115,9 @@ function effortCommandReplyGraceMs(): number {
 
 /** Literal openings of the replies kiro's ACP layer produces for `/effort`. */
 const EFFORT_COMMAND_REPLY_PREFIXES = [
-  "Effort set to",
-  "Effort is not available",
-  "invalid effort level",
+  'Effort set to',
+  'Effort is not available',
+  'invalid effort level',
 ] as const;
 
 /** Cap on the reply text captured while a command is in flight: the reply is
@@ -123,7 +125,7 @@ const EFFORT_COMMAND_REPLY_PREFIXES = [
 const EFFORT_COMMAND_REPLY_MAX_CHARS = 1024;
 
 export function toKiroEffort(
-  reasoning: SimpleStreamOptions["reasoning"],
+  reasoning: SimpleStreamOptions['reasoning'],
 ): KiroEffort | null {
   if (!reasoning) return null;
   // Unknown/future reasoning values intentionally fall back to null (unset):
@@ -141,15 +143,15 @@ export function toKiroEffort(
  * has applied. Unrecognized shapes are dropped rather than trusted. */
 function parseKiroReasoning(
   value: unknown,
-): SessionMetadata["reasoning"] | null {
-  if (typeof value !== "object" || value === null) return null;
+): SessionMetadata['reasoning'] | null {
+  if (typeof value !== 'object' || value === null) return null;
   const raw = value as Record<string, unknown>;
-  const support = typeof raw.support === "string" ? raw.support : undefined;
+  const support = typeof raw.support === 'string' ? raw.support : undefined;
   const thinkingEnabled =
-    typeof raw.thinkingEnabled === "boolean" ? raw.thinkingEnabled : undefined;
-  const effort = typeof raw.effort === "string" ? raw.effort : undefined;
+    typeof raw.thinkingEnabled === 'boolean' ? raw.thinkingEnabled : undefined;
+  const effort = typeof raw.effort === 'string' ? raw.effort : undefined;
   const effortLevels = Array.isArray(raw.effortLevels)
-    ? raw.effortLevels.filter((l): l is string => typeof l === "string")
+    ? raw.effortLevels.filter((l): l is string => typeof l === 'string')
     : undefined;
   if (
     support === undefined &&
@@ -170,18 +172,18 @@ function parseKiroReasoning(
  * or "" for any other shape. */
 function chunkTextOf(update: SessionUpdate): string {
   const text = (update.content as { text?: unknown } | undefined)?.text;
-  return typeof text === "string" ? text : "";
+  return typeof text === 'string' ? text : '';
 }
 
 export class AcpSession {
-  readonly id = `s-${randomBytes(4).toString("hex")}`;
+  readonly id = `s-${randomBytes(4).toString('hex')}`;
   cwd: string;
   proc: ChildProcess | null = null;
   rl: ReadlineInterface | null = null;
   rpcId = 0;
   rpcPending = new Map<number, PendingRpc>();
   acpSessionId: string | null = null;
-  /** SHA-256 of last system prompt wrapped into this ACP session; null = not sent yet. */
+  /** SHA-256 of last system prompt wrapped into this ACP session; null = not sent. */
   systemPromptHash: string | null = null;
   currentModelId: string | null = null;
   /** Effort kiro's live session currently has. Applied in-band with the
@@ -200,7 +202,7 @@ export class AcpSession {
   suppressCommandOutput = false;
   /** Text of the chunks dropped by suppressCommandOutput — the command's
    * reply, parsed by syncEffort to confirm the level took effect. */
-  private suppressedCommandText = "";
+  private suppressedCommandText = '';
   /** True once suppressedCommandText hit EFFORT_COMMAND_REPLY_MAX_CHARS:
    * the captured text is then a prefix, not the whole reply. */
   private suppressedCommandTruncated = false;
@@ -227,27 +229,27 @@ export class AcpSession {
   private effortReplyGraceUntil = 0;
   /** Trailing text seen inside the grace window, so a reply split across
    * chunks is still recognised as a command reply. */
-  private effortReplyTail = "";
+  private effortReplyTail = '';
   toolBridge: ToolBridge | null = null;
   catalogProvider: CatalogProvider | null = null;
   private bridgeCallSeq = 0;
   /** Derived agent scratch dir — deterministic from the session id, so no
    * stored state can drift from it and teardown needs only one rmSync. */
   get agentRootPath(): string {
-    return join(tmpdir(), "kiro-acp", `agent-root-${this.id}`);
+    return join(tmpdir(), 'kiro-acp', `agent-root-${this.id}`);
   }
   get agentConfigPath(): string {
     return join(
       this.agentRootPath,
-      ".kiro",
-      "agents",
+      '.kiro',
+      'agents',
       `${this.agentName}.json`,
     );
   }
   /** Agent name derives from the persisted-session identity when one exists:
    * a Kiro session binds the agent name captured at its creation and
    * `session/load` re-resolves it. A random per-process name can never
-   * resolve in a later process (the config lived in another temp root), so
+   * resolve in a subsequent process (the config lived in another temp root), so
    * every cross-restart resume fell back to kiro_default and was abandoned
    * into a full replay. A stable name lets the next process rewrite the
    * identical config under the same name and restore cleanly. Sessions
@@ -258,8 +260,8 @@ export class AcpSession {
   get agentName(): string {
     if (this.#agentName === null) {
       this.#agentName = this.persistenceKey
-        ? `pi-kiro-${createHash("sha256").update(this.persistenceKey).digest("hex").slice(0, 8)}`
-        : `pi-kiro-${randomBytes(4).toString("hex")}`;
+        ? `pi-kiro-${createHash('sha256').update(this.persistenceKey).digest('hex').slice(0, 8)}`
+        : `pi-kiro-${randomBytes(4).toString('hex')}`;
     }
     return this.#agentName;
   }
@@ -346,13 +348,13 @@ export class AcpSession {
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.proc?.stdin?.writable)
-        return reject(new Error("kiro-cli not running"));
+        return reject(new Error('kiro-cli not running'));
       const id = this.rpcId++;
       const timer =
         timeoutMs > 0
           ? setTimeout(() => {
               this.rpcPending.delete(id);
-              log("RPC TIMEOUT", {
+              log('RPC TIMEOUT', {
                 session: this.id,
                 method,
                 id,
@@ -370,9 +372,9 @@ export class AcpSession {
         method,
       });
       this.proc.stdin.write(
-        JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n",
+        JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n',
       );
-      log("rpc →", {
+      log('rpc →', {
         session: this.id,
         method,
         id,
@@ -385,7 +387,7 @@ export class AcpSession {
   rpcNotify(method: string, params: unknown): void {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.write(
-        JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n",
+        JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n',
       );
     }
   }
@@ -393,7 +395,7 @@ export class AcpSession {
   rpcRespond(id: number, result: unknown): void {
     if (this.proc?.stdin?.writable) {
       this.proc.stdin.write(
-        JSON.stringify({ jsonrpc: "2.0", id, result }) + "\n",
+        JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n',
       );
     }
   }
@@ -408,9 +410,9 @@ export class AcpSession {
       // With logger.verbose, kiro-cli's own -v logs land on this same
       // stdout pipe; keep them in full instead of as truncated parse errors.
       if (KIRO_VERBOSITY > 0)
-        log("kiro log", { session: this.id, text: stripAnsi(s) });
+        log('kiro log', { session: this.id, text: stripAnsi(s) });
       else
-        log("stdout parse error", { session: this.id, line: s.slice(0, 200) });
+        log('stdout parse error', { session: this.id, line: s.slice(0, 200) });
       return;
     }
 
@@ -419,9 +421,9 @@ export class AcpSession {
     try {
       this.dispatchStdoutMessage(msg);
     } catch (error) {
-      log("stdout dispatch error", {
+      log('stdout dispatch error', {
         session: this.id,
-        method: typeof msg?.method === "string" ? msg.method : undefined,
+        method: typeof msg?.method === 'string' ? msg.method : undefined,
         id: msg?.id,
         error:
           error instanceof Error ? error.stack || error.message : String(error),
@@ -430,13 +432,13 @@ export class AcpSession {
   }
 
   private dispatchStdoutMessage(msg: any): void {
-    const hasId = "id" in msg && msg.id != null;
-    const hasMethod = "method" in msg && typeof msg.method === "string";
+    const hasId = 'id' in msg && msg.id != null;
+    const hasMethod = 'method' in msg && typeof msg.method === 'string';
 
     if (hasId && !hasMethod) {
       const p = this.rpcPending.get(msg.id);
       if (!p) {
-        log("orphan RPC response", {
+        log('orphan RPC response', {
           session: this.id,
           id: msg.id,
           hasError: !!msg.error,
@@ -445,29 +447,29 @@ export class AcpSession {
       }
       if (p.timer) clearTimeout(p.timer);
       this.rpcPending.delete(msg.id);
-      log("rpc ←", {
+      log('rpc ←', {
         session: this.id,
         method: p.method,
         id: msg.id,
         ms: msSince(p.startedAt),
         hasError: !!msg.error,
       });
-      if (msg.error) p.reject(new Error(msg.error.message || "RPC error"));
+      if (msg.error) p.reject(new Error(msg.error.message || 'RPC error'));
       else p.resolve(msg.result);
     } else if (hasId && hasMethod) {
-      if (msg.method === "session/request_permission") {
+      if (msg.method === 'session/request_permission') {
         this.respondToPermissionRequest(msg.id, msg.params);
       } else {
         this.rpcRespond(msg.id, null);
       }
     } else if (hasMethod) {
       if (
-        msg.method === "session/update" ||
-        msg.method === "_kiro.dev/session/update"
+        msg.method === 'session/update' ||
+        msg.method === '_kiro.dev/session/update'
       ) {
         const update = msg.params?.update as SessionUpdate | undefined;
         if (update) {
-          if (update.sessionUpdate === "usage_update") {
+          if (update.sessionUpdate === 'usage_update') {
             this.handleUsageUpdate(update, msg.params?.sessionId);
           }
           // A `/effort` command prompt answers with a normal assistant
@@ -476,12 +478,12 @@ export class AcpSession {
           // never reaches pi's stream or the tool bridge.
           if (
             this.suppressCommandOutput &&
-            (update.sessionUpdate === "agent_message_chunk" ||
-              update.sessionUpdate === "agent_thought_chunk")
+            (update.sessionUpdate === 'agent_message_chunk' ||
+              update.sessionUpdate === 'agent_thought_chunk')
           ) {
             const text = chunkTextOf(update);
             if (text) this.captureCommandReply(text);
-            log("suppressed kiro command output", {
+            log('suppressed kiro command output', {
               session: this.id,
               sessionUpdate: update.sessionUpdate,
               late: false,
@@ -494,11 +496,11 @@ export class AcpSession {
           if (
             !this.suppressCommandOutput &&
             this.inEffortReplyGrace() &&
-            (update.sessionUpdate === "agent_message_chunk" ||
-              update.sessionUpdate === "agent_thought_chunk") &&
+            (update.sessionUpdate === 'agent_message_chunk' ||
+              update.sessionUpdate === 'agent_thought_chunk') &&
             this.isLateCommandReply(chunkTextOf(update))
           ) {
-            log("suppressed kiro command output", {
+            log('suppressed kiro command output', {
               session: this.id,
               sessionUpdate: update.sessionUpdate,
               late: true,
@@ -507,11 +509,11 @@ export class AcpSession {
           }
           this.updateHandler?.(update);
         }
-      } else if (msg.method === "_kiro.dev/metadata") {
+      } else if (msg.method === '_kiro.dev/metadata') {
         this.handleMetadata(msg.params || {});
-      } else if (msg.method === "_kiro.dev/commands/available") {
+      } else if (msg.method === '_kiro.dev/commands/available') {
         this.handleCommandsAvailable(msg.params || {});
-      } else if (msg.method === "_kiro.dev/agent/not_found") {
+      } else if (msg.method === '_kiro.dev/agent/not_found') {
         // kiro-cli fell back to kiro_default (all builtins, wrong prompt).
         // The tools-list handler will quarantine the backend; a bounded
         // restart heals transient discovery failures (the config is
@@ -520,7 +522,7 @@ export class AcpSession {
         this.recoveryPending = true;
         this.agentFallbackDetected = true;
         this.hazardGeneration++;
-        log("KIRO AGENT NOT FOUND — kiro-cli fell back", {
+        log('KIRO AGENT NOT FOUND — kiro-cli fell back', {
           session: this.id,
           requestedAgent: msg.params?.requestedAgent ?? null,
           fallbackAgent: msg.params?.fallbackAgent ?? null,
@@ -541,7 +543,7 @@ export class AcpSession {
     const allow = isPiHostPermission(params, this.forwardedKiroNames());
     const optionId = pickPermissionOptionId(options, allow);
     const { toolName, mcpServer } = kiroToolIdentity(params);
-    log("permission request", {
+    log('permission request', {
       session: this.id,
       allow,
       toolName: toolName ?? null,
@@ -552,8 +554,8 @@ export class AcpSession {
     this.rpcRespond(
       id,
       optionId
-        ? { outcome: { outcome: "selected", optionId } }
-        : { outcome: { outcome: "cancelled" } },
+        ? { outcome: { outcome: 'selected', optionId } }
+        : { outcome: { outcome: 'cancelled' } },
     );
   }
 
@@ -566,7 +568,7 @@ export class AcpSession {
     // Scope to the current ACP session when both ids are known: late
     // notifications from a prior session must not flip quarantine state.
     const sessionId =
-      typeof params.sessionId === "string" ? params.sessionId : undefined;
+      typeof params.sessionId === 'string' ? params.sessionId : undefined;
     if (sessionId && this.acpSessionId && sessionId !== this.acpSessionId)
       return;
     // Malformed or absent tools payloads are never authoritative: they must
@@ -574,10 +576,10 @@ export class AcpSession {
     if (!Array.isArray(params.tools)) return;
     const seen = (params.tools as any[])
       .map((t: any) =>
-        typeof t?.name === "string"
+        typeof t?.name === 'string'
           ? {
               name: t.name,
-              source: typeof t?.source === "string" ? t.source : "unknown",
+              source: typeof t?.source === 'string' ? t.source : 'unknown',
             }
           : null,
       )
@@ -597,9 +599,9 @@ export class AcpSession {
     if (fingerprint === this.lastToolsListFingerprint) return;
     this.lastToolsListFingerprint = fingerprint;
     const builtins = seen
-      .filter((t) => t.source === "built-in")
+      .filter((t) => t.source === 'built-in')
       .map((t) => t.name);
-    log("model-visible tools", {
+    log('model-visible tools', {
       session: this.id,
       count: seen.length,
       builtins: builtins.length > 0 ? builtins : undefined,
@@ -617,7 +619,7 @@ export class AcpSession {
       // A clean list on the same process (e.g. a fresh session/new after a
       // leaked restore) means the current backend is sound again — lift the
       // quarantine so persistence resumes for the new snapshot.
-      log("model-visible tools clean — leak quarantine lifted", {
+      log('model-visible tools clean — leak quarantine lifted', {
         session: this.id,
       });
       this.recoveryPending = false;
@@ -637,7 +639,7 @@ export class AcpSession {
     // suppressed for it (stream.ts), otherwise the leaked snapshot would be
     // re-saved with the current config fingerprint and resumed forever.
     this.backendQuarantined = true;
-    log("KIRO BUILTINS LEAKED into the model tool list", {
+    log('KIRO BUILTINS LEAKED into the model tool list', {
       session: this.id,
       builtins,
     });
@@ -649,14 +651,14 @@ export class AcpSession {
     updateSessionId: unknown,
   ): void {
     const sessionId =
-      typeof updateSessionId === "string" ? updateSessionId : this.acpSessionId;
+      typeof updateSessionId === 'string' ? updateSessionId : this.acpSessionId;
     if (!sessionId) return;
     if (this.acpSessionId && sessionId !== this.acpSessionId) return;
 
     const contextUsed =
-      typeof update.used === "number" ? update.used : undefined;
+      typeof update.used === 'number' ? update.used : undefined;
     const contextSize =
-      typeof update.size === "number" && update.size > 0
+      typeof update.size === 'number' && update.size > 0
         ? update.size
         : undefined;
     if (contextUsed === undefined || contextSize === undefined) return;
@@ -664,8 +666,8 @@ export class AcpSession {
     const rawCost = update.cost as Record<string, unknown> | null | undefined;
     const sessionCost =
       rawCost &&
-      typeof rawCost.amount === "number" &&
-      typeof rawCost.currency === "string"
+      typeof rawCost.amount === 'number' &&
+      typeof rawCost.currency === 'string'
         ? { amount: rawCost.amount, currency: rawCost.currency }
         : undefined;
 
@@ -677,7 +679,7 @@ export class AcpSession {
       contextSize,
       ...(update.cost !== undefined ? { sessionCost } : {}),
     };
-    log("ACP usage update", {
+    log('ACP usage update', {
       session: this.id,
       acpSessionId: sessionId,
       contextUsed,
@@ -688,30 +690,30 @@ export class AcpSession {
 
   private handleMetadata(params: Record<string, unknown>): void {
     const sessionId =
-      typeof params.sessionId === "string"
+      typeof params.sessionId === 'string'
         ? params.sessionId
         : this.acpSessionId;
     if (!sessionId) return;
     if (this.acpSessionId && sessionId !== this.acpSessionId) return;
 
     const contextUsagePercentage =
-      typeof params.contextUsagePercentage === "number"
+      typeof params.contextUsagePercentage === 'number'
         ? params.contextUsagePercentage
         : undefined;
     const turnDurationMs =
-      typeof params.turnDurationMs === "number"
+      typeof params.turnDurationMs === 'number'
         ? params.turnDurationMs
         : undefined;
     const meteringUsage = Array.isArray(params.meteringUsage)
       ? params.meteringUsage
           .filter(
             (m: any) =>
-              typeof m?.unit === "string" && typeof m?.value === "number",
+              typeof m?.unit === 'string' && typeof m?.value === 'number',
           )
           .map((m: any) => ({
             unit: m.unit,
             unitPlural:
-              typeof m.unitPlural === "string" ? m.unitPlural : undefined,
+              typeof m.unitPlural === 'string' ? m.unitPlural : undefined,
             value: m.value,
           }))
       : undefined;
@@ -725,7 +727,7 @@ export class AcpSession {
       // worth a log line.
       if (fingerprint !== this.lastReasoningFingerprint) {
         this.lastReasoningFingerprint = fingerprint;
-        log("kiro reasoning", { session: this.id, reasoning });
+        log('kiro reasoning', { session: this.id, reasoning });
       }
       // The level pi asked for only becomes true when kiro reports it, so a
       // difference here is the one signal that /effort did not take — but
@@ -746,7 +748,7 @@ export class AcpSession {
           const fingerprint = `${this.desiredEffort}->${reasoning.effort}`;
           if (fingerprint !== this.lastEffortMismatchFingerprint) {
             this.lastEffortMismatchFingerprint = fingerprint;
-            log("kiro effort mismatch", {
+            log('kiro effort mismatch', {
               session: this.id,
               desired: this.desiredEffort,
               reported: reasoning.effort,
@@ -770,7 +772,7 @@ export class AcpSession {
       meteringUsage: meteringUsage ?? this.metadata?.meteringUsage,
       turnDurationMs: turnDurationMs ?? this.metadata?.turnDurationMs,
     };
-    log("kiro metadata", {
+    log('kiro metadata', {
       session: this.id,
       acpSessionId: sessionId,
       contextUsagePercentage,
@@ -780,7 +782,7 @@ export class AcpSession {
     try {
       this.onMetadata?.(this.metadata);
     } catch (error) {
-      log("onMetadata handler failed", {
+      log('onMetadata handler failed', {
         session: this.id,
         error: error instanceof Error ? error.message : String(error),
       });
@@ -801,7 +803,7 @@ export class AcpSession {
         // A `/effort` prompt is a session/prompt: kiro rejects it mid-turn.
         // startPrompt re-syncs before its real prompt on the next turn.
         this.effortReconcilePending = true;
-        log("deferring effort change while session is busy", {
+        log('deferring effort change while session is busy', {
           session: this.id,
           currentEffort: this.currentEffort,
           requestedEffort: this.desiredEffort,
@@ -817,7 +819,7 @@ export class AcpSession {
       // two-attempt bound absorbs deterministic failures without looping —
       // also covering a future CLI that leaks builtins into fresh sessions.
       if (this.busy) {
-        log("deferring leaked-builtins restart while session is busy", {
+        log('deferring leaked-builtins restart while session is busy', {
           session: this.id,
         });
       } else if (this.recoveryRestarts >= 2) {
@@ -825,14 +827,14 @@ export class AcpSession {
         // stop looping, keep the session degraded but visible. Persistence
         // stays suppressed via the quarantine flag.
         log(
-          "GIVING UP on leak/fallback recovery after two restarts — session degraded",
+          'GIVING UP on leak/fallback recovery after two restarts — session degraded',
           {
             session: this.id,
           },
         );
         this.recoveryPending = false;
       } else {
-        log("restarting Kiro: leaked builtins or agent fallback", {
+        log('restarting Kiro: leaked builtins or agent fallback', {
           session: this.id,
           attempt: this.recoveryRestarts + 1,
         });
@@ -858,7 +860,7 @@ export class AcpSession {
     // tools. configureMcpTimeout never rejects (execFile errors are swallowed).
     const mcpCfgPromise = this.configureMcpTimeout();
 
-    log("starting kiro session", {
+    log('starting kiro session', {
       session: this.id,
       cwd: this.cwd,
       agentRootPath: this.agentRootPath,
@@ -870,49 +872,49 @@ export class AcpSession {
     // pi_host tools/call. `--trust-tools=@pi_host` plus deny-by-default in
     // session/request_permission is the execution gate.
     const args = [
-      "acp",
-      "--agent",
+      'acp',
+      '--agent',
       this.agentName,
-      "--trust-tools",
-      "@pi_host",
+      '--trust-tools',
+      '@pi_host',
     ];
     // No `--effort` flag: kiro-cli 2.24.1 silently drops it unless the process
     // also fixes `--model` (session model `auto`), and it warns on every
     // start. The level is applied in-band by syncEffort instead.
-    if (KIRO_VERBOSITY > 0) args.push(`-${"v".repeat(KIRO_VERBOSITY)}`);
+    if (KIRO_VERBOSITY > 0) args.push(`-${'v'.repeat(KIRO_VERBOSITY)}`);
     const spawnAt = Date.now();
-    this.proc = spawn("kiro-cli", args, {
+    this.proc = spawn('kiro-cli', args, {
       cwd: this.agentRootPath,
-      stdio: ["pipe", "pipe", "pipe"],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     this.rl = createInterface({ input: this.proc.stdout! });
-    this.rl.on("line", (line) => this.handleStdoutLine(line));
-    this.proc.stderr?.on("data", (chunk) => {
-      for (const text of String(chunk).split("\n")) {
+    this.rl.on('line', (line) => this.handleStdoutLine(line));
+    this.proc.stderr?.on('data', (chunk) => {
+      for (const text of String(chunk).split('\n')) {
         if (text.trim())
-          log("kiro stderr", { session: this.id, text: stripAnsi(text) });
+          log('kiro stderr', { session: this.id, text: stripAnsi(text) });
       }
     });
 
-    this.proc.on("exit", (code, signal) => {
-      log("kiro exited", { session: this.id, code, signal });
+    this.proc.on('exit', (code, signal) => {
+      log('kiro exited', { session: this.id, code, signal });
       this.cleanupAfterProcessExit();
     });
 
     const init = (await this.rpcSend(
-      "initialize",
+      'initialize',
       {
         protocolVersion: 1,
         clientCapabilities: {},
-        clientInfo: { name: "pi-kiro-acp", version: "1.0.0" },
+        clientInfo: { name: 'pi-kiro-acp', version: '1.0.0' },
       },
       30000,
     )) as any;
     const initDoneAt = Date.now();
     const mcpCfgMs = await mcpCfgPromise;
     this.agentCapabilities = init?.agentCapabilities || null;
-    log("session initialized", {
+    log('session initialized', {
       session: this.id,
       bridgePort: this.toolBridge?.port ?? null,
       pid: this.proc?.pid,
@@ -972,11 +974,11 @@ export class AcpSession {
     try {
       if (level === this.currentEffort) return;
       if (level === null) {
-        log("resetting Kiro effort", {
+        log('resetting Kiro effort', {
           session: this.id,
           from: this.currentEffort,
           // Why a restart: /effort only sets a level.
-          reason: "kiro has no in-band effort clear",
+          reason: 'kiro has no in-band effort clear',
         });
         await this.stop();
         return;
@@ -985,15 +987,15 @@ export class AcpSession {
       const sentAt = Date.now();
       this.effortCommandInFlight = true;
       this.suppressCommandOutput = true;
-      this.suppressedCommandText = "";
+      this.suppressedCommandText = '';
       this.suppressedCommandTruncated = false;
       let reply: string;
       try {
         await this.rpcSend(
-          "session/prompt",
+          'session/prompt',
           {
             sessionId: this.acpSessionId,
-            prompt: [{ type: "text", text: `/effort ${level}` }],
+            prompt: [{ type: 'text', text: `/effort ${level}` }],
           },
           effortCommandTimeoutMs(),
         );
@@ -1001,7 +1003,7 @@ export class AcpSession {
       } catch (error) {
         // Timeout, dead process, or a failed write: currentEffort is left
         // alone, so the next turn re-sends the command.
-        log("effort not applied", {
+        log('effort not applied', {
           session: this.id,
           level,
           commandMs: msSince(sentAt),
@@ -1013,10 +1015,10 @@ export class AcpSession {
         // cannot leave the session dropping model output forever. The grace
         // window covers a reply chunk that lands after the RPC result.
         this.suppressCommandOutput = false;
-        this.suppressedCommandText = "";
+        this.suppressedCommandText = '';
         this.suppressedCommandTruncated = false;
         this.effortCommandInFlight = false;
-        this.effortReplyTail = "";
+        this.effortReplyTail = '';
         this.effortReplyGraceUntil = Date.now() + effortCommandReplyGraceMs();
       }
 
@@ -1025,9 +1027,9 @@ export class AcpSession {
       // the change (unsupported model, or the command changed shape).
       if (/^Effort set to\b/.test(reply)) {
         this.currentEffort = level;
-        log("effort applied", { session: this.id, level });
+        log('effort applied', { session: this.id, level });
       } else {
-        log("effort not applied", {
+        log('effort not applied', {
           session: this.id,
           level,
           kiroReply: reply || null,
@@ -1048,7 +1050,7 @@ export class AcpSession {
     if (text.length > room) {
       this.suppressedCommandText += text.slice(0, Math.max(0, room));
       this.suppressedCommandTruncated = true;
-      log("effort command reply truncated", {
+      log('effort command reply truncated', {
         session: this.id,
         maxChars: EFFORT_COMMAND_REPLY_MAX_CHARS,
       });
@@ -1072,7 +1074,7 @@ export class AcpSession {
     const isReply = EFFORT_COMMAND_REPLY_PREFIXES.some(
       (prefix) => prefix.startsWith(head) || head.startsWith(prefix),
     );
-    this.effortReplyTail = isReply ? head.slice(-16) : "";
+    this.effortReplyTail = isReply ? head.slice(-16) : '';
     return isReply;
   }
 
@@ -1082,34 +1084,34 @@ export class AcpSession {
    * failure simply retries on the next cold start. */
   private configureMcpTimeout(): Promise<number> {
     if (mcpNoInteractiveTimeoutReady) {
-      log("skipped mcp.noInteractiveTimeout (already configured)", {
+      log('skipped mcp.noInteractiveTimeout (already configured)', {
         session: this.id,
       });
       return Promise.resolve(0);
     }
     if (mcpNoInteractiveTimeoutInFlight) {
-      log("skipped mcp.noInteractiveTimeout (in flight)", { session: this.id });
+      log('skipped mcp.noInteractiveTimeout (in flight)', { session: this.id });
       return mcpNoInteractiveTimeoutInFlight.then(() => 0);
     }
     const startedAt = Date.now();
     mcpNoInteractiveTimeoutInFlight = new Promise<void>((resolve) => {
       execFile(
-        "kiro-cli",
+        'kiro-cli',
         [
-          "settings",
-          "mcp.noInteractiveTimeout",
+          'settings',
+          'mcp.noInteractiveTimeout',
           String(MCP_NO_INTERACTIVE_TIMEOUT_MS),
         ],
         { timeout: 5000 },
         (error) => {
           if (error) {
-            log("failed to configure mcp.noInteractiveTimeout", {
+            log('failed to configure mcp.noInteractiveTimeout', {
               session: this.id,
               error: error instanceof Error ? error.message : String(error),
             });
           } else {
             mcpNoInteractiveTimeoutReady = true;
-            log("configured mcp.noInteractiveTimeout", {
+            log('configured mcp.noInteractiveTimeout', {
               session: this.id,
               ms: MCP_NO_INTERACTIVE_TIMEOUT_MS,
             });
@@ -1148,7 +1150,7 @@ export class AcpSession {
     const canUsePersisted = restore.canUse;
 
     if (persisted && !canUsePersisted) {
-      log("persisted kiro session fingerprint mismatch", {
+      log('persisted kiro session fingerprint mismatch', {
         session: this.id,
         key: this.persistenceKey,
         kiroSessionId: persisted.kiroSessionId,
@@ -1170,13 +1172,13 @@ export class AcpSession {
     }
 
     if (!this.acpSessionId) {
-      const result = (await this.rpcSend("session/new", {
+      const result = (await this.rpcSend('session/new', {
         cwd: this.cwd,
         mcpServers: this.mcpServersConfig(),
       })) as any;
       this.acpSessionId = result.sessionId;
       this.systemPromptHash = null;
-      log("acp session/new", {
+      log('acp session/new', {
         session: this.id,
         acpSessionId: this.acpSessionId,
         replayHistory: shouldReplayHistory,
@@ -1194,10 +1196,10 @@ export class AcpSession {
     // those notifications set directly.
     const attempts = [
       {
-        method: "session/resume" as const,
+        method: 'session/resume' as const,
         enabled: this.supportsResumeSession(),
       },
-      { method: "session/load" as const, enabled: this.supportsLoadSession() },
+      { method: 'session/load' as const, enabled: this.supportsLoadSession() },
     ].filter((attempt) => attempt.enabled);
 
     for (let i = 0; i < attempts.length; i++) {
@@ -1229,7 +1231,7 @@ export class AcpSession {
           this.backendQuarantined
         ) {
           log(
-            "abandoning restored kiro session — leak/fallback during restore",
+            'abandoning restored kiro session — leak/fallback during restore',
             {
               session: this.id,
               method: attempt.method,
@@ -1238,7 +1240,7 @@ export class AcpSession {
           );
           // The snapshot can never resume cleanly once its recorded agent
           // name stops resolving: kiro-cli falls back to kiro_default for
-          // that session again on every later restore (a name recorded
+          // that session again on every subsequent restore (a name recorded
           // under another persistence key cannot be found here).
           if (this.persistenceKey)
             clearPersistedKiroSession(this.persistenceKey);
@@ -1248,7 +1250,7 @@ export class AcpSession {
         this.acpSessionId = kiroSessionId;
         // Re-bind current pi instructions after resume/load.
         this.systemPromptHash = null;
-        log("restored persisted kiro session", {
+        log('restored persisted kiro session', {
           session: this.id,
           method: attempt.method,
           acpSessionId: this.acpSessionId,
@@ -1256,7 +1258,7 @@ export class AcpSession {
         return true;
       } catch (error) {
         const isLastAttempt = i === attempts.length - 1;
-        log("failed to restore persisted kiro session", {
+        log('failed to restore persisted kiro session', {
           session: this.id,
           method: attempt.method,
           acpSessionId: kiroSessionId,
@@ -1270,7 +1272,7 @@ export class AcpSession {
       }
     }
 
-    log("persisted kiro session unavailable: restore unsupported", {
+    log('persisted kiro session unavailable: restore unsupported', {
       session: this.id,
       acpSessionId: kiroSessionId,
       loadSession: this.supportsLoadSession(),
@@ -1281,7 +1283,7 @@ export class AcpSession {
 
   private async restartAfterRestoreFailure(): Promise<void> {
     if (!this.started || !this.catalogProvider) return;
-    log("restarting kiro process after failed restore", { session: this.id });
+    log('restarting kiro process after failed restore', { session: this.id });
     const catalogProvider = this.catalogProvider;
     await this.stop();
     await this.ensureStarted(catalogProvider);
@@ -1291,7 +1293,7 @@ export class AcpSession {
     modelId: string,
     systemPrompt: string,
     userMessage: string,
-    images: { type: "image"; data: string; mimeType: string }[] = [],
+    images: { type: 'image'; data: string; mimeType: string }[] = [],
     options: StartPromptOptions = {},
   ): Promise<void> {
     const startPromptAt = Date.now();
@@ -1306,7 +1308,7 @@ export class AcpSession {
     const modelChanged = this.currentModelId !== modelId;
     if (modelChanged) {
       await this.rpcSend(
-        "session/set_model",
+        'session/set_model',
         { sessionId: this.acpSessionId, modelId },
         30000,
       );
@@ -1314,7 +1316,7 @@ export class AcpSession {
       // kiro-cli 2.24.1 clears the session's effort on every set_model, and
       // extra fields on the RPC are ignored — so re-apply it below.
       this.currentEffort = null;
-      log("model set", {
+      log('model set', {
         session: this.id,
         modelId,
         previousModel: previousModelId,
@@ -1357,7 +1359,7 @@ export class AcpSession {
     this.lastPromptError = null;
     this.toolIntakeClosed = false;
     if (this.activePromptDone) {
-      log("startPrompt overlapping an in-flight prompt", {
+      log('startPrompt overlapping an in-flight prompt', {
         session: this.id,
         pendingToolCalls: this.pendingToolCalls.size,
       });
@@ -1370,7 +1372,7 @@ export class AcpSession {
     const clearActivePrompt = (stopReason: string) => {
       if (this.promptSeq !== promptGen) return;
       this.activePromptDone = null;
-      log("active prompt settled", {
+      log('active prompt settled', {
         session: this.id,
         stopReason,
         pendingToolCalls: this.pendingToolCalls.size,
@@ -1379,20 +1381,20 @@ export class AcpSession {
     };
     const promptDone = (
       this.rpcSend(
-        "session/prompt",
+        'session/prompt',
         {
           sessionId: this.acpSessionId,
-          prompt: [{ type: "text", text: promptText }, ...images],
+          prompt: [{ type: 'text', text: promptText }, ...images],
         },
         0,
       ) as Promise<any>
     ).then(
       (r: any) => {
-        clearActivePrompt(r?.stopReason || "end_turn");
-        return { stopReason: r?.stopReason || "end_turn" };
+        clearActivePrompt(r?.stopReason || 'end_turn');
+        return { stopReason: r?.stopReason || 'end_turn' };
       },
       (e: Error) => {
-        clearActivePrompt("error");
+        clearActivePrompt('error');
         this.systemPromptHash = prevSystemPromptHash;
         this.lastPromptError = e;
         throw e;
@@ -1403,7 +1405,7 @@ export class AcpSession {
     promptDone.catch(() => {});
     this.activePromptDone = promptDone;
 
-    log("prompt sent", {
+    log('prompt sent', {
       session: this.id,
       modelId,
       replayHistory: shouldReplayHistory,
@@ -1422,13 +1424,13 @@ export class AcpSession {
   }
 
   private cleanupAfterProcessExit(): void {
-    log("cleanupAfterProcessExit", {
+    log('cleanupAfterProcessExit', {
       session: this.id,
       pendingRpcs: this.rpcPending.size,
       pendingToolCalls: this.pendingToolCalls.size,
       hadActivePrompt: !!this.activePromptDone,
     });
-    this.settlePendingState("kiro-cli exited", "kiro-cli exited");
+    this.settlePendingState('kiro-cli exited', 'kiro-cli exited');
     void this.teardownBridgeAndFiles().catch(() => {});
   }
 
@@ -1449,14 +1451,14 @@ export class AcpSession {
   }
 
   async stop(): Promise<void> {
-    log("stopping kiro session", { session: this.id });
-    this.settlePendingState("Shutting down", "Stopped");
+    log('stopping kiro session', { session: this.id });
+    this.settlePendingState('Shutting down', 'Stopped');
 
     if (this.proc) {
       const p = this.proc;
       const rootPid = p.pid;
       const knownDescendants = rootPid ? getDescendantPids(rootPid) : [];
-      log("stop: killing process tree", {
+      log('stop: killing process tree', {
         session: this.id,
         rootPid,
         descendants: knownDescendants,
@@ -1500,14 +1502,14 @@ export class AcpSession {
     this.lastReasoningFingerprint = null;
     this.lastEffortMismatchFingerprint = null;
     this.suppressCommandOutput = false;
-    this.suppressedCommandText = "";
+    this.suppressedCommandText = '';
     this.suppressedCommandTruncated = false;
     this.effortCommandInFlight = false;
     // A replacement backend has no level either, so the next turn must
     // reconcile (ensureStarted re-arms this from desiredEffort).
     this.effortReconcilePending = false;
     this.effortReplyGraceUntil = 0;
-    this.effortReplyTail = "";
+    this.effortReplyTail = '';
     // The backend is gone: leak state and the tools-list
     // fingerprint belong to it and must not leak into a replacement process.
     // recoveryRestarts is deliberately kept — the restart bound is per
@@ -1563,7 +1565,7 @@ export class AcpSession {
       }
     }
     if (cleared > 0) {
-      log("cleared abandoned tool call records", {
+      log('cleared abandoned tool call records', {
         session: this.id,
         cleared,
         remaining: this.abandonedToolCalls.size,
@@ -1582,7 +1584,7 @@ export class AcpSession {
       if (match) {
         const [callId, call] = match;
         this.pendingToolCalls.delete(callId);
-        log("delivering tool result", {
+        log('delivering tool result', {
           session: this.id,
           callId,
           toolName: call.toolName,
@@ -1594,7 +1596,7 @@ export class AcpSession {
             : {
                 contentBlocks: tr.content?.length ?? 0,
                 imageBlocks:
-                  tr.content?.filter((block) => block.type === "image")
+                  tr.content?.filter((block) => block.type === 'image')
                     .length ?? 0,
               }),
           roundtripMs: msSince(call.receivedAt),
@@ -1605,7 +1607,7 @@ export class AcpSession {
             : { result: tr.text, isError: tr.isError, content: tr.content },
         );
       } else {
-        log("UNMATCHED tool result", {
+        log('UNMATCHED tool result', {
           session: this.id,
           textOnly,
           toolCallId: tr.toolCallId,
@@ -1629,10 +1631,10 @@ export class AcpSession {
     modelId: string,
     systemPrompt: string,
     followupText: string,
-    images: { type: "image"; data: string; mimeType: string }[],
+    images: { type: 'image'; data: string; mimeType: string }[],
     settleTimeoutMs = 15000,
     beforeStart?: () => void,
-    logPrefix = "image FUP",
+    logPrefix = 'image FUP',
   ): Promise<void> {
     const prevPromise = this.activePromptDone;
     // Answer whatever tools/call Kiro still holds *before* cancelling. After the
@@ -1647,7 +1649,7 @@ export class AcpSession {
       await new Promise<void>((r) => setTimeout(r, TOOL_RESULT_DRAIN_MS));
     if (prevPromise) {
       if (this.acpSessionId) {
-        this.rpcNotify("session/cancel", { sessionId: this.acpSessionId });
+        this.rpcNotify('session/cancel', { sessionId: this.acpSessionId });
       }
       log(`${logPrefix}: cancel sent; waiting for old prompt to settle`, {
         session: this.id,
@@ -1691,7 +1693,7 @@ export class AcpSession {
     const calls = [...this.pendingToolCalls.values()];
     if (calls.length === 0) return 0;
     this.pendingToolCalls.clear();
-    log("rejecting pending tool calls", {
+    log('rejecting pending tool calls', {
       session: this.id,
       reason,
       count: calls.length,
@@ -1706,8 +1708,8 @@ export class AcpSession {
   ): [string, PendingToolCall] | null {
     const exact = this.pendingToolCalls.get(tr.toolCallId);
     if (exact) return [tr.toolCallId, exact];
-    if (!tr.toolCallId.startsWith(this.id + "-")) {
-      log("findToolCallMatch: rejecting name-match (foreign toolCallId)", {
+    if (!tr.toolCallId.startsWith(this.id + '-')) {
+      log('findToolCallMatch: rejecting name-match (foreign toolCallId)', {
         session: this.id,
         toolCallId: tr.toolCallId,
         toolName: tr.toolName,
@@ -1722,7 +1724,7 @@ export class AcpSession {
       ([, call]) => call.toolName === tr.toolName && call.emitted,
     );
     if (nameMatches.length > 1)
-      log("ambiguous tool name match", {
+      log('ambiguous tool name match', {
         session: this.id,
         toolName: tr.toolName,
         matchCount: nameMatches.length,
@@ -1741,19 +1743,19 @@ export class AcpSession {
 
   private currentCatalog(): ForwardedToolCatalog {
     if (!this.catalogProvider)
-      throw new Error("kiro-acp: catalog provider not set");
+      throw new Error('kiro-acp: catalog provider not set');
     let catalog: ForwardedToolCatalog;
     try {
       catalog = this.catalogProvider();
     } catch (error) {
-      log("catalog provider threw", {
+      log('catalog provider threw', {
         session: this.id,
         error: error instanceof Error ? error.message : String(error),
       });
       catalog = {
         tools: [],
         piNameByKiroName: new Map(),
-        fingerprint: "",
+        fingerprint: '',
         diagnostics: [
           `catalog provider threw: ${
             error instanceof Error ? error.message : String(error)
@@ -1768,8 +1770,8 @@ export class AcpSession {
       // previously the native tools masked this. Surface it loudly.
       log(
         catalog.tools.length === 0
-          ? "forwarded tool catalog is EMPTY — kiro has no tools"
-          : "forwarded tool catalog updated",
+          ? 'forwarded tool catalog is EMPTY — kiro has no tools'
+          : 'forwarded tool catalog updated',
         {
           session: this.id,
           tools: catalog.tools.length,
@@ -1782,7 +1784,7 @@ export class AcpSession {
   }
 
   private mcpServersConfig(): Array<{
-    type: "http";
+    type: 'http';
     name: string;
     url: string;
     headers: Array<{ name: string; value: string }>;
@@ -1790,11 +1792,11 @@ export class AcpSession {
     if (!this.toolBridge) return [];
     return [
       {
-        type: "http",
-        name: "pi_host",
+        type: 'http',
+        name: 'pi_host',
         url: this.toolBridge.url,
         headers: [
-          { name: "Authorization", value: `Bearer ${this.toolBridge.token}` },
+          { name: 'Authorization', value: `Bearer ${this.toolBridge.token}` },
         ],
       },
     ];
@@ -1812,7 +1814,7 @@ export class AcpSession {
     return new Promise<ToolBridgeResult>((resolveResult) => {
       if (call.signal.aborted) {
         resolveResult(
-          errorToolResult("Kiro tool call aborted before dispatch"),
+          errorToolResult('Kiro tool call aborted before dispatch'),
         );
         return;
       }
@@ -1827,7 +1829,7 @@ export class AcpSession {
         // repeat of a common builtin call (read/ls/bash with the same args)
         // for the rest of the TTL.
         this.abandonedToolCalls.delete(fingerprint);
-        log("bridge tool call DEDUPED (already running)", {
+        log('bridge tool call DEDUPED (already running)', {
           session: this.id,
           toolName: call.piName,
           abandonedCallId: abandoned.callId,
@@ -1853,7 +1855,7 @@ export class AcpSession {
             publicCallId,
             call.piName,
           );
-        log("bridge tool call ABANDONED by kiro", {
+        log('bridge tool call ABANDONED by kiro', {
           session: this.id,
           callId: publicCallId,
           toolName: call.piName,
@@ -1861,21 +1863,21 @@ export class AcpSession {
           waitedMs: msSince(receivedAt),
           remainingPending: this.pendingToolCalls.size,
         });
-        resolveResult(errorToolResult("Kiro tool call aborted"));
+        resolveResult(errorToolResult('Kiro tool call aborted'));
       };
-      call.signal.addEventListener("abort", onAbort, { once: true });
+      call.signal.addEventListener('abort', onAbort, { once: true });
       const pending: PendingToolCall = {
         callId: publicCallId,
         toolName: call.piName,
         args: call.arguments,
         receivedAt,
         resolve: (result) => {
-          call.signal.removeEventListener("abort", onAbort);
+          call.signal.removeEventListener('abort', onAbort);
           resolveResult(toToolBridgeResult(result));
         },
       };
       this.pendingToolCalls.set(publicCallId, pending);
-      log("bridge tool call received", {
+      log('bridge tool call received', {
         session: this.id,
         callId: publicCallId,
         kiroName: call.kiroName,
@@ -1895,14 +1897,14 @@ export class AcpSession {
         this.pendingToolCalls.delete(publicCallId);
         // Nothing Kiro produces for the rest of this prompt can reach pi. If it
         // holds no other live pi tool call, end the turn instead of paying for
-        // output nobody reads and cancelling it later during recovery. A still
+        // output nobody reads and cancelling it during recovery. A still
         // open sibling call keeps the turn alive — it can beat Kiro's deadline
         // and be delivered normally.
         const cancellingTurn =
           this.pendingToolCalls.size === 0 &&
           !!this.activePromptDone &&
           !!this.acpSessionId;
-        log("bridge tool call STRANDED (no stream attached)", {
+        log('bridge tool call STRANDED (no stream attached)', {
           session: this.id,
           callId: publicCallId,
           toolName: call.piName,
@@ -1912,13 +1914,13 @@ export class AcpSession {
         });
         pending.resolve({ result: strandedNote(call.kiroName), isError: true });
         if (cancellingTurn)
-          this.rpcNotify("session/cancel", { sessionId: this.acpSessionId });
+          this.rpcNotify('session/cancel', { sessionId: this.acpSessionId });
         return;
       }
       if (!this.onToolCallFromBridge) {
         // Between session/prompt and the stream attaching its handler: the call
         // stays queued and the stream flushes it as soon as it attaches.
-        log("bridge tool call queued before stream attach", {
+        log('bridge tool call queued before stream attach', {
           session: this.id,
           callId: publicCallId,
           toolName: call.piName,
@@ -1936,18 +1938,18 @@ export class AcpSession {
     // sessions whose snapshot resurrects builtins.
     const config = {
       name: this.agentName,
-      tools: ["@pi_host"],
-      allowedTools: ["@pi_host"],
+      tools: ['@pi_host'],
+      allowedTools: ['@pi_host'],
       // Forward-compat for CLI 3.x: parsed by 2.21 but ineffective there
       // (fresh sessions already exclude builtins via `tools`).
-      excludedTools: ["@builtin"],
+      excludedTools: ['@builtin'],
       includeMcpJson: false,
       mcpServers: {},
       prompt:
-        "You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives. Do not use Kiro native subagent/delegate/crew pipelines; delegate only through pi_host tools (the forwarded Pi subagent tool is named pi_subagent).",
+        'You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives. Do not use Kiro native subagent/delegate/crew pipelines; delegate only through pi_host tools (the forwarded Pi subagent tool is named pi_subagent).',
     };
 
-    const agentsDir = join(this.agentRootPath, ".kiro", "agents");
+    const agentsDir = join(this.agentRootPath, '.kiro', 'agents');
     mkdirSync(agentsDir, { recursive: true, mode: 0o700 });
     writeFileSync(this.agentConfigPath, JSON.stringify(config, null, 2));
     this.agentConfigFingerprint = agentConfigFingerprint(config);
@@ -1955,7 +1957,7 @@ export class AcpSession {
 }
 
 function errorToolResult(text: string): ToolBridgeResult {
-  return { content: [{ type: "text", text }], isError: true };
+  return { content: [{ type: 'text', text }], isError: true };
 }
 
 /** How long a dedup record survives if pi's result never comes back. */
@@ -1964,9 +1966,9 @@ const ABANDONED_CALL_TTL_MS = 30 * 60 * 1000;
 function alreadyRunningNote(kiroName: string): string {
   return (
     `This exact \`${kiroName}\` call is already running. Your earlier call to it exceeded your ` +
-    "own MCP tool-call deadline, but pi is still executing it and the result will be delivered " +
-    "to you in a follow-up message. Do not call it again and do not start replacement work for " +
-    "it — end your turn now and wait for the result."
+    'own MCP tool-call deadline, but pi is still executing it and the result will be delivered ' +
+    'to you in a follow-up message. Do not call it again and do not start replacement work for ' +
+    'it — end your turn now and wait for the result.'
   );
 }
 
@@ -1974,9 +1976,9 @@ function alreadyRunningNote(kiroName: string): string {
 function strandedNote(kiroName: string): string {
   return (
     `\`${kiroName}\` was not executed: pi had already closed the turn in which you asked ` +
-    "for it, so this call could not be dispatched. Any result you are still waiting for " +
-    "will be delivered to you in a follow-up message. Do not call this or any other tool " +
-    "again in this turn — end your turn now."
+    'for it, so this call could not be dispatched. Any result you are still waiting for ' +
+    'will be delivered to you in a follow-up message. Do not call this or any other tool ' +
+    'again in this turn — end your turn now.'
   );
 }
 
@@ -1995,10 +1997,10 @@ function toToolBridgeResult(result: {
 }): ToolBridgeResult {
   const content: ToolBridgeContent[] = result.content?.length
     ? result.content.map((block) => ({ ...block }))
-    : [{ type: "text", text: result.result }];
+    : [{ type: 'text', text: result.result }];
   return result.isError ? { content, isError: true } : { content };
 }
 
 function hashSystemPrompt(systemPrompt: string): string {
-  return createHash("sha256").update(systemPrompt).digest("hex");
+  return createHash('sha256').update(systemPrompt).digest('hex');
 }
