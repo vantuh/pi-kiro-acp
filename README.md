@@ -150,3 +150,7 @@ Live end-to-end probes need an authenticated `kiro-cli`. See the
 This repository is the **pi** build. An Oh My Pi (`omp`) copy lives in a separate
 dotfiles tree and has diverged; changes here do not reach it. The omp copy reads
 `~/.omp/agent/kiro-acp.json` and namespaces its log, persistence, and scratch dirs.
+
+## License
+
+[MIT](LICENSE)

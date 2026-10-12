@@ -1,5 +1,6 @@
 {
   "name": "pi-kiro-acp",
+  "license": "MIT",
   "type": "module",
   "keywords": [
     "pi-package"
