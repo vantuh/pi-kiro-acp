@@ -5,13 +5,10 @@
 import { connect } from 'node:net';
 
 import type { Context } from '@earendil-works/pi-ai';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { test } from 'vitest';
 
-import {
-  KiroSessionRuntimeRegistry,
-  SessionManager,
-} from '../src/session-manager.ts';
+import { KiroSessionRuntimeRegistry } from '../src/adapter.ts';
+import { SessionManager } from '../src/session-manager.ts';
 import { AcpSession } from '../src/session.ts';
 import { startToolBridge, type ToolBridge } from '../src/tool-bridge.ts';
 import { buildForwardedToolCatalog } from '../src/tool-catalog.ts';
@@ -218,10 +215,8 @@ test('per-session bridge isolation and cleanup on stop / idle prune', async () =
 
   // --- shared provider routing preserves extension-instance ownership ---
   const runtimeRegistry = new KiroSessionRuntimeRegistry();
-  // The registry test never invokes ExtensionAPI methods.
-  const unusedPi = {} as unknown as ExtensionAPI;
-  const runtimeA = { pi: unusedPi, sessionManager: managerA };
-  const runtimeB = { pi: unusedPi, sessionManager: managerB };
+  const runtimeA = { sessionManager: managerA };
+  const runtimeB = { sessionManager: managerB };
   runtimeRegistry.register('session-a', runtimeA);
   runtimeRegistry.register('session-b', runtimeB);
   const ownedByA = await runtimeRegistry

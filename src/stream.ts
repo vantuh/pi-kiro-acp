@@ -4,9 +4,9 @@ import {
   type SimpleStreamOptions,
   type TranscriptContext,
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
   getCurrentTools,
 } from '@earendil-works/pi-ai';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 import {
   appendKiroMetadataDiagnostic,
@@ -18,6 +18,7 @@ import {
   lastUserMessage,
 } from './helpers.ts';
 import { log, msSince } from './logging.ts';
+import { tagKiroContextOverflow } from './overflow.ts';
 import { kiroToolIdentity } from './permissions.ts';
 import { SessionManager } from './session-manager.ts';
 import {
@@ -57,7 +58,6 @@ const REFUSAL_RETRY_DELAY_MS =
 const REFUSAL_RETRIES = 1;
 
 export function streamKiroAcp(
-  pi: ExtensionAPI,
   sessionManager: SessionManager,
   model: Model<any>,
   context: TranscriptContext,
@@ -68,7 +68,7 @@ export function streamKiroAcp(
     modelId: model.id,
     toolsCount: getCurrentTools(context.messages).length,
     messagesCount: context.messages?.length ?? 0,
-    systemPromptLen: context.systemPrompt?.length ?? 0,
+    systemPromptLen: getCurrentSystemPrompt(context.messages).length,
     sessionId: options?.sessionId,
   });
   const stream = createAssistantMessageEventStream();
@@ -80,6 +80,17 @@ export function streamKiroAcp(
     let turnGen: number | null = null;
     let session: AcpSession | null = null;
 
+    const releaseTerminalAnonymous = (
+      terminal: 'stop' | 'error' | 'toolUse',
+    ) => {
+      if (!session || terminal === 'toolUse') return;
+      // A newer turn owns the handlers and the session.
+      if (turnGen !== null && turnGen !== session.streamGen) return;
+      if (session.persistenceKey !== null) return;
+      if (session.pendingToolCalls.size > 0) return;
+      sessionManager.releaseSession(session);
+    };
+
     try {
       sessionManager.pruneIdleSessions();
       const routed = await sessionManager.routeSession(context, options);
@@ -88,15 +99,9 @@ export function streamKiroAcp(
       // Capture before ensureStarted: a cold/parallel process gets an acpSessionId
       // for an empty conversation, which must not look like in-place recovery.
       const hadLiveConversation = !!session.acpSessionId;
-      const catalogProvider = () =>
-        hostToolCatalog({
-          requestTools: context.tools,
-          sessionTools: () => ({
-            all: pi.getAllTools(),
-            active: pi.getActiveTools(),
-          }),
-        });
-      await session.ensureStarted(
+      const catalogProvider = () => hostToolCatalog(context);
+      await sessionManager.startSession(
+        session,
         catalogProvider,
         toKiroEffort(options?.reasoning),
       );
@@ -177,10 +182,14 @@ export function streamKiroAcp(
               ? // No live ACP session to recover into: force the replay path so the
                 // completed tool call cannot be dropped by resuming a persisted
                 // session from before it (the fingerprint ignores trailing results).
-                { replayUserMessage: replayPrompt.userMessage }
+                {
+                  replayUserMessage: replayPrompt.userMessage,
+                  replayImages: replayPrompt.images,
+                }
               : {
                   expectedHistoryFingerprint: prefixFingerprint,
                   replayUserMessage: replayPrompt.userMessage,
+                  replayImages: replayPrompt.images,
                 },
           );
         }
@@ -669,7 +678,9 @@ export function streamKiroAcp(
       } else if (outcome === 'error') {
         session.activePromptDone = null;
         output.stopReason = 'error';
-        output.errorMessage = promptError?.message || 'Kiro ACP prompt failed';
+        output.errorMessage = tagKiroContextOverflow(
+          promptError?.message || 'Kiro ACP prompt failed',
+        );
         stream.push({ type: 'error', reason: 'error', error: output });
       } else {
         session.activePromptDone = null;
@@ -703,6 +714,7 @@ export function streamKiroAcp(
         stream.push({ type: 'done', reason: 'stop', message: output });
       }
 
+      releaseTerminalAnonymous(outcome);
       stream.end();
     } catch (error) {
       log('streamKiroAcp FATAL error', {
@@ -710,9 +722,11 @@ export function streamKiroAcp(
           error instanceof Error ? error.stack || error.message : String(error),
       });
       output.stopReason = 'error';
-      output.errorMessage =
-        error instanceof Error ? error.message : String(error);
+      output.errorMessage = tagKiroContextOverflow(
+        error instanceof Error ? error.message : String(error),
+      );
       stream.push({ type: 'error', reason: 'error', error: output });
+      releaseTerminalAnonymous('error');
       stream.end();
     } finally {
       // Clear the handlers on every exit path (normal end and fatal catch),

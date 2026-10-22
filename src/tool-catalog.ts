@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { getCurrentTools, type TranscriptContext } from '@earendil-works/pi-ai';
+
 import { stableValue } from './helpers.ts';
 
 export interface PiToolMetadata {
@@ -207,44 +209,13 @@ export function buildForwardedToolCatalog(
   };
 }
 
-/**
- * Catalog for one streamSimple turn.
- *
- * Prefer `requestTools` (`context.tools`): that is the set the host already
- * chose for this request, and it is available when the extension is loaded
- * only as a CLI provider (`omp commit`, `omp git`, bench). In that path
- * `pi.getAllTools()` / `getActiveTools()` throw
- * `ExtensionRuntimeNotInitializedError` because the stub runtime never binds
- * a session.
- *
- * Fall back to session tools when the request omitted `tools` entirely.
- * A throw there becomes an empty catalog rather than an unhandled rejection
- * on Kiro's `tools/list`.
- */
-export function hostToolCatalog(options: {
-  requestTools?: readonly PiToolMetadata[];
-  sessionTools?: () => {
-    all: readonly PiToolMetadata[];
-    active: readonly string[];
-  };
-}): ForwardedToolCatalog {
-  if (options.requestTools !== undefined) {
-    return buildForwardedToolCatalog(
-      options.requestTools,
-      options.requestTools.map((tool) => tool.name),
-    );
-  }
-  if (!options.sessionTools) return buildForwardedToolCatalog([], []);
-  try {
-    const { all, active } = options.sessionTools();
-    return buildForwardedToolCatalog(all, active);
-  } catch (error) {
-    const catalog = buildForwardedToolCatalog([], []);
-    catalog.diagnostics.push(
-      `session tool catalog unavailable (${
-        error instanceof Error ? error.message : String(error)
-      }); forwarding no tools.`,
-    );
-    return catalog;
-  }
+/** Catalog for one provider turn, from the transcript's current tool state. */
+export function hostToolCatalog(
+  context: TranscriptContext,
+): ForwardedToolCatalog {
+  const tools = getCurrentTools(context.messages);
+  return buildForwardedToolCatalog(
+    tools,
+    tools.map((tool) => tool.name),
+  );
 }

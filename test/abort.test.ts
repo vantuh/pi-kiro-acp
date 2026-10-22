@@ -18,8 +18,7 @@ test('streamKiroAcp ends the stream after an abort', async () => {
 
   try {
     const ac = new AbortController();
-    const pi = { getAllTools: () => [], getActiveTools: () => [] } as any;
-    const stream = streamKiroAcp(pi, sessionManager, model, context, {
+    const stream = streamKiroAcp(sessionManager, model, context, {
       signal: ac.signal,
     });
     const eventTypes: string[] = [];

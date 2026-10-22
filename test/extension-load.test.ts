@@ -9,18 +9,25 @@ import { assert } from './support.ts';
 
 test('the extension loads and registers its provider', async () => {
   const events: string[] = [];
+  const handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
   const providers: Array<{ id: string; config: any }> = [];
   const commands: string[] = [];
 
   const pi = {
-    on(event: string, _handler: unknown) {
+    on(event: string, handler: (event: any, ctx: any) => unknown) {
       events.push(event);
+      const list = handlers.get(event) ?? [];
+      list.push(handler);
+      handlers.set(event, list);
     },
     registerCommand(name: string, _options: unknown) {
       commands.push(name);
     },
-    registerProvider(id: string, config: any) {
-      providers.push({ id, config });
+    registerProvider(idOrProvider: any, config?: any) {
+      providers.push({
+        id: typeof idOrProvider === 'string' ? idOrProvider : idOrProvider.id,
+        config: config ?? idOrProvider,
+      });
     },
   } as any;
 
@@ -38,15 +45,28 @@ test('the extension loads and registers its provider', async () => {
   );
   assert(providers[0].id === KIRO_ACP_PROVIDER, 'the provider id is kiro-acp');
 
-  const config = providers[0].config;
-  assert(config.models.length > 0, 'the provider ships fallback models');
+  const provider = providers[0].config;
   assert(
-    config.models.every((m: any) => typeof m.id === 'string' && m.id),
+    provider.id === KIRO_ACP_PROVIDER,
+    'the registered object is a native provider',
+  );
+  assert(provider.getModels().length > 0, 'the provider ships fallback models');
+  assert(
+    provider.getModels().every((m: any) => typeof m.id === 'string' && m.id),
     'every model has an id',
   );
   assert(
-    typeof config.streamSimple === 'function',
+    provider.getModels().every((m: any) => m.provider === KIRO_ACP_PROVIDER),
+    'every model belongs to kiro-acp',
+  );
+  assert(
+    typeof provider.streamSimple === 'function',
     'the provider exposes streamSimple',
+  );
+  assert(
+    typeof provider.auth.apiKey?.resolve === 'function' &&
+      provider.auth.apiKey.login === undefined,
+    'the provider uses ambient kiro-cli auth without a login flow',
   );
 
   for (const event of [
@@ -63,5 +83,39 @@ test('the extension loads and registers its provider', async () => {
   assert(
     commands.includes('kiro-usage'),
     'the extension registers the kiro-usage command',
+  );
+
+  const sessionStarted = handlers.get('session_start') ?? [];
+  const sessionId = 'adapter-session';
+  for (const handler of sessionStarted) {
+    await handler(
+      {},
+      {
+        sessionManager: { getSessionId: () => sessionId },
+        model: undefined,
+      },
+    );
+  }
+  const routed = await provider.sessionManager.routeSession(
+    { messages: [{ role: 'user', content: 'hi' }] } as any,
+    { sessionId, cwd: '/tmp/kiro-acp-adapter' },
+  );
+  const session = routed.session;
+  session.started = true;
+  session.acpSessionId = 'acp-adapter';
+  session.proc = {
+    stdin: { end: () => true },
+    once(_event: string, handler: () => void) {
+      setImmediate(handler);
+      return session.proc;
+    },
+  } as any;
+
+  for (const handler of handlers.get('session_shutdown') ?? []) {
+    await handler({ reason: 'quit' }, {});
+  }
+  assert(
+    session.started === false && session.acpSessionId === null,
+    'adapter shutdown stops the provider runtime it owns',
   );
 });

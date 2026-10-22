@@ -46,9 +46,10 @@ import type {
 interface StartPromptOptions {
   expectedHistoryFingerprint?: string;
   replayUserMessage?: string;
+  replayImages?: { type: 'image'; data: string; mimeType: string }[];
 }
 
-type KiroEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type KiroEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /** Builds the current tool catalog exposed to Kiro via pi_host. */
 type CatalogProvider = () => ForwardedToolCatalog;
@@ -1303,6 +1304,10 @@ export class AcpSession {
       shouldReplayHistory && options.replayUserMessage
         ? options.replayUserMessage
         : userMessage;
+    const promptImages =
+      shouldReplayHistory && options.replayImages
+        ? options.replayImages
+        : images;
 
     const previousModelId = this.currentModelId;
     const modelChanged = this.currentModelId !== modelId;
@@ -1384,7 +1389,7 @@ export class AcpSession {
         'session/prompt',
         {
           sessionId: this.acpSessionId,
-          prompt: [{ type: 'text', text: promptText }, ...images],
+          prompt: [{ type: 'text', text: promptText }, ...promptImages],
         },
         0,
       ) as Promise<any>

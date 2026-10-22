@@ -134,8 +134,18 @@ export function buildPromptParts(
   const msgs = context.messages || [];
   const lastUserIdx = findLastUserIndex(context);
   const images: ImageBlock[] = [];
-  if (lastUserIdx >= 0 && Array.isArray(msgs[lastUserIdx].content)) {
-    for (const block of msgs[lastUserIdx].content as any[]) {
+  // A full replay re-attaches every image the transcript still holds (user
+  // turns and tool results); a warm turn sends only the current user message.
+  const replayedRoles = includeHistory ? ['user', 'toolResult'] : ['user'];
+  for (
+    let i = includeHistory ? 0 : Math.max(0, lastUserIdx);
+    i < msgs.length;
+    i++
+  ) {
+    const msg = msgs[i];
+    if (!replayedRoles.includes(msg.role) || !Array.isArray(msg.content))
+      continue;
+    for (const block of msg.content as any[]) {
       if (block.type === 'image')
         images.push({
           type: 'image',

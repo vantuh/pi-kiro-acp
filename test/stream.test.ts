@@ -15,8 +15,7 @@ test('streamKiroAcp streams text from a real Kiro ACP session', async () => {
   const context = kiroContext("Say 'hello world' and nothing else.");
 
   try {
-    const pi = { getAllTools: () => [], getActiveTools: () => [] } as any;
-    const stream = streamKiroAcp(pi, sessionManager, model, context, {});
+    const stream = streamKiroAcp(sessionManager, model, context, {});
     let textContent = '';
     let gotStart = false;
     let gotDone = false;

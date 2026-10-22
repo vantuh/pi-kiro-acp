@@ -5,6 +5,10 @@
   ],
   "license": "MIT",
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./provider": "./src/provider.ts"
+  },
   "scripts": {
     "test": "vitest run",
     "lint": "oxlint --deny-warnings",
@@ -20,6 +24,11 @@
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*"
+  },
+  "peerDependenciesMeta": {
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    }
   },
   "pi": {
     "extensions": [

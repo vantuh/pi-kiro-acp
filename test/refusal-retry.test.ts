@@ -83,12 +83,10 @@ test('a recovery prompt kiro-cli refuses is re-sent', async () => {
     session.currentModelId = 'm1';
     session.started = true;
 
-    const pi = { getAllTools: () => [], getActiveTools: () => [] } as any;
     const events: string[] = [];
     let text = '';
     const consumed = (async () => {
       for await (const event of streamKiroAcp(
-        pi,
         sessionManager,
         model,
         toolResultContext(),
@@ -177,7 +175,6 @@ test('a recovery prompt kiro-cli refuses is re-sent', async () => {
       const before = written.length;
       const run = (async () => {
         for await (const event of streamKiroAcp(
-          pi,
           sessionManager,
           model,
           toolResultContext(),

@@ -17,6 +17,7 @@ export class DiscoveryClient {
   private rl: ReadlineInterface | null = null;
   private nextId = 1;
   private stderr = '';
+  private readonly cwd: string;
   private readonly pending = new Map<
     number,
     {
@@ -26,7 +27,9 @@ export class DiscoveryClient {
     }
   >();
 
-  constructor(private readonly cwd: string) {}
+  constructor(cwd: string) {
+    this.cwd = cwd;
+  }
 
   async start(): Promise<void> {
     this.proc = spawn('kiro-cli', ['acp'], {

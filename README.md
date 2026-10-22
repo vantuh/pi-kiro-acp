@@ -2,9 +2,11 @@
 
 Use [Kiro](https://kiro.dev) models inside the [pi](https://github.com/earendil-works/pi) coding agent.
 
-`pi-kiro-acp` is a pi extension. It registers a `kiro-acp` model provider and drives
+`pi-kiro-acp` registers a native pi-ai `kiro-acp` provider and drives
 `kiro-cli acp` over the Agent Client Protocol (ACP). Pi stays in charge of the
 conversation and the tools: Kiro only sees pi's tools, never its own built-ins.
+The same provider is reusable outside the Pi Coding Agent through the
+`@vantuh/pi-kiro-acp/provider` subpath.
 
 ```mermaid
 flowchart LR
@@ -54,6 +56,50 @@ pi install ./pi-kiro-acp
 ```
 
 Restart pi, then pick a `kiro-acp` model with `/model`.
+
+## Using the provider directly
+
+The package exports a native pi-ai `Provider` with its own Kiro ACP runtime:
+
+```ts
+import { createModels } from '@earendil-works/pi-ai';
+import { createKiroAcpProvider } from '@vantuh/pi-kiro-acp/provider';
+
+const provider = createKiroAcpProvider();
+const models = createModels();
+models.setProvider(provider);
+
+try {
+  await models.refresh({ force: true }); // discovers models from kiro-cli
+  const model = models.getModels('kiro-acp')[0];
+  const answer = await models.completeSimple(
+    model,
+    {
+      messages: [{ role: 'user', content: 'Hello', timestamp: Date.now() }],
+    },
+    { sessionId: 'my-conversation' },
+  );
+} finally {
+  await provider.close(); // stops every kiro-cli process it started
+}
+```
+
+Pass a stable, unique `sessionId` to reuse the ACP session and its persisted
+record across calls. If you omit `sessionId`, each new prompt starts a fresh ACP
+session; pending tool results can still resume the session that owns them.
+
+Auth is ambient: the provider needs no API key and has no login flow.
+`kiro-cli` must be installed and authenticated. A failed discovery keeps the
+built-in fallback model list.
+
+The Pi extension registers this same provider. `session_start` binds each Pi
+session to the runtime that owns it, so concurrent Pi sessions and compaction
+requests stay isolated.
+
+Persistence, recovery, cancellation, tools, and usage work for native consumers
+too. Commands, the usage footer, and Pi session hooks (`context`, `message_end`,
+`session_start`, `session_shutdown`) are host-adapter features and apply only
+when the package runs as a Pi extension.
 
 ## Models
 

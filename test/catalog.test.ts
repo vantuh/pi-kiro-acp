@@ -3,6 +3,7 @@
 
 import { createHash } from 'node:crypto';
 
+import { normalizeContext } from '@earendil-works/pi-ai';
 import { test } from 'vitest';
 
 import {
@@ -255,52 +256,29 @@ test('the fingerprint tracks description, schema and name', async () => {
   );
 });
 
-test('request tools win over a throwing session catalog', async () => {
-  const request = [
-    {
-      name: 'propose_commit',
-      description: 'Propose a conventional commit',
-      parameters: schema,
-    },
-  ];
-  const catalog = hostToolCatalog({
-    requestTools: request,
-    sessionTools: () => {
-      throw new Error(
-        'Extension runtime not initialized. Action methods cannot be called during extension loading.',
-      );
-    },
+test('the catalog comes from the transcript tool state', async () => {
+  const context = normalizeContext({
+    systemPrompt: 'sys',
+    messages: [{ role: 'user', content: 'go', timestamp: Date.now() }],
+    tools: [
+      {
+        name: 'propose_commit',
+        description: 'Propose a conventional commit',
+        parameters: schema,
+      },
+    ],
   });
+  const catalog = hostToolCatalog(context);
   assert(
     catalog.tools.map((tool) => tool.piName).join() === 'propose_commit',
-    'request tools win over a throwing session catalog (omp commit CLI load)',
+    'transcript tools are forwarded',
   );
 });
 
-test('a throwing session catalog records a diagnostic', async () => {
-  const catalog = hostToolCatalog({
-    sessionTools: () => {
-      throw new Error(
-        'Extension runtime not initialized. Action methods cannot be called during extension loading.',
-      );
-    },
+test('a transcript without tools yields an empty catalog', async () => {
+  const context = normalizeContext({
+    messages: [{ role: 'user', content: 'go', timestamp: Date.now() }],
   });
-  assert(
-    catalog.tools.length === 0,
-    'throwing session catalog yields no tools',
-  );
-  assert(
-    catalog.diagnostics.some((line) =>
-      line.includes('session tool catalog unavailable'),
-    ),
-    'throwing session catalog records a diagnostic instead of rejecting',
-  );
-});
-
-test('an explicit empty request catalog is empty', async () => {
-  const catalog = hostToolCatalog({ requestTools: [] });
-  assert(
-    catalog.tools.length === 0,
-    'an explicit empty request catalog is empty, not a session fallback',
-  );
+  const catalog = hostToolCatalog(context);
+  assert(catalog.tools.length === 0, 'no tools yields an empty catalog');
 });

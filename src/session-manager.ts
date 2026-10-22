@@ -1,10 +1,10 @@
 import type { Context, SimpleStreamOptions } from '@earendil-works/pi-ai';
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 import { extractToolResults } from './helpers.ts';
 import { log } from './logging.ts';
 import { persistenceKeyForSession } from './session-persistence.ts';
-import { AcpSession } from './session.ts';
+import { AcpSession, type KiroEffort } from './session.ts';
+import { hostToolCatalog } from './tool-catalog.ts';
 import type { ToolResultInfo } from './types.ts';
 
 export interface RoutedSession {
@@ -165,22 +165,8 @@ async function routeSession(
     };
   }
 
-  const idleSameCwd = [...sessions.values()].find(
-    (s) => !s.busy && s.cwd === requestedCwd,
-  );
-  if (idleSameCwd) {
-    idleSameCwd.persistenceKey = null;
-    log('route idle same-cwd session', {
-      session: idleSameCwd.id,
-      cwd: requestedCwd,
-    });
-    return {
-      session: idleSameCwd,
-      toolResults,
-      kind,
-    };
-  }
-
+  // No session id: an anonymous request must never inherit another independent
+  // conversation that happens to be idle in the same cwd.
   const created = new AcpSession(requestedCwd);
   created.persistenceKey = null;
   sessions.set(`anon:${created.id}`, created);
@@ -204,77 +190,116 @@ async function stopAllSessions(
   await Promise.allSettled(all.map((session) => session.stop()));
 }
 
-function pruneIdleSessions(
-  sessions: Map<string, AcpSession>,
-  maxIdleMs = 10 * 60 * 1000,
-): void {
-  const now = Date.now();
-  for (const [key, session] of sessions) {
-    if (!session.busy && now - session.lastUsedAt > maxIdleMs) {
-      log('pruning idle session', {
-        session: session.id,
-        idleMs: now - session.lastUsedAt,
-        key,
-      });
-      sessions.delete(key);
-      void session.stop();
-    }
-  }
-}
-
 export class SessionManager {
   readonly #sessions = new Map<string, AcpSession>();
+  readonly #pendingRoutes = new Set<Promise<unknown>>();
+  readonly #pendingStartups = new Set<Promise<unknown>>();
+  readonly #pendingTeardowns = new Set<Promise<unknown>>();
+  #closed = false;
+  #stopping = false;
+  #closePromise: Promise<void> | null = null;
 
   routeSession(
     context: Context,
     options?: KiroStreamOptions,
   ): Promise<RoutedSession> {
-    return routeSession(this.#sessions, context, options);
-  }
-
-  stopAllSessions(): Promise<void> {
-    return stopAllSessions(this.#sessions);
-  }
-
-  pruneIdleSessions(maxIdleMs?: number): void {
-    pruneIdleSessions(this.#sessions, maxIdleMs);
-  }
-}
-
-export interface KiroSessionRuntime {
-  pi: ExtensionAPI;
-  sessionManager: SessionManager;
-}
-
-export class KiroSessionRuntimeRegistry {
-  readonly #runtimes = new Map<string, KiroSessionRuntime>();
-
-  register(sessionId: string, runtime: KiroSessionRuntime): void {
-    this.#runtimes.set(sessionId, runtime);
-  }
-
-  unregister(sessionId: string, runtime: KiroSessionRuntime): void {
-    if (this.#runtimes.get(sessionId) === runtime) {
-      this.#runtimes.delete(sessionId);
-    }
-  }
-
-  resolve(sessionId?: string): KiroSessionRuntime {
-    if (sessionId) {
-      const runtime = this.#runtimes.get(sessionId);
-      if (runtime) return runtime;
-      throw new Error(
-        `No kiro-acp runtime registered for session ${sessionId}`,
-      );
-    }
-
-    if (this.#runtimes.size === 1) {
-      const runtime = this.#runtimes.values().next().value;
-      if (runtime) return runtime;
-    }
-
-    throw new Error(
-      `Cannot resolve kiro-acp runtime without a session id (${this.#runtimes.size} registered)`,
+    if (this.#closed)
+      return Promise.reject(new Error('Kiro ACP runtime is closed'));
+    if (this.#stopping)
+      return Promise.reject(new Error('Kiro ACP runtime is stopping'));
+    const pending = routeSession(this.#sessions, context, options);
+    this.#pendingRoutes.add(pending);
+    void pending.then(
+      () => this.#pendingRoutes.delete(pending),
+      () => this.#pendingRoutes.delete(pending),
     );
+    return pending;
+  }
+
+  /** Start one session and keep the startup visible to stop/close. */
+  async startSession(
+    session: AcpSession,
+    catalogProvider: () => ReturnType<typeof hostToolCatalog>,
+    effort: KiroEffort | null,
+  ): Promise<void> {
+    if (this.#closed) throw new Error('Kiro ACP runtime is closed');
+    if (this.#stopping) throw new Error('Kiro ACP runtime is stopping');
+    const pending = session.ensureStarted(catalogProvider, effort);
+    this.#pendingStartups.add(pending);
+    try {
+      await pending;
+    } finally {
+      this.#pendingStartups.delete(pending);
+    }
+    if (this.#closed) throw new Error('Kiro ACP runtime is closed');
+  }
+
+  /** Reusable host shutdown: stop every session, then accept new work again. */
+  async stopAllSessions(): Promise<void> {
+    this.#stopping = true;
+    try {
+      await this.#awaitPendingWork();
+      await stopAllSessions(this.#sessions);
+    } finally {
+      this.#stopping = false;
+    }
+  }
+
+  /** Final shutdown: the runtime stays closed. */
+  close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
+    this.#closed = true;
+    this.#closePromise = (async () => {
+      await this.#awaitPendingWork();
+      await stopAllSessions(this.#sessions);
+    })();
+    return this.#closePromise;
+  }
+
+  /** Drop a terminal anonymous session and release its process. */
+  releaseSession(session: AcpSession): void {
+    // stopAll/close already owns every session during shutdown.
+    if (this.#closed || this.#stopping) return;
+    for (const [key, current] of this.#sessions) {
+      if (current === session) this.#sessions.delete(key);
+    }
+    this.#trackTeardown(session.stop());
+  }
+
+  pruneIdleSessions(maxIdleMs = 10 * 60 * 1000): void {
+    const now = Date.now();
+    for (const [key, session] of this.#sessions) {
+      if (!session.busy && now - session.lastUsedAt > maxIdleMs) {
+        log('pruning idle session', {
+          session: session.id,
+          idleMs: now - session.lastUsedAt,
+          key,
+        });
+        this.#sessions.delete(key);
+        this.#trackTeardown(session.stop());
+      }
+    }
+  }
+
+  #trackTeardown(teardown: Promise<void>): void {
+    this.#pendingTeardowns.add(teardown);
+    void teardown.then(
+      () => this.#pendingTeardowns.delete(teardown),
+      () => this.#pendingTeardowns.delete(teardown),
+    );
+  }
+
+  async #awaitPendingWork(): Promise<void> {
+    while (
+      this.#pendingRoutes.size > 0 ||
+      this.#pendingStartups.size > 0 ||
+      this.#pendingTeardowns.size > 0
+    ) {
+      await Promise.allSettled([
+        ...this.#pendingRoutes,
+        ...this.#pendingStartups,
+        ...this.#pendingTeardowns,
+      ]);
+    }
   }
 }

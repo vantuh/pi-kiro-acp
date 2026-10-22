@@ -1,5 +1,3 @@
-import type { ExtensionContext } from '@earendil-works/pi-coding-agent';
-
 export const KIRO_ACP_PROVIDER = 'kiro-acp';
 
 /** Kiro/ACP context-limit errors — avoid rate-limit / throttle phrases. */
@@ -15,9 +13,17 @@ type AssistantErrorMessage = {
   errorMessage?: string;
 };
 
+/** Tag Kiro's context-limit errors so pi can compact the conversation. */
+export function tagKiroContextOverflow(errorMessage: string): string {
+  if (errorMessage.includes('context_length_exceeded')) return errorMessage;
+  if (RATE_LIMIT_PATTERN.test(errorMessage)) return errorMessage;
+  if (!KIRO_CONTEXT_OVERFLOW_PATTERN.test(errorMessage)) return errorMessage;
+  return `context_length_exceeded: ${errorMessage}`;
+}
+
 export function normalizeKiroContextOverflow(
   message: AssistantErrorMessage,
-  ctx: ExtensionContext,
+  ctx: { model?: { provider?: string } },
 ): { message: AssistantErrorMessage } | undefined {
   if (message.role !== 'assistant') return;
   if (message.stopReason !== 'error') return;
@@ -29,14 +35,12 @@ export function normalizeKiroContextOverflow(
   }
 
   const errorMessage = message.errorMessage ?? '';
-  if (errorMessage.includes('context_length_exceeded')) return;
-  if (RATE_LIMIT_PATTERN.test(errorMessage)) return;
-  if (!KIRO_CONTEXT_OVERFLOW_PATTERN.test(errorMessage)) return;
-
+  const tagged = tagKiroContextOverflow(errorMessage);
+  if (tagged === errorMessage) return;
   return {
     message: {
       ...message,
-      errorMessage: `context_length_exceeded: ${errorMessage}`,
+      errorMessage: tagged,
     },
   };
 }

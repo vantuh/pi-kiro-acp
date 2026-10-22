@@ -16,6 +16,7 @@ process.env.XDG_DATA_HOME = dataHome;
 
 const {
   buildConversationPrompt,
+  buildPromptParts,
   buildToolResultRecoveryPrompt,
   extractToolResults,
   imagesFromToolResults,
@@ -287,6 +288,114 @@ test('image blocks carried by tool results', async () => {
   assert(
     images.length === 1 && images[0].data === 'AAA',
     'only image blocks are collected from tool results',
+  );
+});
+
+test('replay prompts keep images from orphaned tool results', async () => {
+  const parts = buildPromptParts(
+    ctx([
+      user('what is in the image?'),
+      assistantText('calling a tool'),
+      {
+        role: 'toolResult',
+        toolCallId: 'c1',
+        toolName: 'screenshot',
+        isError: false,
+        content: [
+          { type: 'text', text: 'shot' },
+          { type: 'image', data: 'AAA', mimeType: 'image/png' },
+        ],
+      },
+    ]) as any,
+    true,
+  );
+  assert(
+    parts.images.some((image) => image.data === 'AAA'),
+    'replay carries the orphaned tool result image',
+  );
+});
+
+test('replay prompts keep images from earlier tool results', async () => {
+  const parts = buildPromptParts(
+    ctx([
+      user('look at this'),
+      assistantText('ran a tool'),
+      {
+        role: 'toolResult',
+        toolCallId: 'c1',
+        toolName: 'screenshot',
+        isError: false,
+        content: [
+          { type: 'text', text: 'older shot' },
+          { type: 'image', data: 'TOOL', mimeType: 'image/png' },
+        ],
+      },
+      assistantText('done'),
+      user('and now this?'),
+    ]) as any,
+    true,
+  );
+  assert(
+    parts.images.some((image) => image.data === 'TOOL'),
+    'full replay carries images from earlier tool results',
+  );
+});
+
+test('warm prompts send only the current user image', async () => {
+  const parts = buildPromptParts(
+    ctx([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'older image' },
+          { type: 'image', data: 'OLD', mimeType: 'image/png' },
+        ],
+      },
+      assistantText('seen'),
+      {
+        role: 'toolResult',
+        toolCallId: 'c1',
+        toolName: 'screenshot',
+        isError: false,
+        content: [
+          { type: 'text', text: 'older shot' },
+          { type: 'image', data: 'TOOL', mimeType: 'image/png' },
+        ],
+      },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'and now this?' },
+          { type: 'image', data: 'NOW', mimeType: 'image/png' },
+        ],
+      },
+    ]) as any,
+    false,
+  );
+  assert(
+    parts.images.length === 1 && parts.images[0].data === 'NOW',
+    'a warm turn carries only the current user image',
+  );
+});
+
+test('replay prompts keep images from earlier user turns', async () => {
+  const parts = buildPromptParts(
+    ctx([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'older image' },
+          { type: 'image', data: 'OLD', mimeType: 'image/png' },
+        ],
+      },
+      assistantText('seen'),
+      user('and now this?'),
+    ]) as any,
+    true,
+  );
+  assert(
+    parts.images.some((image) => image.data === 'OLD'),
+    'full replay carries images from earlier user turns',
   );
 });
 
