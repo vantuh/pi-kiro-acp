@@ -101,6 +101,70 @@ too. Commands, the usage footer, and Pi session hooks (`context`, `message_end`,
 `session_start`, `session_shutdown`) are host-adapter features and apply only
 when the package runs as a Pi extension.
 
+## Pi Pocket 0.20
+
+Pocket loads the adapter through its two public host members,
+`host.registerModelProvider` and `web.onDispose`. `host.registerModelProvider`
+is experimental in Pocket 0.20. It needs Pi Pocket 0.20 or newer; an older host
+gets an error that names the version. Pocket is not a dependency of this
+package.
+
+Save the module below as `kiro-acp.ts` in the data folder's `extensions/` (usually
+`~/.pi-pocket/extensions/`).
+
+```ts
+/** Kiro ACP models in Pi Pocket, from a local pi-kiro-acp checkout. */
+import adapter from '/path/to/pi-kiro-acp/src/pocket.ts';
+
+export default adapter;
+```
+
+Replace the import path with your checkout. This checkout path is the tested
+one. Importing `@vantuh/pi-kiro-acp/pocket` from a `node_modules` folder is not
+verified. The leading comment is the module's description in the Extensions
+sheet. Enable the saved module in Menu → Extensions, then select a `kiro-acp`
+model.
+
+**Availability marker, not a credential.** Native ambient providers do not need a
+configured key. Pocket's legacy `ProviderConfig` bridge cannot express Kiro's
+ambient CLI auth, so this adapter supplies the non-secret literal
+`apiKey: "kiro-cli-ambient"` only so the provider is available. In a fresh
+Pocket profile, Pi reports the source as `configured API key`. The ACP stream
+does not forward this marker to `kiro-cli` (`authHeader: false`). It is not
+native ambient auth and not a user key. There is no OAuth flow.
+
+**Catalog.** The adapter seeds Pi with the native fallback list. Pi calls
+`refreshModels` on every refresh, local or network. The adapter passes that
+context to the native provider and returns a mutable copy of
+`provider.getModels()`. A local refresh (`allowNetwork: false`) therefore keeps
+the current catalog instead of emptying it. A network refresh runs the normal
+`kiro-cli` discovery.
+
+**Disposal.** One cleanup is registered before registration. It unregisters the
+provider first, then awaits `provider.close()`, which stops every `kiro-cli`
+process the provider owns. On a failed registration, Pocket runs that cleanup as
+part of its rollback. Reload and disable start cleanup without waiting for it;
+server shutdown has a shared 3-second cleanup budget.
+
+**Working directory.** Pi tools run in the Durable session environment, where
+the session cwd applies. Pocket and pi-ai do not forward a cwd to model
+providers. ACP itself supports a session cwd, but this adapter receives no
+per-conversation cwd. The shared provider therefore uses the server process cwd
+(`process.cwd()`) for ACP sessions and persistence. Do not expect the tool cwd
+and the ACP cwd to match.
+
+**Reloads.** A reload replaces the provider and closes the old one. Draining an
+active stream is not promised: a request still using the old provider can end
+with a closed-provider error. Repeat the turn when that happens. A change to
+imported helper code can stay cached until Pocket restarts, so restart Pocket
+after such a change.
+
+**No payload shaping, no response callback.** Pi's `onPayload` is a general
+request-payload shaping callback, not an HTTP-only hook, and this ACP provider
+does not implement it. The adapter also does not fabricate an HTTP response:
+ACP is stdio. It does not call `onPayload` or `onResponse` and does not claim
+request-shaper support (`host.shapeModelRequests` is unused).
+
 ## Models
 
 Live discovery replaces this list when `kiro-cli` answers. The fallback list is:
@@ -188,6 +252,29 @@ them one at a time.
 
 Live end-to-end probes need an authenticated `kiro-cli`. See the
 [live probe guide](test/e2e/README.md).
+
+### Pocket probe
+
+`test/e2e/pocket.mjs` runs the adapter inside a real Pi Pocket, through Pocket's
+test helpers. It uses an isolated temporary Pocket data folder and turns its own
+drop-in on and off. Only the Pocket data is isolated: `kiro-cli` uses its normal
+sign-in and session store, so probe sessions appear in its session history.
+
+```sh
+# Free checks: registration, local catalog, discovery, reload ownership, disable
+PI_POCKET_SOURCE=/path/to/pi-pocket KIRO_E2E_LIVE=1 node test/e2e/pocket.mjs
+
+# Also two concurrent read turns, one warm follow-up, and one turn after a reload
+PI_POCKET_SOURCE=/path/to/pi-pocket KIRO_E2E_LIVE=full node test/e2e/pocket.mjs
+```
+
+The full run makes four user turns, not four model requests: each read turn
+sends at least one more request after the tool result. One warm follow-up runs
+on the same provider and conversation before the second reload. It must read the
+changed file again and also repeat, from conversation history, the file text
+read earlier. Its prompt contains neither file text. Pocket can also
+make background title requests for new conversations. Only the free run spends
+no model credits.
 
 ### Docs
 

@@ -64,3 +64,44 @@ broke and aliasing/permission-gate become load-bearing again.
 `0` when every executed check passes, `1` otherwise. Checks skipped due to
 `KIRO_E2E_LIVE=1` (T5) are reported separately and excluded from the pass
 count.
+
+## Pocket probe (`pocket.mjs`)
+
+The Pocket probe loads `src/pocket.ts` into a real Pi Pocket through Pocket's
+own `test/helpers.ts`, then turns the module on and off through the public host.
+It uses an isolated temporary Pocket data folder and a thin generated wrapper in
+that folder's `extensions/`. Only the Pocket data is isolated: `kiro-cli` uses
+its normal sign-in and session store, so probe sessions appear in its session
+history.
+
+```sh
+# free: registration, local catalog, discovery, reload ownership, disable
+PI_POCKET_SOURCE=/path/to/pi-pocket KIRO_E2E_LIVE=1 node test/e2e/pocket.mjs
+
+# full: also two concurrent read turns, one warm follow-up, and one turn after a reload
+PI_POCKET_SOURCE=/path/to/pi-pocket KIRO_E2E_LIVE=full node test/e2e/pocket.mjs
+```
+
+Each read turn runs with the session cwd and a relative `probe.txt`, and gives an
+explicit fresh instruction: the file may have changed, read it now, do not reuse
+earlier contents. The probe submits through `app.commands.submit`, waits with a
+bound, and requires status `done`. It then checks only the messages after the
+latest user input, so an answer from memory cannot match an earlier turn's read
+result. That turn must have a non-error `read` tool result with the file text,
+and a final answer with it too; a mismatch prints the actual result and answer,
+trimmed. One warm follow-up runs on the same provider and conversation before
+the second reload. It must read the changed file again and also repeat, from
+conversation history, the file text read earlier; its prompt contains
+neither file text. The full run makes four user turns, not four model requests:
+each read turn sends at least one more request after the tool result. Pocket can
+also make background title requests for new conversations; the probe leaves those
+enabled. The free run spends no model credits.
+
+Both runs watch the `kiro-cli acp` processes that the adapter starts, at the Node
+child-process boundary, and keep the real `ChildProcess` objects. The probe
+observes the root ACP children only: descendants that `kiro-cli` starts are not
+observed. A child counts as exited when Node sets its `exitCode` or
+`signalCode`. A wait that times out reports `pid`, `args`, `exitCode`,
+`signalCode`, and `killed` for each child that is still live. The bound is 20
+seconds. The full run also checks that the children of the provider before the
+second reload exit after that reload.
