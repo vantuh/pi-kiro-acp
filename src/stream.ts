@@ -79,6 +79,9 @@ export function streamKiroAcp(
     // turn's handlers without clobbering a newer turn's assignments.
     let turnGen: number | null = null;
     let session: AcpSession | null = null;
+    // Durable aborts a turn's signal when its request phase ends; a listener
+    // that outlives the stream would cancel Kiro while pi runs its tool.
+    let removeAbortListener: (() => void) | null = null;
 
     const releaseTerminalAnonymous = (
       terminal: 'stop' | 'error' | 'toolUse',
@@ -197,12 +200,17 @@ export function streamKiroAcp(
       const promptReadyAt = Date.now();
 
       if (options?.signal) {
+        const signal = options.signal;
         const handler = () =>
           session.rpcNotify('session/cancel', {
             sessionId: session.acpSessionId,
           });
-        if (options.signal.aborted) handler();
-        else options.signal.addEventListener('abort', handler, { once: true });
+        if (signal.aborted) handler();
+        else {
+          signal.addEventListener('abort', handler, { once: true });
+          removeAbortListener = () =>
+            signal.removeEventListener('abort', handler);
+        }
       }
 
       stream.push({ type: 'start', partial: output });
@@ -729,6 +737,7 @@ export function streamKiroAcp(
       releaseTerminalAnonymous('error');
       stream.end();
     } finally {
+      removeAbortListener?.();
       // Clear the handlers on every exit path (normal end and fatal catch),
       // but only if no newer turn has already reassigned them.
       if (session && turnGen !== null && turnGen === session.streamGen) {
