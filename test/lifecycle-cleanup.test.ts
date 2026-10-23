@@ -7,8 +7,8 @@ import { connect } from 'node:net';
 import type { Context } from '@earendil-works/pi-ai';
 import { test } from 'vitest';
 
-import { KiroSessionRuntimeRegistry } from '../src/adapter.ts';
 import { SessionManager } from '../src/session-manager.ts';
+import { KiroSessionRuntimeRegistry } from '../src/session-runtime-registry.ts';
 import { AcpSession } from '../src/session.ts';
 import { startToolBridge, type ToolBridge } from '../src/tool-bridge.ts';
 import { buildForwardedToolCatalog } from '../src/tool-catalog.ts';
