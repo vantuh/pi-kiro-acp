@@ -19,6 +19,7 @@ import { abortable, discoverKiroModels } from '../src/models/discovery.ts';
 import { KIRO_ACP_PROVIDER } from '../src/overflow.ts';
 import { createKiroAcpProvider } from '../src/provider.ts';
 import { SessionManager } from '../src/session-manager.ts';
+import { historyFingerprintBeforeCurrentUser } from '../src/session-persistence.ts';
 import { AcpSession } from '../src/session.ts';
 import { streamKiroAcp } from '../src/stream.ts';
 import { assert, kiroContext, kiroModel, settled } from './support.ts';
@@ -87,6 +88,10 @@ test('standalone provider registers in createModels and streams', async () => {
     session.acpSessionId = 'acp-standalone';
     session.currentModelId = model.id;
     session.started = true;
+    session.conversationFingerprint =
+      historyFingerprintBeforeCurrentUser(context);
+    // The stream routes again; free this pre-route so it takes this session.
+    routed.release();
 
     const events: string[] = [];
     let text = '';
@@ -127,6 +132,12 @@ test('standalone provider registers in createModels and streams', async () => {
       }),
     );
     await consumed;
+    assert(
+      session.conversationFingerprint !== null &&
+        session.conversationFingerprint !==
+          historyFingerprintBeforeCurrentUser(context),
+      'the completed turn records the transcript it now holds',
+    );
 
     assert(events.includes('done:stop'), 'the standalone turn completes');
     assert(text.includes('hello'), 'text reaches the Models stream');
@@ -360,6 +371,9 @@ test('a terminal anonymous stream releases its session', async () => {
   session.acpSessionId = 'acp-anon';
   session.currentModelId = 'claude-sonnet-4.6';
   session.started = true;
+  session.conversationFingerprint = historyFingerprintBeforeCurrentUser(
+    kiroContext('hi'),
+  );
   const written: any[] = [];
   let exited = false;
   session.proc = {

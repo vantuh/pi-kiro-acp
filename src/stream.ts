@@ -79,6 +79,7 @@ export function streamKiroAcp(
     // turn's handlers without clobbering a newer turn's assignments.
     let turnGen: number | null = null;
     let session: AcpSession | null = null;
+    let releaseRoute: (() => void) | null = null;
     // Durable aborts a turn's signal when its request phase ends; a listener
     // that outlives the stream would cancel Kiro while pi runs its tool.
     let removeAbortListener: (() => void) | null = null;
@@ -97,6 +98,7 @@ export function streamKiroAcp(
     try {
       sessionManager.pruneIdleSessions();
       const routed = await sessionManager.routeSession(context, options);
+      releaseRoute = routed.release;
       session = routed.session;
       session.lastUsedAt = Date.now();
       // Capture before ensureStarted: a cold/parallel process gets an acpSessionId
@@ -191,6 +193,7 @@ export function streamKiroAcp(
                 }
               : {
                   expectedHistoryFingerprint: prefixFingerprint,
+                  checkWarmHistory: true,
                   replayUserMessage: replayPrompt.userMessage,
                   replayImages: replayPrompt.images,
                 },
@@ -681,10 +684,15 @@ export function streamKiroAcp(
       appendKiroMetadataDiagnostic(output, session.metadata);
 
       if (outcome === 'toolUse') {
+        session.conversationFingerprint = historyFingerprintAfterAssistantTurn(
+          context,
+          output,
+        );
         output.stopReason = 'toolUse';
         stream.push({ type: 'done', reason: 'toolUse', message: output });
       } else if (outcome === 'error') {
         session.activePromptDone = null;
+        session.conversationFingerprint = null;
         output.stopReason = 'error';
         output.errorMessage = tagKiroContextOverflow(
           promptError?.message || 'Kiro ACP prompt failed',
@@ -693,6 +701,11 @@ export function streamKiroAcp(
       } else {
         session.activePromptDone = null;
         output.stopReason = 'stop';
+        const turnFingerprint = historyFingerprintAfterAssistantTurn(
+          context,
+          output,
+        );
+        session.conversationFingerprint = turnFingerprint;
         if (session.backendQuarantined) {
           // The backend's snapshot leaked Kiro builtins; persisting it would
           // re-resume the leak next turn (config fingerprint matches). The
@@ -709,10 +722,7 @@ export function streamKiroAcp(
           savePersistedKiroSession(session.persistenceKey, {
             version: 1,
             kiroSessionId: session.acpSessionId,
-            historyFingerprint: historyFingerprintAfterAssistantTurn(
-              context,
-              output,
-            ),
+            historyFingerprint: turnFingerprint,
             agentConfigFingerprint: session.agentConfigFingerprint ?? undefined,
             modelId: session.currentModelId,
             createdAt: existingPersisted?.createdAt ?? now,
@@ -725,6 +735,7 @@ export function streamKiroAcp(
       releaseTerminalAnonymous(outcome);
       stream.end();
     } catch (error) {
+      if (session) session.conversationFingerprint = null;
       log('streamKiroAcp FATAL error', {
         error:
           error instanceof Error ? error.stack || error.message : String(error),
@@ -738,6 +749,7 @@ export function streamKiroAcp(
       stream.end();
     } finally {
       removeAbortListener?.();
+      releaseRoute?.();
       // Clear the handlers on every exit path (normal end and fatal catch),
       // but only if no newer turn has already reassigned them.
       if (session && turnGen !== null && turnGen === session.streamGen) {

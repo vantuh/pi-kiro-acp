@@ -21,6 +21,25 @@ export interface RoutedSession {
    *   as a follow-up prompt instead.
    */
   kind: 'prompt' | 'resumption' | 'orphaned';
+  /** Frees this route's hold. Call it on every stream exit; idempotent. */
+  release: () => void;
+}
+
+/** Hold a routed session until its stream ends. A count, because resumption
+ * can hold one session on two routes at once. */
+function reserveRoute(
+  reservations: Map<AcpSession, number>,
+  session: AcpSession,
+): () => void {
+  reservations.set(session, (reservations.get(session) ?? 0) + 1);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    const count = reservations.get(session) ?? 0;
+    if (count <= 1) reservations.delete(session);
+    else reservations.set(session, count - 1);
+  };
 }
 
 export type KiroStreamOptions = SimpleStreamOptions & {
@@ -46,7 +65,8 @@ function liveSessionsForKey(
 async function routeSession(
   sessions: Map<string, AcpSession>,
   context: Context,
-  options?: KiroStreamOptions,
+  options: KiroStreamOptions | undefined,
+  reservations: Map<AcpSession, number>,
 ): Promise<RoutedSession> {
   const toolResults = extractToolResults(context);
   const sessionId =
@@ -55,6 +75,14 @@ async function routeSession(
       : undefined;
   const requestedCwd = options?.cwd ?? process.cwd();
   let kind: RoutedSession['kind'] = 'prompt';
+  const reserved = (session: AcpSession) =>
+    (reservations.get(session) ?? 0) > 0;
+  const take = (session: AcpSession): RoutedSession => ({
+    session,
+    toolResults,
+    kind,
+    release: reserveRoute(reservations, session),
+  });
 
   if (toolResults.length > 0) {
     const matches = [...sessions.values()]
@@ -71,11 +99,8 @@ async function routeSession(
         matches: matches[0].matches,
         toolResults: toolResults.length,
       });
-      return {
-        session: matches[0].session,
-        toolResults,
-        kind: 'resumption',
-      };
+      kind = 'resumption';
+      return take(matches[0].session);
     }
 
     // No pending call to answer. Never fall through to "fresh session + replay"
@@ -108,11 +133,7 @@ async function routeSession(
         acpSessionId: reusable.acpSessionId,
         toolNames: toolResults.map((t) => t.toolName),
       });
-      return {
-        session: reusable,
-        toolResults,
-        kind,
-      };
+      return take(reusable);
     }
     log('route orphaned tool result: no live session to recover into', {
       sessionId,
@@ -125,12 +146,17 @@ async function routeSession(
   if (key) {
     const persistenceKey = persistenceKeyForSession(sessionId!, requestedCwd);
     let existing = sessions.get(key);
-    if (existing && !existing.busy && existing.cwd !== requestedCwd) {
+    if (
+      existing &&
+      !existing.busy &&
+      !reserved(existing) &&
+      existing.cwd !== requestedCwd
+    ) {
       sessions.delete(key);
       await existing.stop();
       existing = undefined;
     }
-    if (existing && !existing.busy) {
+    if (existing && !existing.busy && !reserved(existing)) {
       existing.persistenceKey = persistenceKey;
       log('route existing keyed session', {
         session: existing.id,
@@ -139,15 +165,12 @@ async function routeSession(
         busy: existing.busy,
         persistenceKey,
       });
-      return {
-        session: existing,
-        toolResults,
-        kind,
-      };
+      return take(existing);
     }
 
     const created = new AcpSession(requestedCwd);
-    const actualKey = existing?.busy ? `${key}:parallel:${created.id}` : key;
+    const taken = !!existing && (existing.busy || reserved(existing));
+    const actualKey = taken ? `${key}:parallel:${created.id}` : key;
     created.persistenceKey = actualKey === key ? persistenceKey : null;
     sessions.set(actualKey, created);
     log('route new keyed session', {
@@ -156,13 +179,10 @@ async function routeSession(
       originalKey: key,
       cwd: requestedCwd,
       existingBusy: !!existing?.busy,
+      existingReserved: !!existing && reserved(existing),
       persistenceKey: created.persistenceKey,
     });
-    return {
-      session: created,
-      toolResults,
-      kind,
-    };
+    return take(created);
   }
 
   // No session id: an anonymous request must never inherit another independent
@@ -175,11 +195,7 @@ async function routeSession(
     cwd: requestedCwd,
     activeSessions: sessions.size,
   });
-  return {
-    session: created,
-    toolResults,
-    kind,
-  };
+  return take(created);
 }
 
 async function stopAllSessions(
@@ -195,6 +211,7 @@ export class SessionManager {
   readonly #pendingRoutes = new Set<Promise<unknown>>();
   readonly #pendingStartups = new Set<Promise<unknown>>();
   readonly #pendingTeardowns = new Set<Promise<unknown>>();
+  readonly #reservations = new Map<AcpSession, number>();
   #closed = false;
   #stopping = false;
   #closePromise: Promise<void> | null = null;
@@ -207,7 +224,12 @@ export class SessionManager {
       return Promise.reject(new Error('Kiro ACP runtime is closed'));
     if (this.#stopping)
       return Promise.reject(new Error('Kiro ACP runtime is stopping'));
-    const pending = routeSession(this.#sessions, context, options);
+    const pending = routeSession(
+      this.#sessions,
+      context,
+      options,
+      this.#reservations,
+    );
     this.#pendingRoutes.add(pending);
     void pending.then(
       () => this.#pendingRoutes.delete(pending),
@@ -240,6 +262,7 @@ export class SessionManager {
     try {
       await this.#awaitPendingWork();
       await stopAllSessions(this.#sessions);
+      this.#reservations.clear();
     } finally {
       this.#stopping = false;
     }

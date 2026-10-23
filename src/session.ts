@@ -45,6 +45,8 @@ import type {
 
 interface StartPromptOptions {
   expectedHistoryFingerprint?: string;
+  /** Check a warm ACP session's prefix; ordinary prompts only. */
+  checkWarmHistory?: boolean;
   replayUserMessage?: string;
   replayImages?: { type: 'image'; data: string; mimeType: string }[];
 }
@@ -184,6 +186,9 @@ export class AcpSession {
   rpcId = 0;
   rpcPending = new Map<number, PendingRpc>();
   acpSessionId: string | null = null;
+  /** Prefix the live ACP session holds after its last completed turn. Null =
+   * unknown, so a plain prompt replays instead of reusing it. */
+  conversationFingerprint: string | null = null;
   /** SHA-256 of last system prompt wrapped into this ACP session; null = not sent. */
   systemPromptHash: string | null = null;
   currentModelId: string | null = null;
@@ -1137,7 +1142,26 @@ export class AcpSession {
   private async ensureBackendSession(
     options: StartPromptOptions,
   ): Promise<boolean> {
-    if (this.acpSessionId) return false;
+    if (this.acpSessionId) {
+      // Reuse a warm ACP session only when it holds this plain prompt's prefix.
+      const expected = options.expectedHistoryFingerprint;
+      if (
+        !options.checkWarmHistory ||
+        !expected ||
+        this.conversationFingerprint === expected
+      )
+        return false;
+      log('warm kiro session history mismatch; replaying', {
+        session: this.id,
+        key: this.persistenceKey,
+        kiroSessionId: this.acpSessionId,
+      });
+      // A fresh ACP session starts at the agent's default model and effort.
+      this.acpSessionId = null;
+      this.conversationFingerprint = null;
+      this.systemPromptHash = null;
+      this.currentModelId = null;
+    }
 
     let shouldReplayHistory = true;
     const persisted = this.persistenceKey
@@ -1168,6 +1192,7 @@ export class AcpSession {
       );
       if (restored) {
         this.currentModelId = persisted.modelId || null;
+        this.conversationFingerprint = persisted.historyFingerprint;
         shouldReplayHistory = false;
       }
     }
@@ -1179,6 +1204,7 @@ export class AcpSession {
       })) as any;
       this.acpSessionId = result.sessionId;
       this.systemPromptHash = null;
+      this.conversationFingerprint = null;
       log('acp session/new', {
         session: this.id,
         acpSessionId: this.acpSessionId,
@@ -1499,6 +1525,7 @@ export class AcpSession {
     this.rpcPending.clear();
 
     this.acpSessionId = null;
+    this.conversationFingerprint = null;
     this.systemPromptHash = null;
     this.currentModelId = null;
     // The dead backend owned the applied effort and its reasoning report;

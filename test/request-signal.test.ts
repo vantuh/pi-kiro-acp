@@ -8,6 +8,7 @@ process.env.PI_KIRO_ACP_TOOL_BATCH_MS = '5';
 import { test } from 'vitest';
 
 import { SessionManager } from '../src/session-manager.ts';
+import { historyFingerprintBeforeCurrentUser } from '../src/session-persistence.ts';
 import { assert, kiroContext, kiroModel, wait } from './support.ts';
 
 // Imported after the env override so the debounce is picked up.
@@ -56,6 +57,11 @@ async function fakeTurnSession(
   session.acpSessionId = 'acp-1';
   session.currentModelId = model.id;
   session.started = true;
+  session.conversationFingerprint = historyFingerprintBeforeCurrentUser(
+    kiroContext('read notes.md'),
+  );
+  // The stream routes again; free this pre-route so it takes this session.
+  routed.release();
   return { session, opts, written };
 }
 
