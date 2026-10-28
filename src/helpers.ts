@@ -20,6 +20,56 @@ export function lastUserMessage(context: Context): string {
   return i < 0 ? '' : messageText(msgs[i], Infinity);
 }
 
+/**
+ * The user messages Pi placed after the latest tool result(s) — a steer, or a
+ * finished subagent's report — and the user message they interrupt (`task`).
+ *
+ * Only messages after the last assistant message count: earlier ones were
+ * forwarded on the request that followed them. Without a tool result in that
+ * stretch there is nothing to hand back, and the last user message is simply
+ * the new prompt, so `steers` is empty.
+ */
+export function splitTrailingSteers(context: Context): {
+  steers: string[];
+  task: string;
+} {
+  const msgs = context.messages || [];
+  let assistantIdx = -1;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    if (msgs[i].role === 'assistant') {
+      assistantIdx = i;
+      break;
+    }
+  }
+  const after = msgs.slice(assistantIdx + 1);
+  if (assistantIdx < 0 || !after.some((m) => m.role === 'toolResult'))
+    return { steers: [], task: lastUserMessage(context) };
+
+  const steers = after
+    .filter((m) => m.role === 'user')
+    .map((m) => messageText(m, Infinity));
+  const before = msgs.slice(0, assistantIdx);
+  const taskIdx = findLastUserIndex({ ...context, messages: before });
+  return {
+    steers,
+    task: taskIdx < 0 ? '' : messageText(before[taskIdx], Infinity),
+  };
+}
+
+/** Wraps steers for the places where Kiro has no user turn to put them in. */
+export function buildSteerBlock(steers: string[]): string {
+  const messages = steers
+    .map((text) => `<message role="user">\n${escapeText(text)}\n</message>`)
+    .join('\n');
+  return (
+    '<user_message_during_run>\n' +
+    'The user sent the message(s) below while you were working. They are not tool output. ' +
+    'Read them now and follow them from here.\n\n' +
+    `${messages}\n` +
+    '</user_message_during_run>'
+  );
+}
+
 export function buildConversationPrompt(context: Context): string {
   const msgs = context.messages || [];
   const lastUserIdx = findLastUserIndex(context);
@@ -66,6 +116,7 @@ const WORK_ALREADY_DONE_NOTE =
  */
 export function buildToolResultRecoveryPrompt(
   toolResults: ToolResultInfo[],
+  steers: string[] = [],
 ): string {
   const blocks = toolResults
     .map(
@@ -82,7 +133,8 @@ export function buildToolResultRecoveryPrompt(
     'Treat it exactly as the return value of your own tool call and continue the turn from there. ' +
     'Do not call the tool again.\n\n' +
     `${blocks}\n` +
-    '</dropped_tool_result>'
+    '</dropped_tool_result>' +
+    (steers.length > 0 ? `\n\n${buildSteerBlock(steers)}` : '')
   );
 }
 

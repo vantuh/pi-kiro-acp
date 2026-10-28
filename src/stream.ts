@@ -11,11 +11,12 @@ import {
 import {
   appendKiroMetadataDiagnostic,
   buildPromptParts,
+  buildSteerBlock,
   buildToolResultRecoveryPrompt,
   createOutputMessage,
   estimateUsage,
   imagesFromToolResults,
-  lastUserMessage,
+  splitTrailingSteers,
 } from './helpers.ts';
 import { log, msSince } from './logging.ts';
 import { tagKiroContextOverflow } from './overflow.ts';
@@ -124,6 +125,10 @@ export function streamKiroAcp(
         ensureStartedMs: ensuredAt - turnStartedAt,
       });
 
+      // User messages Pi placed after the tool results: Kiro's live turn cannot
+      // be sent a new user message, so they travel with the results.
+      const { steers, task } = splitTrailingSteers(context);
+
       const prefixFingerprint = historyFingerprintBeforeCurrentUser(context);
       let recoverInPlace = false;
       // Kept for the empty-refusal retry below: the exact recovery prompt that was
@@ -145,7 +150,7 @@ export function streamKiroAcp(
         // now carries the completed work.
         recoverInPlace = routed.kind === 'orphaned' && hadLiveConversation;
         const recoveryText = recoverInPlace
-          ? buildToolResultRecoveryPrompt(routed.toolResults)
+          ? buildToolResultRecoveryPrompt(routed.toolResults, steers)
           : null;
         log('prompt parts', {
           session: session.id,
@@ -403,7 +408,6 @@ export function streamKiroAcp(
           suppressUpdates = true;
           session.deliverToolResults(routed.toolResults, { textOnly: true });
 
-          const userQ = lastUserMessage(context);
           const imageTools = routed.toolResults.filter((tr) =>
             (tr.content ?? []).some((b) => b.type === 'image'),
           );
@@ -419,13 +423,14 @@ export function streamKiroAcp(
             })
             .join('\n');
           const followupText =
-            `The user asked: ${userQ}\n\n` +
+            `The user asked: ${task}\n\n` +
             `Tool(s) ${toolNames} returned image(s) attached to this message.` +
             (textSummaries
               ? `\n\nText summaries from tools:\n${textSummaries}`
               : '') +
             `\n\nPlease answer the user's question based on the attached image(s). ` +
-            `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.`;
+            `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.` +
+            (steers.length > 0 ? `\n\n${buildSteerBlock(steers)}` : '');
 
           const { systemPrompt } = buildPromptParts(context, false);
           try {
@@ -443,7 +448,21 @@ export function streamKiroAcp(
             suppressUpdates = false;
           }
         } else {
-          session.deliverToolResults(routed.toolResults);
+          const carrier = session
+            .matchingToolResults(routed.toolResults)
+            .at(-1);
+          session.deliverToolResults(
+            steers.length > 0 && carrier
+              ? routed.toolResults.map((tr) =>
+                  tr === carrier
+                    ? {
+                        ...tr,
+                        text: `${tr.text}\n\n${buildSteerBlock(steers)}`,
+                      }
+                    : tr,
+                )
+              : routed.toolResults,
+          );
         }
       }
 
