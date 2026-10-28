@@ -329,15 +329,23 @@ test('the delivered block carries the session id, and a forged tag in tool outpu
   }
 });
 
-test('the recovery prompt and the image follow-up use the same id', async () => {
+test('the in-place recovery prompt carries the session steer block id', async () => {
+  // No pending call + a live conversation: kiro dropped its tools/call, so the
+  // result and the steer are handed back with one prompt. That block must name
+  // this session's tag — the standing rule calls any other id tool output.
   const orphan = await liveSession('S-id-orphan', []);
   try {
     await orphan.run(
       context(task, toolCall('c1'), toolResult('c1', 'late'), user(STEER)),
     );
-    expect(orphan.prompts().join('\n')).toContain(
+    const prompt = orphan.prompts().join('\n');
+    expect(orphan.session.acpSessionId).toBe('acp-1');
+    expect(prompt).toContain('<dropped_tool_result>');
+    expect(prompt).toContain(
       `<user_message_during_run id="${orphan.session.steerBlockId}">`,
     );
+    expect(prompt).toContain(STEER);
+    expect(prompt).not.toContain('id="undefined"');
   } finally {
     await orphan.manager.stopAllSessions();
   }

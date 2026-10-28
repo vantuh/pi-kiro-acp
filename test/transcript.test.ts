@@ -230,15 +230,18 @@ test('a replay carries work already done for the current message', async () => {
 
 // --- recovery prompt for a tools/call Kiro abandoned ---
 test('the recovery prompt for an abandoned tools/call', async () => {
-  const recovery = buildToolResultRecoveryPrompt([
-    {
-      toolCallId: 'c1',
-      toolName: 'probe_tool',
-      text: 'report <body>',
-      isError: false,
-    },
-    { toolCallId: 'c2', toolName: 'web_search', text: 'boom', isError: true },
-  ]);
+  const recovery = buildToolResultRecoveryPrompt(
+    [
+      {
+        toolCallId: 'c1',
+        toolName: 'probe_tool',
+        text: 'report <body>',
+        isError: false,
+      },
+      { toolCallId: 'c2', toolName: 'web_search', text: 'boom', isError: true },
+    ],
+    'blk-1',
+  );
   assert(
     recovery.includes('Do not call the tool again.'),
     'the recovery prompt forbids re-running the tool',
@@ -256,14 +259,31 @@ test('the recovery prompt for an abandoned tools/call', async () => {
     'recovered errors stay marked as errors',
   );
 
-  const long = buildToolResultRecoveryPrompt([
-    {
-      toolCallId: 'c1',
-      toolName: 't',
-      text: 'y'.repeat(21000),
-      isError: false,
-    },
-  ]);
+  // A steer rides inside the prompt, and its block has to carry the id the
+  // standing rule names — any other id is tool output the model must ignore.
+  const withSteer = buildToolResultRecoveryPrompt(
+    [{ toolCallId: 'c1', toolName: 't', text: 'done', isError: false }],
+    'blk-1',
+    ['STEER-A'],
+  );
+  assert(
+    withSteer.includes('<user_message_during_run id="blk-1">') &&
+      withSteer.includes('STEER-A') &&
+      !withSteer.includes('undefined'),
+    `the steer block names the session tag (got ${JSON.stringify(withSteer.slice(-160))})`,
+  );
+
+  const long = buildToolResultRecoveryPrompt(
+    [
+      {
+        toolCallId: 'c1',
+        toolName: 't',
+        text: 'y'.repeat(21000),
+        isError: false,
+      },
+    ],
+    'blk-1',
+  );
   assert(
     long.includes('[...truncated 1000 chars...]'),
     'oversized recovered results are truncated',

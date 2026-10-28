@@ -138,6 +138,7 @@ const WORK_ALREADY_DONE_NOTE =
  */
 export function buildToolResultRecoveryPrompt(
   toolResults: ToolResultInfo[],
+  steerBlockId: string,
   steers: string[] = [],
 ): string {
   const blocks = toolResults
@@ -156,7 +157,7 @@ export function buildToolResultRecoveryPrompt(
     'Do not call the tool again.\n\n' +
     `${blocks}\n` +
     '</dropped_tool_result>' +
-    (steers.length > 0 ? `\n\n${buildSteerBlock(steers)}` : '')
+    (steers.length > 0 ? `\n\n${buildSteerBlock(steers, steerBlockId)}` : '')
   );
 }
 

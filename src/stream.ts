@@ -155,6 +155,7 @@ export function streamKiroAcp(
         const recoveryText = recoverInPlace
           ? buildToolResultRecoveryPrompt(
               routed.toolResults,
+              session.steerBlockId,
               session.steersNotQueuedNatively(steers),
             )
           : null;
