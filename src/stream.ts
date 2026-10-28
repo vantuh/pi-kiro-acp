@@ -30,6 +30,7 @@ import {
 } from './session-persistence.ts';
 import { toKiroEffort, type AcpSession } from './session.ts';
 import { hostToolCatalog, KIRO_BUILTIN_NAMES } from './tool-catalog.ts';
+import { createSteerEchoFilter } from './v3/steer-echo.ts';
 
 /**
  * How long to keep collecting tool calls before handing the batch to pi.
@@ -296,11 +297,19 @@ export function streamKiroAcp(
 
       let endTextBlock: () => void = () => {};
       let endThinkingBlock: () => void = () => {};
+      // V3 models repeat their steers back as `[STEERING <id>: …]` notes. Only
+      // ids this session queued are stripped; the filter holds no text until
+      // one exists, and its hold is released when the block ends.
+      const steerEcho = createSteerEchoFilter(() => session.steerMessageIds);
       const textWriter = createBlockWriter('text', () => endThinkingBlock());
       const thinkingWriter = createBlockWriter('thinking', () =>
         endTextBlock(),
       );
-      endTextBlock = () => textWriter.end();
+      endTextBlock = () => {
+        const held = steerEcho.flush();
+        if (held) textWriter.delta(held);
+        textWriter.end();
+      };
       endThinkingBlock = () => thinkingWriter.end();
 
       // Streaming usage: Kiro reports metadata periodically, so refresh the
@@ -347,9 +356,12 @@ export function streamKiroAcp(
                     : null,
               });
             }
-            textChars += text.length;
-            textChunks += 1;
-            textWriter.delta(text, messageId);
+            const visible = steerEcho.push(text);
+            if (visible) {
+              textChars += visible.length;
+              textChunks += 1;
+              textWriter.delta(visible, messageId);
+            }
           }
         } else if (
           update.sessionUpdate === 'tool_call' ||
