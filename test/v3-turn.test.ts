@@ -248,6 +248,42 @@ test('v3 refuses a model id it was not offered', async () => {
   assert(session.currentModelId === null, 'nothing is recorded as applied');
 });
 
+test('v3 selects a model even when kiro reported no options', async () => {
+  const { session, written } = v3Session();
+
+  // No configOptions were ever seen: a restore response carrying none.
+  const turn = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+
+  const [modelFrame] = configOptionFrames(written);
+  assert(
+    modelFrame?.params?.configId === 'model' &&
+      modelFrame.params.value === 'claude-sonnet-4.6',
+    'the value is written although nothing could be checked against it',
+  );
+  session.handleStdoutLine(
+    resultFor(modelFrame.id, {
+      configOptions: optionsFor('claude-sonnet-4.6', null),
+    }),
+  );
+  await tick();
+  const promptFrame = framesSoFar(written).find(
+    (frame) => frame.method === 'session/prompt',
+  );
+  session.handleStdoutLine(
+    resultFor(promptFrame.id, { stopReason: 'end_turn' }),
+  );
+  await turn;
+  assert(
+    session.currentModelId === 'claude-sonnet-4.6',
+    'the echoed model is recorded',
+  );
+  assert(
+    configOptionFrames(written).length === 1,
+    'the effort level is skipped when the model options were unknown',
+  );
+});
+
 test('v3 session_info_update telemetry reaches the metadata only', async () => {
   const { session } = v3Session();
   const seen: any[] = [];

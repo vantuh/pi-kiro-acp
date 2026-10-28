@@ -1160,7 +1160,10 @@ export class AcpSession {
     this.effortReconcilePending = false;
     if (this.currentModelId !== modelId) {
       const offered = configOptionValues(this.configOptions, 'model');
-      if (!offered.includes(modelId))
+      // An empty list means kiro reported no configOptions (a restore whose
+      // response carried none): write the value and let the echo decide
+      // instead of refusing every model.
+      if (offered.length > 0 && !offered.includes(modelId))
         throw new Error(
           `Kiro V3 does not offer model ${modelId} (offered: ${offered.join(', ') || 'none'}); refresh the model list or pick another`,
         );
