@@ -12,16 +12,17 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { test } from 'vitest';
+import { test, vi } from 'vitest';
 
 import { savePersistedKiroSession } from '../src/session-persistence.ts';
 import { AcpSession } from '../src/session.ts';
 import type { ForwardedToolCatalog } from '../src/tool-catalog.ts';
-import { assert, settled, wait } from './support.ts';
+import { assert, kiroContext, settled, wait } from './support.ts';
 
 const V2_ONLY_FLAGS = [
   '--agent',
@@ -37,6 +38,20 @@ const catalogProvider = (): ForwardedToolCatalog => ({
   fingerprint: 'agent-engine-test',
   diagnostics: [],
 });
+
+/** Loads a fresh `session.ts`, so module state (the one-shot MCP-timeout flag)
+ * starts clean instead of depending on which test ran first. */
+async function freshSessionModule() {
+  vi.resetModules();
+  return import('../src/session.ts');
+}
+
+/** Waits until the fake has logged everything written before this marker, so a
+ * "frame X was not sent" assertion cannot pass on unread bytes. */
+async function quiesce(session: AcpSession, fake: FakeKiroCli): Promise<void> {
+  await session.rpcSend('test/marker', {});
+  await waitFor(() => fake.frames().some((f) => f.method === 'test/marker'));
+}
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
@@ -115,12 +130,10 @@ function frameParams(frames: any[], method: string): any {
   return frames.find((frame) => frame.method === method)?.params;
 }
 
-// Must stay the first test that starts an `acp` process in this file:
-// configureMcpTimeout is a one-shot process-global, so a v2 start earlier would
-// hide a v3 regression that still ran `kiro-cli settings`.
 test('v3 launches with the engine flags and a pi-only agent profile', async () => {
+  const { AcpSession: FreshSession } = await freshSessionModule();
   const fake = fakeKiroCli(['_session/steer']);
-  const session = new AcpSession(process.cwd(), 'v3');
+  const session = new FreshSession(process.cwd(), 'v3');
   try {
     await session.ensureStarted(catalogProvider);
 
@@ -178,8 +191,9 @@ test('v3 launches with the engine flags and a pi-only agent profile', async () =
 });
 
 test('the default engine keeps the v2 launch flags', async () => {
+  const { AcpSession: FreshSession } = await freshSessionModule();
   const fake = fakeKiroCli();
-  const session = new AcpSession(process.cwd());
+  const session = new FreshSession(process.cwd());
   try {
     assert(session.engine === 'v2', 'a session without an engine runs v2');
     await session.ensureStarted(catalogProvider);
@@ -209,7 +223,8 @@ test('v3 session/new selects the agent through the session workspace', async () 
   const session = new AcpSession(cwd, 'v3');
   try {
     await session.ensureStarted(catalogProvider);
-    await settled(session.startPrompt('auto', '', 'hi'));
+    // Straight to the handshake: startPrompt fails fast on v3 by design.
+    await (session as any).ensureBackendSession({});
 
     const params = frameParams(fake.frames(), 'session/new');
     assert(!!params, 'session/new was sent');
@@ -255,11 +270,9 @@ test('v3 session/load restores with the same agent selection', async () => {
       lastUsed: Date.now(),
     });
 
-    await settled(
-      session.startPrompt('auto', '', 'hi', [], {
-        expectedHistoryFingerprint: 'history-hash',
-      }),
-    );
+    await (session as any).ensureBackendSession({
+      expectedHistoryFingerprint: 'history-hash',
+    });
 
     const params = frameParams(fake.frames(), 'session/load');
     assert(!!params, 'session/load was sent');
@@ -301,7 +314,7 @@ test('an unknown agent-to-client request gets an error on v3 and null on v2', as
   try {
     await v3Session.ensureStarted(catalogProvider);
     // session/new is what makes the fake send the unknown request.
-    await settled(v3Session.startPrompt('auto', '', 'hi'));
+    await (v3Session as any).ensureBackendSession({});
     await waitFor(() => v3Fake.replies().length > 0);
     const [reply] = v3Fake.replies();
     assert(
@@ -362,16 +375,62 @@ test('the v3 turn path fails fast instead of sending a v2 model RPC', async () =
       turn.error?.message === 'Kiro V3 turn path not implemented yet',
       `the error names the gap (got "${turn.error?.message}")`,
     );
+    await quiesce(session, fake);
     assert(
-      !fake.frames().some((frame) => frame.method === 'session/set_model'),
-      'no session/set_model is sent on v3',
+      !fake
+        .frames()
+        .some((frame) =>
+          [
+            'session/new',
+            'session/load',
+            'session/set_model',
+            'session/prompt',
+          ].includes(frame.method),
+        ),
+      'a failing v3 turn does no backend I/O',
     );
+
+    // The process stays alive after that failed turn; a level on the next turn
+    // must not turn into a v2 `/effort` command prompt.
+    await session.ensureStarted(catalogProvider, 'high');
+    await quiesce(session, fake);
     assert(
       !fake.frames().some((frame) => frame.method === 'session/prompt'),
-      'no session/prompt is sent on v3',
+      'a started v3 session sends no /effort command prompt',
     );
   } finally {
     await session.stop();
     fake.restore();
+  }
+});
+
+test('the engine from kiro-acp.json reaches the routed session', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'kiro-acp-home-'));
+  mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+  writeFileSync(
+    join(home, '.pi', 'agent', 'kiro-acp.json'),
+    JSON.stringify({ agentEngine: 'v3' }),
+  );
+  const savedHome = process.env.HOME;
+  process.env.HOME = home;
+  try {
+    vi.resetModules();
+    const { SessionManager } = await import('../src/session-manager.ts');
+    const manager = new SessionManager();
+    try {
+      // Routing only: nothing is spawned, so no kiro-cli is involved.
+      const routed = await manager.routeSession(kiroContext('hi'), {
+        cwd: process.cwd(),
+      });
+      assert(
+        routed.session.engine === 'v3',
+        `the routed session runs the configured engine (got ${routed.session.engine})`,
+      );
+    } finally {
+      await manager.stopAllSessions();
+    }
+  } finally {
+    process.env.HOME = savedHome;
+    rmSync(home, { recursive: true, force: true });
   }
 });
