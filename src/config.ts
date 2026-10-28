@@ -50,8 +50,15 @@ interface UsageFooterConfig {
 
 export type AgentEngine = 'v2' | 'v3';
 
-/** Engine setting: v2 unless explicitly v3; any other value falls back. */
+/** `PI_KIRO_ACP_AGENT_ENGINE` overrides the config file so a launcher can pick
+ * the engine without touching HOME (where the kiro-cli login lives). */
+const AGENT_ENGINE_ENV = 'PI_KIRO_ACP_AGENT_ENGINE';
+
+/** Engine setting: env, then the config file, then v2; anything unrecognised is
+ * ignored rather than guessed. */
 export function resolveAgentEngine(config: KiroAcpConfig): AgentEngine {
+  const fromEnv = process.env[AGENT_ENGINE_ENV];
+  if (fromEnv === 'v2' || fromEnv === 'v3') return fromEnv;
   return config.agentEngine === 'v3' ? 'v3' : 'v2';
 }
 

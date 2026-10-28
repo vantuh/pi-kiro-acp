@@ -68,17 +68,41 @@ test('kiro-acp.json config resolvers', () => {
 });
 
 test('kiro-acp.json agent engine resolver', () => {
-  assert(resolveAgentEngine({}) === 'v2', 'the engine defaults to v2');
-  assert(
-    resolveAgentEngine({ agentEngine: 'v2' }) === 'v2',
-    'the engine can be pinned to v2',
-  );
-  assert(
-    resolveAgentEngine({ agentEngine: 'v3' }) === 'v3',
-    'v3 is opt-in through the config',
-  );
-  assert(
-    resolveAgentEngine({ agentEngine: 'v9' as any }) === 'v2',
-    'an unknown engine value falls back to v2',
-  );
+  const savedEnv = { ...process.env };
+  delete process.env.PI_KIRO_ACP_AGENT_ENGINE;
+  try {
+    assert(resolveAgentEngine({}) === 'v2', 'the engine defaults to v2');
+    assert(
+      resolveAgentEngine({ agentEngine: 'v2' }) === 'v2',
+      'the engine can be pinned to v2',
+    );
+    assert(
+      resolveAgentEngine({ agentEngine: 'v3' }) === 'v3',
+      'v3 is opt-in through the config',
+    );
+    assert(
+      resolveAgentEngine({ agentEngine: 'v9' as any }) === 'v2',
+      'an unknown engine value falls back to v2',
+    );
+
+    // The env override lets a launcher switch engines without touching HOME.
+    process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v3';
+    assert(
+      resolveAgentEngine({}) === 'v3' &&
+        resolveAgentEngine({ agentEngine: 'v2' }) === 'v3',
+      'the env override wins over the config file',
+    );
+    process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v2';
+    assert(
+      resolveAgentEngine({ agentEngine: 'v3' }) === 'v2',
+      'the env override can pin v2 as well',
+    );
+    process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v4';
+    assert(
+      resolveAgentEngine({ agentEngine: 'v3' }) === 'v3',
+      'an unrecognised env value is ignored',
+    );
+  } finally {
+    process.env = savedEnv;
+  }
 });
