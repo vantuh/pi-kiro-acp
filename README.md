@@ -187,7 +187,8 @@ Optional file `~/.pi/agent/kiro-acp.json`. Restart pi after editing.
 ```json
 {
   "logger": { "debug": false, "verbose": 0 },
-  "usageFooter": { "enabled": false, "pollMinutes": 10 }
+  "usageFooter": { "enabled": false, "pollMinutes": 10 },
+  "agentEngine": "v2"
 }
 ```
 
@@ -197,6 +198,7 @@ Optional file `~/.pi/agent/kiro-acp.json`. Restart pi after editing.
 | `logger.verbose` | `0` | Pass `-v` to `kiro-cli acp` 0–3 times |
 | `usageFooter.enabled` | `false` | Show Kiro plan usage in the footer |
 | `usageFooter.pollMinutes` | `10` | Footer refresh interval |
+| `agentEngine` | `"v2"` | Engine to drive: `"v2"` or `"v3"` |
 
 ### Environment variables
 
@@ -211,6 +213,22 @@ Tuning knobs; defaults work for most setups.
 | `PI_KIRO_ACP_DRAIN_MS` | `150` | Drain window for trailing session updates |
 | `PI_KIRO_ACP_RESTORE_LEAK_CHECK_MS` | `150` | Wait after a restore to detect a bad session (`0` = off) |
 | `XDG_DATA_HOME` | `~/.local/share` | Base dir for persisted sessions |
+| `PI_KIRO_ACP_AGENT_ENGINE` | unset | `v2` or `v3`, overriding `agentEngine` |
+
+### Kiro CLI V3 engine
+
+`agentEngine` picks the engine the provider drives; `PI_KIRO_ACP_AGENT_ENGINE`
+overrides the file so a launcher can switch without touching `~/.pi/agent`.
+Both default to `v2`, which is the behaviour every earlier release had.
+
+V3 (`--agent-engine=v3`) changes three things. The agent profile is written to a
+temp dir and selected per session, so only the forwarded `pi_host` tools reach
+the model and Kiro builtins never register. Model and effort are set in-band with
+`session/set_config_option` instead of spawn flags. Steering goes through native
+`_session/steer` while a tool result is still live and falls back to the
+synthetic `<user_message_during_run>` block inside that tool result otherwise;
+the model's `[STEERING <id>: …]` echo is stripped from its output. Probe
+findings: [docs/kiro-v3-acp-probes.md](docs/kiro-v3-acp-probes.md).
 
 ## Commands
 
