@@ -4,14 +4,21 @@ function asRecord(value: unknown): Record<string, any> | undefined {
     : undefined;
 }
 
+/** `@<server>/<tool>`, the title V3 gives an MCP tool call. */
+const MCP_TITLE_RE = /^@([^/\s]+)\/(\S+)$/;
+
 /** Kiro tags tool identity in several legacy shapes. One parser for all of
  * them, so permission gating and logging agree on the same answer:
  * - `toolCall`/`tool_call` params with `_meta.kiro.{toolName,mcpServerName}`
  * - top-level `_meta.kiro.{toolName,mcpServerName}` (stream tool_call updates)
  * - bare `_meta.{toolName,mcpServerName}` on the toolCall
  * - plain `toolCall.{toolName,name}` with no meta at all
- * The first non-empty string wins, in the order above. Call-site-specific
- * fallbacks (e.g. `title` in stream.ts) stay at their call sites. */
+ * - V3: `_meta.kiro.mcpTool.identity.{serverName,toolName}`,
+ *   `_meta.kiro.serverName`, and a `title` of the form `@<server>/<tool>`
+ *   (V3 tags an MCP call only that way and its meta tools — `Tool Load`,
+ *   `tool_call` — carry neither, so they can never look like pi_host calls)
+ * The first non-empty string wins, in the order above; the V3 shapes only fill
+ * in what the legacy ones leave empty. */
 export function kiroToolIdentity(value: unknown): {
   toolName: string | undefined;
   mcpServer: string | undefined;
@@ -22,17 +29,34 @@ export function kiroToolIdentity(value: unknown): {
     asRecord(toolCall?._meta?.kiro) ??
     asRecord(v?._meta?.kiro) ??
     asRecord(toolCall?._meta);
+  const mcpToolIdentity = asRecord(asRecord(meta?.mcpTool)?.identity);
+  const title =
+    typeof v?.title === 'string'
+      ? v.title
+      : typeof toolCall?.title === 'string'
+        ? toolCall.title
+        : undefined;
+  const titleMatch = title ? MCP_TITLE_RE.exec(title) : null;
   const firstString = (...candidates: unknown[]): string | undefined =>
     candidates.find(
       (candidate): candidate is string =>
         typeof candidate === 'string' && candidate.length > 0,
     );
   return {
-    toolName: firstString(meta?.toolName, toolCall?.toolName, toolCall?.name),
+    toolName: firstString(
+      meta?.toolName,
+      toolCall?.toolName,
+      toolCall?.name,
+      mcpToolIdentity?.toolName,
+      titleMatch?.[2],
+    ),
     mcpServer: firstString(
       meta?.mcpServerName,
       asRecord(toolCall?._meta)?.mcpServerName,
       v?._meta?.mcpServerName,
+      mcpToolIdentity?.serverName,
+      meta?.serverName,
+      titleMatch?.[1],
     ),
   };
 }
@@ -64,6 +88,22 @@ export function isPiHostPermission(
   const name = kiroToolNameFromPermissionParams(params);
   if (!name) return false;
   return new Set(forwardedKiroNames).has(name);
+}
+
+/** V3 offers `{optionId, name, kind}` options. Only the one-shot kind is ever
+ * selected: `allow_always` would let the tool run for the rest of the session
+ * without pi seeing another request, so a missing one-shot option cancels. */
+export function pickV3PermissionOptionId(
+  options: Array<{ optionId?: string; kind?: string }>,
+  allow: boolean,
+): string | null {
+  const wanted = allow ? 'allow_once' : 'reject_once';
+  const match = options.find(
+    (option) => option.kind === wanted || option.optionId === wanted,
+  );
+  return typeof match?.optionId === 'string' && match.optionId
+    ? match.optionId
+    : null;
 }
 
 export function pickPermissionOptionId(

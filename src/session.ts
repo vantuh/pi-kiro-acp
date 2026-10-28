@@ -22,6 +22,7 @@ import {
   isPiHostPermission,
   kiroToolIdentity,
   pickPermissionOptionId,
+  pickV3PermissionOptionId,
 } from './permissions.ts';
 import { getDescendantPids, terminateProcessTree } from './process-utils.ts';
 import {
@@ -630,6 +631,10 @@ export class AcpSession {
   }
 
   private respondToPermissionRequest(id: number, params: unknown): void {
+    if (this.engine === 'v3') {
+      this.respondToV3PermissionRequest(id, params);
+      return;
+    }
     const options = Array.isArray((params as any)?.options)
       ? ((params as any).options as Array<{ id?: string }>)
       : [];
@@ -638,6 +643,34 @@ export class AcpSession {
     const { toolName, mcpServer } = kiroToolIdentity(params);
     log('permission request', {
       session: this.id,
+      allow,
+      toolName: toolName ?? null,
+      mcpServer: mcpServer ?? null,
+      optionId,
+      cancelled: !optionId,
+    });
+    this.rpcRespond(
+      id,
+      optionId
+        ? { outcome: { outcome: 'selected', optionId } }
+        : { outcome: { outcome: 'cancelled' } },
+    );
+  }
+
+  /** V3 asks with `{optionId, name, kind}` options. Only a pi_host tool may be
+   * allowed, and only once: anything else is rejected, and a request without
+   * the one-shot option is cancelled rather than answered with a standing
+   * grant. */
+  private respondToV3PermissionRequest(id: number, params: unknown): void {
+    const options = Array.isArray((params as any)?.options)
+      ? ((params as any).options as Array<{ optionId?: string; kind?: string }>)
+      : [];
+    const allow = isPiHostPermission(params, this.forwardedKiroNames());
+    const optionId = pickV3PermissionOptionId(options, allow);
+    const { toolName, mcpServer } = kiroToolIdentity(params);
+    log('permission request', {
+      session: this.id,
+      engine: 'v3',
       allow,
       toolName: toolName ?? null,
       mcpServer: mcpServer ?? null,
