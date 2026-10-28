@@ -247,6 +247,23 @@ scenario, 0.03 for short prompts.
 - `_session/steer` is unadvertised, so a future build can drop it. A failed call needs
   the synthetic `<user_message_during_run>` path as a fallback.
 
+What the provider does with that (`src/session.ts`, `src/v3/steer-echo.ts`):
+
+- A resumption turn on V3 hands its steers to `deliverToolResults`, which queues each one
+  with `_session/steer` *before* the tool result the model is waiting on is answered, and
+  only when kiro answered `queued: true` with a `messageId`. Any error, timeout (10 s) or
+  unqueued reply disables native steering for the session and puts that steer and every
+  following one inside the tool result as the synthetic block — a steer is never sent both
+  ways. A steer with no live `tools/call` (recovery prompt, image follow-up, no pending
+  call) keeps the synthetic block, and v2 is untouched.
+- The `messageId` of each queued steer is recorded and used to strip the model's
+  `[STEERING <id>: …]` acknowledgement from `agent_message_chunk` output: only a note whose
+  id matches is removed, together with the blank lines that introduced it. The filter holds
+  back nothing until a steer has actually been queued, and everything it holds is released
+  when the text block ends.
+- The standing rule in `<system_instructions>` is still sent on V3: it is what makes the
+  synthetic fallback trustworthy.
+
 The free-RPC probe never sent `session/prompt`. A later real run (default pi model,
 `claude-sonnet-4.6`, `PI_KIRO_ACP_AGENT_ENGINE=v3`) confirmed the turn itself: the agent was
 selected, `v3 model set claude-sonnet-4.6` was logged, text streamed, the turn stopped, abort
