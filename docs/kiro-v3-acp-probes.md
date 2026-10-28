@@ -40,6 +40,66 @@ touches neither the user project nor `~/.kiro`:
 
 The response reports `modes.currentModeId: "<name>"`.
 
+## Agent selection failures and restore
+
+Free probe on 2.35.1: only `initialize`, `session/new`, `session/load` and
+`session/list`, no `session/prompt`, no credits.
+
+Both `session/new` and `session/load` answer with `modes.currentModeId` and
+`modes.availableModes` (`[{id, name, description, _meta}]`, the seven bundled modes plus
+ours when it resolves). **No agent-selection failure is ever a JSON-RPC error**: the
+session is created or loaded normally and silently runs in mode `vibe` with every Kiro
+built-in tool active.
+
+| Case | Response | Late notification |
+|---|---|---|
+| `modeId` names a profile that does not exist | `vibe`, `availableModes` without it | `_kiro/customAgent/not_found {requestedAgent, fallbackAgent: "vibe"}` |
+| Profile deleted between new and load (leak) | `vibe` | `_kiro/customAgent/not_found`, same shape |
+| v2-shaped profile (`allowedTools`, no `permissions`) | `vibe` | `not_found` with `skipped: {path, reasonCode: "cli_only_agent", error: "Agent profile uses fields this agent engine does not support: allowedTools"}` |
+| Broken JSON profile | `vibe` | `_kiro/customAgent/config_error {sessionId, path, reasonCode: "invalid_config", error: "AgentFileFormatError: …"}`, then `not_found` |
+| `session/load` without the agent dir in `additionalDirectories` | `vibe` | none needed |
+
+So `modes.currentModeId !== <agentName>` is the only synchronous signal, and it is
+reliable. The `_kiro/customAgent/*` notifications always arrive *after* the response and
+are post-mortem detail only.
+
+Restore specifics:
+
+- `session/load` **ignores `_meta.kiro.modeId`**: the mode stored with the session wins
+  (a `vibe` session loaded with `modeId: "<agent>"` stays `vibe`; our session loaded with
+  `modeId: "vibe"` stays ours). A wrong mode cannot be repaired by loading again — the
+  session has to be recreated with `session/new` and the history replayed.
+- A load whose agent dir differs from the one the session was created with works: old dir
+  deleted, new dir holding a profile of the same name → `currentModeId` is our agent. The
+  per-process temp agent root is therefore fine across restarts.
+- `session/list` carries both `_meta.modeId` (requested) and `_meta.agentMode` (effective);
+  a fallback session shows the requested id next to `agentMode: "vibe"`, and a session
+  that never had an agent shows only `agentMode`.
+- `_kiro/tools/didChange` is **not** a lockdown signal: in our mode its tags include
+  `{source: "builtin", tag: "read"}` even though builtins are denied. MCP tools appear
+  there as `@pi_host/<name>` next to same-named builtins (`read`, `write`, `shell`, `web`)
+  with no collision handling, no warning, and `disabled: false` for all of them in
+  `_kiro/mcp/status`; the paid tool-lockdown probe (*Only pi tools visible*, below) still
+  showed the model in our mode reaching `pi_host` tools (`tool_load`/`tool_call`) and
+  running `pi_host::read` while a builtin `read` existed.
+- Supporting signal: `session_info_update` `_meta.kiro.breakdown.tools` reports
+  `builtin.tokens` ≈1.7–2.0k in our mode versus ≈4.9–5.2k in `vibe` — the builtin schemas
+  that the `builtin: deny` rule removes.
+
+Client guard (implemented in `src/session.ts`):
+
+1. `session/new`: adopt the session only when `modes.currentModeId` is our agent; on a
+   mismatch log the requested agent and the actual mode, leave the session unadopted
+   (`acpSessionId` stays null) and fail the turn — the next turn retries with a freshly
+   written profile.
+2. `session/load`: same check on the load response. A mismatch is handled like a failed
+   restore — drop the persisted record, restart the process and let the caller replay the
+   history into a fresh `session/new`. The v2 hazard window
+   (`RESTORE_LEAK_CHECK_MS`, builtin-leak bookkeeping) is skipped on V3: those
+   notifications do not exist there and the mode is synchronous.
+3. `_kiro/customAgent/not_found` and `_kiro/customAgent/config_error` are logged (agent
+   names, `reasonCode`, error text, path) and change no state.
+
 ## Only pi tools visible
 
 In V3 the model does not see MCP tools directly. It gets the meta tools `tool_load`
