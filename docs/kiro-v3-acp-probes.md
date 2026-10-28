@@ -175,6 +175,10 @@ The ids themselves are portable: the 15 v2 `availableModels.modelId` values and 
 `model` option values are the same set, in the same order, with no difference in either
 direction.
 
+`session/load` was not probed for `configOptions`. When a restore response carries none, the
+provider writes the model value unchecked rather than refusing every id (the echo still
+decides what is recorded), and skips the effort level for that turn.
+
 Telemetry arrives as `session/update` frames, not as the v2 `_kiro.dev/metadata`
 notification. Every `session_info_update` carries `_meta.kiro.kind`:
 
