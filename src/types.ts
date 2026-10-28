@@ -1,3 +1,5 @@
+import type { JsonObject } from '@earendil-works/pi-ai';
+
 export interface PendingRpc {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
@@ -13,7 +15,7 @@ export type ToolResultContentBlock =
 export interface PendingToolCall {
   callId: string;
   toolName: string;
-  args: Record<string, unknown>;
+  args: JsonObject;
   resolve: (result: {
     result: string;
     isError?: boolean;

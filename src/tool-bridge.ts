@@ -5,6 +5,8 @@ import {
   type ServerResponse,
 } from 'node:http';
 
+import type { JsonObject } from '@earendil-works/pi-ai';
+
 import type { ForwardedTool, ForwardedToolCatalog } from './tool-catalog.ts';
 
 const MCP_PROTOCOL_VERSION = '2025-06-18';
@@ -34,7 +36,7 @@ export interface ToolBridgeResult {
 export interface ToolBridgeCall {
   kiroName: string;
   piName: string;
-  arguments: Record<string, unknown>;
+  arguments: JsonObject;
   signal: AbortSignal;
 }
 
@@ -422,7 +424,8 @@ export async function startToolBridge(
           result = await options.onToolCall({
             kiroName: params.name as string,
             piName,
-            arguments: args as Record<string, unknown>,
+            // The request body is JSON; the check above keeps it an object.
+            arguments: args as JsonObject,
             signal: abort.signal,
           });
         } catch (error) {
