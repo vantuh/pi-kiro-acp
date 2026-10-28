@@ -258,11 +258,28 @@ What the provider does with that (`src/session.ts`, `src/v3/steer-echo.ts`):
   call) keeps the synthetic block, and v2 is untouched.
 - The `messageId` of each queued steer is recorded and used to strip the model's
   `[STEERING <id>: …]` acknowledgement from `agent_message_chunk` output: only a note whose
-  id matches is removed, together with the blank lines that introduced it. The filter holds
-  back nothing until a steer has actually been queued, and everything it holds is released
-  when the text block ends.
+  id matches is removed, together with the blank lines that introduced it. Brackets nest, so
+  a `[…]` inside the note does not end it early; a note whose id is not one of ours, or one
+  that is still unterminated after 1 KB, is released unchanged. The filter holds nothing
+  until a steer has actually been queued, and everything it holds is released when the text
+  block ends or kiro starts a new message.
 - The standing rule in `<system_instructions>` is still sent on V3: it is what makes the
   synthetic fallback trustworthy.
+- Two consequences the provider accepts rather than fixes:
+  - **A partial failure reorders steers.** With steers A and B, if A is queued and B is
+    refused, A reaches the model right behind the tool result and B arrives inside that
+    result — the model reads B before A, so an instruction B adds to A may be applied in the
+    wrong order. Sending both again synthetically would duplicate A instead.
+  - **A late `queued` reply duplicates a steer.** If `_session/steer` answers after the 10 s
+    timeout, the client already gave up and put that text in the synthetic block, while kiro
+    may have queued it anyway: the model then sees the steer twice. Duplication is chosen
+    over loss, and a steer is only re-sent synthetically when the turn's tool result is no
+    longer live.
+- A turn whose request signal was already aborted queues nothing: a steer left on the ACP
+  session survives the process and would ride into the next, unrelated prompt.
+- Steers kiro queued natively are recorded on the session and dropped from the synthetic
+  block of a later recovery prompt or image follow-up. Without that, pi's retry after a
+  failed turn would hand the model the same steer twice — once queued, once in the block.
 
 The free-RPC probe never sent `session/prompt`. A later real run (default pi model,
 `claude-sonnet-4.6`, `PI_KIRO_ACP_AGENT_ENGINE=v3`) confirmed the turn itself: the agent was
