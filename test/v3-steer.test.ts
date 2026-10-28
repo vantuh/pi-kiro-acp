@@ -235,3 +235,47 @@ test('v2 never sends a native steer', async () => {
     'the steer keeps the synthetic block on v2',
   );
 });
+
+test('native steering can be turned off for a cancelled turn', async () => {
+  const { session, written } = v3Session();
+  const answers = pendingCall(session, 'c1');
+
+  await session.deliverToolResults([toolResult('c1', 'done')], {
+    steers: ['STEER-A'],
+    nativeSteer: false,
+  });
+
+  assert(
+    steerFrames(written).length === 0,
+    `a cancelled turn queues nothing (got ${JSON.stringify(written)})`,
+  );
+  assert(
+    answers.get('c1')!.result.includes(STEER_BLOCK_OPEN),
+    'the steer still travels in the tool result',
+  );
+});
+
+test('steers kiro already queued are dropped from a synthetic block', async () => {
+  const { session, written } = v3Session();
+  pendingCall(session, 'c1');
+
+  const delivering = session.deliverToolResults([toolResult('c1', 'done')], {
+    steers: ['STEER-A'],
+  });
+  await tick();
+  answerSteer(session, steerFrames(written)[0], {
+    queued: true,
+    messageId: 'steer-1',
+  });
+  await delivering;
+
+  assert(
+    session.steersNotQueuedNatively(['STEER-A']).length === 0,
+    'the queued steer is not handed over again',
+  );
+  assert(
+    session.steersNotQueuedNatively(['STEER-A', 'STEER-B']).join(',') ===
+      'STEER-B',
+    'a steer kiro never saw is kept',
+  );
+});

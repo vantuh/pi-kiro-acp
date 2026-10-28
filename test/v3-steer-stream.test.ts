@@ -47,10 +47,12 @@ interface Harness {
   steerFrames: () => any[];
   /** Model output pi streamed for the turn. */
   streamed: string[];
+  /** Every pi stream event, in order (text blocks, tool calls, terminal). */
+  events: any[];
   holdSteerReply: () => void;
   releaseSteerReply: () => void;
-  emitText: (text: string) => void;
-  run: (ctx: unknown) => Promise<void>;
+  emitText: (text: string, messageId?: string) => void;
+  run: (ctx: unknown, options?: object) => Promise<void>;
 }
 
 async function v3LiveSession(
@@ -69,6 +71,7 @@ async function v3LiveSession(
   const frames: any[] = [];
   const answers = new Map<string, any>();
   const streamed: string[] = [];
+  const events: any[] = [];
   let steerSeq = 0;
   let hold = false;
   const held: Array<() => void> = [];
@@ -139,6 +142,7 @@ async function v3LiveSession(
     steerFrames: () =>
       frames.filter((frame) => frame.method === '_session/steer'),
     streamed,
+    events,
     holdSteerReply: () => {
       hold = true;
     },
@@ -146,7 +150,7 @@ async function v3LiveSession(
       hold = false;
       for (const answer of held.splice(0)) answer();
     },
-    emitText: (text: string) =>
+    emitText: (text: string, messageId?: string) =>
       session.handleStdoutLine(
         JSON.stringify({
           jsonrpc: '2.0',
@@ -155,22 +159,41 @@ async function v3LiveSession(
             sessionId: 'acp-1',
             update: {
               sessionUpdate: 'agent_message_chunk',
+              ...(messageId ? { messageId } : {}),
               content: { type: 'text', text },
             },
           },
         }),
       ),
-    run: async (ctx: unknown) => {
+    run: async (ctx: unknown, extra: object = {}) => {
       for await (const event of streamKiroAcp(
         manager,
         kiroModel(),
         ctx as any,
-        opts2,
+        { ...opts2, ...extra },
       )) {
+        events.push(event);
         if (event.type === 'text_delta') streamed.push(event.delta);
       }
     },
   };
+}
+
+/** Text blocks pi received, as the app would show them. */
+function textBlocks(events: any[]): string[] {
+  const blocks: string[] = [];
+  let open = -1;
+  for (const event of events) {
+    if (event.type === 'text_start') {
+      open = blocks.length;
+      blocks.push('');
+    } else if (event.type === 'text_delta' && open >= 0) {
+      blocks[open] += event.delta;
+    } else if (event.type === 'text_end') {
+      open = -1;
+    }
+  }
+  return blocks;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
@@ -353,6 +376,99 @@ test('the model’s steer note never reaches pi', async () => {
     assert(
       text === 'Here is the answer.',
       `only the answer is streamed (got ${JSON.stringify(text)})`,
+    );
+  } finally {
+    await live.manager.stopAllSessions();
+  }
+});
+
+test('held whitespace stays in the block it belongs to', async () => {
+  const live = await v3LiveSession('S-native-block-split', ['c1']);
+  // The filter only holds text while a native steer id exists.
+  live.session.steerMessageIds.add('steer-1');
+  let finishTurn: () => void = () => {};
+  live.session.activePromptDone = new Promise((resolve) => {
+    finishTurn = () => resolve({ stopReason: 'end_turn' } as any);
+  });
+  try {
+    const running = live.run(
+      context(task, toolCall('c1'), toolResult('c1', 'ok')),
+    );
+    await tick();
+    live.emitText('Hello ', 'm1');
+    live.emitText('world', 'm2');
+    await tick();
+    finishTurn();
+    await running;
+
+    const blocks = textBlocks(live.events);
+    assert(
+      blocks.join('|') === 'Hello |world',
+      `the held space ends the first block (got ${JSON.stringify(blocks)})`,
+    );
+  } finally {
+    await live.manager.stopAllSessions();
+  }
+});
+
+test('an aborted turn queues no native steer', async () => {
+  const live = await v3LiveSession('S-native-aborted', ['c1']);
+  try {
+    await live.run(
+      context(task, toolCall('c1'), toolResult('c1', 'ok'), user(STEER)),
+      {
+        signal: {
+          aborted: true,
+          addEventListener() {},
+          removeEventListener() {},
+        },
+      },
+    );
+    assert(
+      live.steerFrames().length === 0,
+      `a cancelled turn sends no _session/steer (got ${JSON.stringify(live.steerFrames())})`,
+    );
+    const answer = live.answers.get('c1')?.result ?? '';
+    assert(
+      answer.includes('<user_message_during_run') && answer.includes(STEER),
+      `the steer travels in the tool result instead (got ${JSON.stringify(answer)})`,
+    );
+  } finally {
+    await live.manager.stopAllSessions();
+  }
+});
+
+test('a steer kiro queued is not repeated by a recovery prompt', async () => {
+  const live = await v3LiveSession('S-native-retry', ['c1']);
+  try {
+    // The steered turn declares the steer to kiro, then dies: pi retries the
+    // same request, whose tool result is orphaned — the recovery prompt must
+    // not hand the model the steer a second time.
+    await live.run(
+      context(task, toolCall('c1'), toolResult('c1', 'ok'), user(STEER)),
+    );
+    assert(
+      live.steerFrames().length === 1 &&
+        live.session.nativeSteerTexts.includes(STEER),
+      'the steer was queued natively first',
+    );
+
+    await live.run(
+      context(
+        task,
+        toolCall('c2'),
+        toolResult('c2', 'late report'),
+        user(STEER),
+      ),
+    );
+    const sent = live.prompts().join('\n');
+    assert(
+      sent.includes('late report'),
+      'the recovery prompt still carries the tool result',
+    );
+    assert(
+      !sent.includes(STEER) && !sent.includes('<message role="user">'),
+      `the already-queued steer is not sent again (got ${JSON.stringify(sent)})`,
     );
   } finally {
     await live.manager.stopAllSessions();

@@ -235,6 +235,10 @@ export class AcpSession {
   /** `messageId`s of the steers this session queued with `_session/steer`; the
    * model's `[STEERING <id>: …]` notes for them are stripped from its output. */
   readonly steerMessageIds = new Set<string>();
+  /** Texts kiro queued natively on this ACP session. A turn that dies after
+   * the steer was queued is retried against an orphaned tool result, where the
+   * synthetic block would hand the model the same steer twice. */
+  readonly nativeSteerTexts: string[] = [];
   /** Set once kiro would not take a native steer: every subsequent steer
    * travels inside the tool result instead of retrying the RPC. */
   private nativeSteerDisabled = false;
@@ -1558,6 +1562,9 @@ export class AcpSession {
       // A fresh ACP session reports its own options; a stale list from the
       // previous one must not be read as its model/effort.
       this.configOptions = [];
+      // Steer records describe the ACP session that just ended, not this one.
+      this.steerMessageIds.clear();
+      this.nativeSteerTexts.length = 0;
       const result = (await this.rpcSend(
         'session/new',
         this.engine === 'v3'
@@ -1988,6 +1995,15 @@ export class AcpSession {
     return toolResults.filter((tr) => this.findToolCallMatch(tr) !== null);
   }
 
+  /** The steers that still have to travel inside a prompt: everything kiro did
+   * not already queue on this ACP session. The records are kept rather than
+   * consumed, so a retried request cannot duplicate a steer kiro already has. */
+  steersNotQueuedNatively(steers: string[]): string[] {
+    if (steers.length === 0 || this.nativeSteerTexts.length === 0)
+      return steers;
+    return steers.filter((text) => !this.nativeSteerTexts.includes(text));
+  }
+
   private rememberAbandonedToolCall(
     fingerprint: string,
     callId: string,
@@ -2035,7 +2051,11 @@ export class AcpSession {
    * inside that result as the synthetic block, so no steer is ever sent twice. */
   async deliverToolResults(
     toolResults: ToolResultInfo[],
-    options: { textOnly?: boolean; steers?: string[] } = {},
+    options: {
+      textOnly?: boolean;
+      steers?: string[];
+      nativeSteer?: boolean;
+    } = {},
   ): Promise<void> {
     const textOnly = !!options.textOnly;
     const steers = options.steers ?? [];
@@ -2050,7 +2070,9 @@ export class AcpSession {
         steers: steers.length,
         toolResults: toolResults.length,
       });
-    const syntheticSteers = carrier ? await this.queueNativeSteers(steers) : [];
+    const syntheticSteers = carrier
+      ? await this.queueNativeSteers(steers, options.nativeSteer !== false)
+      : [];
 
     for (const tr of toolResults) {
       const match = this.findToolCallMatch(tr);
@@ -2100,9 +2122,13 @@ export class AcpSession {
    * not accept — those still have to reach the model inside the tool result. A
    * failure disables native steering for the rest of the session: a steer that
    * is both queued and appended would reach the model twice. */
-  private async queueNativeSteers(steers: string[]): Promise<string[]> {
+  private async queueNativeSteers(
+    steers: string[],
+    allowed: boolean,
+  ): Promise<string[]> {
     if (steers.length === 0) return [];
-    if (this.engine !== 'v3' || this.nativeSteerDisabled) return steers;
+    if (!allowed || this.engine !== 'v3' || this.nativeSteerDisabled)
+      return steers;
     for (let i = 0; i < steers.length; i++) {
       const message = steers[i];
       try {
@@ -2116,6 +2142,7 @@ export class AcpSession {
         if (result?.queued !== true || !messageId)
           throw new Error(`steer was not queued (${JSON.stringify(result)})`);
         this.steerMessageIds.add(messageId);
+        this.nativeSteerTexts.push(message);
         log('native steer queued', {
           session: this.id,
           messageId,

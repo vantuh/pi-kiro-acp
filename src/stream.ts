@@ -150,8 +150,13 @@ export function streamKiroAcp(
         // session still holds the conversation, otherwise as a full replay that
         // now carries the completed work.
         recoverInPlace = routed.kind === 'orphaned' && hadLiveConversation;
+        // Steers this ACP session already queued natively must not be handed
+        // to the model a second time by the recovery prompt.
         const recoveryText = recoverInPlace
-          ? buildToolResultRecoveryPrompt(routed.toolResults, steers)
+          ? buildToolResultRecoveryPrompt(
+              routed.toolResults,
+              session.steersNotQueuedNatively(steers),
+            )
           : null;
         log('prompt parts', {
           session: session.id,
@@ -292,7 +297,7 @@ export function streamKiroAcp(
           });
         };
 
-        return { end, delta };
+        return { end, delta, messageId: () => messageId };
       };
 
       let endTextBlock: () => void = () => {};
@@ -305,9 +310,17 @@ export function streamKiroAcp(
       const thinkingWriter = createBlockWriter('thinking', () =>
         endTextBlock(),
       );
-      endTextBlock = () => {
+      // Text the filter was still holding belongs to the block that is
+      // ending, so it is counted and sent before the next one opens.
+      const releaseHeldText = () => {
         const held = steerEcho.flush();
-        if (held) textWriter.delta(held);
+        if (!held) return;
+        textChars += held.length;
+        textChunks += 1;
+        textWriter.delta(held, textWriter.messageId());
+      };
+      endTextBlock = () => {
+        releaseHeldText();
         textWriter.end();
       };
       endThinkingBlock = () => thinkingWriter.end();
@@ -356,6 +369,10 @@ export function streamKiroAcp(
                     : null,
               });
             }
+            // A new kiro message ends the block: whatever the filter still
+            // holds must not be glued onto the next message's first delta.
+            const openId = textWriter.messageId();
+            if (messageId && openId && messageId !== openId) releaseHeldText();
             const visible = steerEcho.push(text);
             if (visible) {
               textChars += visible.length;
@@ -410,6 +427,9 @@ export function streamKiroAcp(
 
       if (routed.kind === 'resumption') {
         const imageBlocks = imagesFromToolResults(routed.toolResults);
+        // A steer kiro already queued must not be handed to the model again by
+        // a recovery prompt or an image follow-up.
+        const pendingSteers = session.steersNotQueuedNatively(steers);
 
         if (imageBlocks.length > 0) {
           log('image FUP: detected images in tool results', {
@@ -444,8 +464,8 @@ export function streamKiroAcp(
               : '') +
             `\n\nPlease answer the user's question based on the attached image(s). ` +
             `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.` +
-            (steers.length > 0
-              ? `\n\n${buildSteerBlock(steers, session.steerBlockId)}`
+            (pendingSteers.length > 0
+              ? `\n\n${buildSteerBlock(pendingSteers, session.steerBlockId)}`
               : '');
 
           const { systemPrompt } = buildPromptParts(context, false);
@@ -463,26 +483,15 @@ export function streamKiroAcp(
           } finally {
             suppressUpdates = false;
           }
-        } else if (session.engine === 'v3') {
-          // Kiro injects a native steer right after the tool result, so the
-          // result goes back unchanged; the session falls back to the block.
-          await session.deliverToolResults(routed.toolResults, { steers });
         } else {
-          const carrier = session
-            .matchingToolResults(routed.toolResults)
-            .at(-1);
-          await session.deliverToolResults(
-            steers.length > 0 && carrier
-              ? routed.toolResults.map((tr) =>
-                  tr === carrier
-                    ? {
-                        ...tr,
-                        text: `${tr.text}\n\n${buildSteerBlock(steers, session.steerBlockId)}`,
-                      }
-                    : tr,
-                )
-              : routed.toolResults,
-          );
+          // V3 queues the steer natively right after the result; v2 has no such
+          // RPC, so the session appends the synthetic block to the result.
+          // A cancelled turn queues nothing: a steer left on the ACP session
+          // would ride into the next, unrelated prompt.
+          await session.deliverToolResults(routed.toolResults, {
+            steers,
+            nativeSteer: !options?.signal?.aborted,
+          });
         }
       }
 
