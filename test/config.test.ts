@@ -1,9 +1,10 @@
-// Test: kiro-acp.json config resolvers (logger + usage footer).
+// Test: kiro-acp.json config resolvers (logger, usage footer, agent engine).
 // Run: npm test -- test/config.test.ts
 
 import { test } from 'vitest';
 
 import {
+  resolveAgentEngine,
   resolveLoggerConfig,
   resolveUsageFooterConfig,
 } from '../src/config.ts';
@@ -64,4 +65,20 @@ test('kiro-acp.json config resolvers', () => {
   );
 
   process.env = savedEnv;
+});
+
+test('kiro-acp.json agent engine resolver', () => {
+  assert(resolveAgentEngine({}) === 'v2', 'the engine defaults to v2');
+  assert(
+    resolveAgentEngine({ agentEngine: 'v2' }) === 'v2',
+    'the engine can be pinned to v2',
+  );
+  assert(
+    resolveAgentEngine({ agentEngine: 'v3' }) === 'v3',
+    'v3 is opt-in through the config',
+  );
+  assert(
+    resolveAgentEngine({ agentEngine: 'v9' as any }) === 'v2',
+    'an unknown engine value falls back to v2',
+  );
 });
