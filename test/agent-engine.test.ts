@@ -1,13 +1,10 @@
 // Test: the opt-in Kiro V3 engine — launch flags, agent profile, session
-// params, the advertised-extension gate and the unimplemented turn path.
+// params, the advertised-extension gate and a whole turn end to end.
 // Drives a real AcpSession against a fake `kiro-cli` ACP server (the real CLI
 // spends credits, so it is never started here).
 // Run: npm test -- test/agent-engine.test.ts
 
 import {
-  chmodSync,
-  copyFileSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -25,7 +22,15 @@ import {
 } from '../src/session-persistence.ts';
 import { AcpSession } from '../src/session.ts';
 import type { ForwardedToolCatalog } from '../src/tool-catalog.ts';
-import { assert, kiroContext, settled, wait } from './support.ts';
+import {
+  acpInvocations,
+  assert,
+  fakeKiroCli,
+  kiroContext,
+  kiroModel,
+  settled,
+  wait,
+} from './support.ts';
 
 const V2_ONLY_FLAGS = [
   '--agent',
@@ -49,13 +54,6 @@ async function freshSessionModule() {
   return import('../src/session.ts');
 }
 
-/** Waits until the fake has logged everything written before this marker, so a
- * "frame X was not sent" assertion cannot pass on unread bytes. */
-async function quiesce(session: AcpSession, fake: FakeKiroCli): Promise<void> {
-  await session.rpcSend('test/marker', {});
-  await waitFor(() => fake.frames().some((f) => f.method === 'test/marker'));
-}
-
 async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -63,86 +61,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5000) {
     await wait(10);
   }
   throw new Error('timed out waiting for condition');
-}
-
-interface FakeKiroCli {
-  /** argv of every invocation, `settings …` ones included. */
-  invocations: () => string[][];
-  /** Every JSON-RPC frame the fake received, in order. */
-  frames: () => any[];
-  /** Client messages that are not requests (i.e. answers to the fake). */
-  replies: () => any[];
-  restore: () => void;
-}
-
-function readLog(dir: string, name: string): any[] {
-  const file = join(dir, name);
-  if (!existsSync(file)) return [];
-  return readFileSync(file, 'utf8')
-    .split('\n')
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line));
-}
-
-function setEnv(name: string, value: string | undefined): void {
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-}
-
-/** Puts the fake on PATH as `kiro-cli` and points it at a scratch log dir.
- * `modes` overrides the mode the fake reports for session/new or session/load;
- * unset, it echoes the requested `_meta.kiro.modeId` like a working profile. */
-function fakeKiroCli(
-  extensionMethods: string[] = [],
-  modes: { new?: string; load?: string } = {},
-): FakeKiroCli {
-  const root = mkdtempSync(join(tmpdir(), 'kiro-acp-engine-'));
-  const binDir = join(root, 'bin');
-  const logDir = join(root, 'log');
-  mkdirSync(binDir);
-  mkdirSync(logDir);
-  const executable = join(binDir, 'kiro-cli');
-  copyFileSync(
-    new URL('./fixtures/fake-kiro-acp.cjs', import.meta.url),
-    executable,
-  );
-  chmodSync(executable, 0o755);
-
-  const savedPath = process.env.PATH;
-  const savedDir = process.env.FAKE_KIRO_DIR;
-  const savedMethods = process.env.FAKE_KIRO_EXTENSION_METHODS;
-  const savedNewMode = process.env.FAKE_KIRO_NEW_MODE;
-  const savedLoadMode = process.env.FAKE_KIRO_LOAD_MODE;
-  process.env.PATH = `${binDir}:${savedPath ?? ''}`;
-  process.env.FAKE_KIRO_DIR = logDir;
-  process.env.FAKE_KIRO_EXTENSION_METHODS = JSON.stringify(extensionMethods);
-  setEnv('FAKE_KIRO_NEW_MODE', modes.new);
-  setEnv('FAKE_KIRO_LOAD_MODE', modes.load);
-
-  return {
-    invocations: () => readLog(logDir, 'invocations.log'),
-    frames: () => readLog(logDir, 'frames.log'),
-    replies: () => readLog(logDir, 'replies.log'),
-    restore() {
-      process.env.PATH = savedPath;
-      if (savedDir === undefined) delete process.env.FAKE_KIRO_DIR;
-      else process.env.FAKE_KIRO_DIR = savedDir;
-      if (savedMethods === undefined)
-        delete process.env.FAKE_KIRO_EXTENSION_METHODS;
-      else process.env.FAKE_KIRO_EXTENSION_METHODS = savedMethods;
-      setEnv('FAKE_KIRO_NEW_MODE', savedNewMode);
-      setEnv('FAKE_KIRO_LOAD_MODE', savedLoadMode);
-      rmSync(root, { recursive: true, force: true });
-    },
-  };
-}
-
-/** Spawned `acp` invocations without the `-v…` verbosity suffix, which comes
- * from the local kiro-acp.json and is not what these tests are about. */
-function acpInvocations(invocations: string[][]): string[][] {
-  return invocations
-    .filter((argv) => argv[0] === 'acp')
-    .map((argv) => argv.filter((arg) => !/^-v+$/.test(arg)));
 }
 
 function frameParams(frames: any[], method: string): any {
@@ -461,44 +379,71 @@ test('supportsExtension follows the methods advertised in initialize', async () 
   }
 });
 
-test('the v3 turn path fails fast instead of sending a v2 model RPC', async () => {
+test('a v3 turn streams text and telemetry through the real stream path', async () => {
   const fake = fakeKiroCli();
-  const session = new AcpSession(process.cwd(), 'v3');
+  const savedEngine = process.env.PI_KIRO_ACP_AGENT_ENGINE;
+  process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v3';
+  vi.resetModules();
   try {
-    await session.ensureStarted(catalogProvider);
-    const turn = await settled(
-      session.startPrompt('claude-sonnet-4.6', '', 'hi'),
-    );
-    assert(!turn.ok, 'startPrompt rejects on v3');
-    assert(
-      turn.error?.message === 'Kiro V3 turn path not implemented yet',
-      `the error names the gap (got "${turn.error?.message}")`,
-    );
-    await quiesce(session, fake);
-    assert(
-      !fake
-        .frames()
-        .some((frame) =>
-          [
-            'session/new',
-            'session/load',
-            'session/set_model',
-            'session/prompt',
-          ].includes(frame.method),
-        ),
-      'a failing v3 turn does no backend I/O',
-    );
+    const { SessionManager } = await import('../src/session-manager.ts');
+    const { streamKiroAcp } = await import('../src/stream.ts');
+    const manager = new SessionManager();
+    try {
+      const stream = streamKiroAcp(manager, kiroModel(), kiroContext('hi'), {
+        reasoning: 'high',
+      } as any);
+      let text = '';
+      let done = false;
+      for await (const event of stream as any) {
+        if (event.type === 'text_delta') text += event.delta;
+        if (event.type === 'done') done = true;
+      }
 
-    // The process stays alive after that failed turn; a level on the next turn
-    // must not turn into a v2 `/effort` command prompt.
-    await session.ensureStarted(catalogProvider, 'high');
-    await quiesce(session, fake);
-    assert(
-      !fake.frames().some((frame) => frame.method === 'session/prompt'),
-      'a started v3 session sends no /effort command prompt',
-    );
+      assert(done, 'the turn completes on the session/prompt result');
+      assert(
+        text.includes('hello from v3'),
+        `the fake reply reaches pi's stream (got "${text}")`,
+      );
+
+      const frames = fake.frames();
+      assert(
+        frames.some(
+          (frame) =>
+            frame.method === 'session/set_config_option' &&
+            frame.params?.configId === 'model' &&
+            frame.params?.value === 'claude-sonnet-4.6',
+        ),
+        'the model is selected through session/set_config_option',
+      );
+      assert(
+        frames.some(
+          (frame) =>
+            frame.method === 'session/set_config_option' &&
+            frame.params?.configId === 'effortLevel' &&
+            frame.params?.value === 'high',
+        ),
+        'the effort level is selected through session/set_config_option',
+      );
+      assert(
+        !frames.some((frame) => frame.method === 'session/set_model'),
+        'no v2 session/set_model is sent on v3',
+      );
+      assert(
+        !frames.some((frame) =>
+          JSON.stringify(frame.params ?? {}).includes('/effort'),
+        ),
+        'no v2 /effort command prompt is sent on v3',
+      );
+      assert(
+        !frames.some((frame) => frame.method === '_kiro.dev/metadata'),
+        'v3 telemetry does not need the v2 metadata notification',
+      );
+    } finally {
+      await manager.stopAllSessions();
+    }
   } finally {
-    await session.stop();
+    if (savedEngine === undefined) delete process.env.PI_KIRO_ACP_AGENT_ENGINE;
+    else process.env.PI_KIRO_ACP_AGENT_ENGINE = savedEngine;
     fake.restore();
   }
 });

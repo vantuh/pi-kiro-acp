@@ -1,4 +1,15 @@
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from 'node:fs';
 import { request as httpRequest, type ClientRequest } from 'node:http';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { Context, Model } from '@earendil-works/pi-ai';
 
@@ -114,6 +125,88 @@ export function kiroContext(userContent: string): Context {
     systemPrompt: '',
     tools: [],
   };
+}
+
+// --- fake kiro-cli ACP server ---
+
+export interface FakeKiroCli {
+  /** argv of every invocation, `settings …` ones included. */
+  invocations: () => string[][];
+  /** Every JSON-RPC frame the fake received, in order. */
+  frames: () => any[];
+  /** Client messages that are not requests (i.e. answers to the fake). */
+  replies: () => any[];
+  restore: () => void;
+}
+
+export function setEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+/** Puts the fake on PATH as `kiro-cli` and points it at a scratch log dir.
+ * `modes` overrides the mode the fake reports for session/new or session/load;
+ * unset, it echoes the requested `_meta.kiro.modeId` like a working profile. */
+function readLog(dir: string, name: string): any[] {
+  const file = join(dir, name);
+  if (!existsSync(file)) return [];
+  return readFileSync(file, 'utf8')
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+}
+
+export function fakeKiroCli(
+  extensionMethods: string[] = [],
+  modes: { new?: string; load?: string } = {},
+): FakeKiroCli {
+  const root = mkdtempSync(join(tmpdir(), 'kiro-acp-engine-'));
+  const binDir = join(root, 'bin');
+  const logDir = join(root, 'log');
+  mkdirSync(binDir);
+  mkdirSync(logDir);
+  const executable = join(binDir, 'kiro-cli');
+  copyFileSync(
+    new URL('./fixtures/fake-kiro-acp.cjs', import.meta.url),
+    executable,
+  );
+  chmodSync(executable, 0o755);
+
+  const savedPath = process.env.PATH;
+  const savedDir = process.env.FAKE_KIRO_DIR;
+  const savedMethods = process.env.FAKE_KIRO_EXTENSION_METHODS;
+  const savedNewMode = process.env.FAKE_KIRO_NEW_MODE;
+  const savedLoadMode = process.env.FAKE_KIRO_LOAD_MODE;
+  process.env.PATH = `${binDir}:${savedPath ?? ''}`;
+  process.env.FAKE_KIRO_DIR = logDir;
+  process.env.FAKE_KIRO_EXTENSION_METHODS = JSON.stringify(extensionMethods);
+  setEnv('FAKE_KIRO_NEW_MODE', modes.new);
+  setEnv('FAKE_KIRO_LOAD_MODE', modes.load);
+
+  return {
+    invocations: () => readLog(logDir, 'invocations.log'),
+    frames: () => readLog(logDir, 'frames.log'),
+    replies: () => readLog(logDir, 'replies.log'),
+    restore() {
+      process.env.PATH = savedPath;
+      if (savedDir === undefined) delete process.env.FAKE_KIRO_DIR;
+      else process.env.FAKE_KIRO_DIR = savedDir;
+      if (savedMethods === undefined)
+        delete process.env.FAKE_KIRO_EXTENSION_METHODS;
+      else process.env.FAKE_KIRO_EXTENSION_METHODS = savedMethods;
+      setEnv('FAKE_KIRO_NEW_MODE', savedNewMode);
+      setEnv('FAKE_KIRO_LOAD_MODE', savedLoadMode);
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
+/** Spawned `acp` invocations without the `-v…` verbosity suffix, which comes
+ * from the local kiro-acp.json and is not what these tests are about. */
+export function acpInvocations(invocations: string[][]): string[][] {
+  return invocations
+    .filter((argv) => argv[0] === 'acp')
+    .map((argv) => argv.filter((arg) => !/^-v+$/.test(arg)));
 }
 
 // --- minimal HTTP / SSE helpers for the loopback MCP bridge ---

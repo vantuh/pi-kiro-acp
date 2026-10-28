@@ -47,6 +47,11 @@ import type {
   ToolResultInfo,
 } from './types.ts';
 import {
+  configOptionCurrentValue,
+  configOptionValues,
+  modelEffortLevels,
+} from './v3/config-options.ts';
+import {
   v3AgentProfile,
   v3LoadSessionParams,
   v3SelectedMode,
@@ -305,6 +310,10 @@ export class AcpSession {
    * `initialize.agentCapabilities._meta.kiro.extensionMethods`; V3 optional
    * methods must be gated on this (V3 does not implement every v2 method). */
   private extensionMethods = new Set<string>();
+  /** V3's `configOptions` for the live session (model, effortLevel, …), from
+   * the session/new and session/load responses and config_option_update. It is
+   * the only record of which model/effort values kiro will accept. */
+  private configOptions: unknown = [];
   persistenceKey: string | null = null;
   pendingToolCalls = new Map<string, PendingToolCall>();
   /** Calls Kiro abandoned at its own deadline while pi kept executing them,
@@ -512,6 +521,14 @@ export class AcpSession {
       ) {
         const update = msg.params?.update as SessionUpdate | undefined;
         if (update) {
+          // V3 reports usage, turn completion and config options as
+          // session/update frames; consuming them here keeps them away from
+          // the stream and the tool bridge.
+          if (
+            this.engine === 'v3' &&
+            this.handleV3SessionUpdate(update, msg.params?.sessionId)
+          )
+            return;
           if (update.sessionUpdate === 'usage_update') {
             this.handleUsageUpdate(update, msg.params?.sessionId);
           }
@@ -764,6 +781,87 @@ export class AcpSession {
     });
   }
 
+  /** V3's telemetry channel. Returns true when the update was consumed.
+   * `turn_start`/`turn_end`/`focus_update`/`steering_*`/`user_message_id_assigned`
+   * carry nothing to record, and the turn still ends on the session/prompt
+   * result, so most kinds are simply dropped. */
+  private handleV3SessionUpdate(
+    update: SessionUpdate,
+    updateSessionId: unknown,
+  ): boolean {
+    if (update.sessionUpdate === 'config_option_update') {
+      this.storeConfigOptions((update as any).configOptions);
+      return true;
+    }
+    if (update.sessionUpdate === 'available_commands_update') return true;
+    if (update.sessionUpdate !== 'session_info_update') return false;
+
+    const sessionId =
+      typeof updateSessionId === 'string' ? updateSessionId : this.acpSessionId;
+    // Late frames from a previous ACP session must not touch this one.
+    if (!sessionId || (this.acpSessionId && sessionId !== this.acpSessionId))
+      return true;
+
+    const rawKiro = (update as any)._meta?.kiro;
+    const kiro: Record<string, any> =
+      rawKiro && typeof rawKiro === 'object' ? rawKiro : {};
+    if (kiro.kind === 'context_usage') {
+      if (typeof kiro.usagePercentage === 'number')
+        this.applyV3Metadata({
+          sessionId,
+          contextUsagePercentage: kiro.usagePercentage,
+        });
+    } else if (kiro.kind === 'turn_completion') {
+      const meteringUsage = Array.isArray(kiro.promptTurnSummaries)
+        ? kiro.promptTurnSummaries
+            .filter(
+              (summary: any) =>
+                typeof summary?.unit === 'string' &&
+                typeof summary?.usage === 'number',
+            )
+            .map((summary: any) => ({
+              unit: summary.unit,
+              unitPlural:
+                typeof summary.unitPlural === 'string'
+                  ? summary.unitPlural
+                  : undefined,
+              value: summary.usage,
+            }))
+        : undefined;
+      this.applyV3Metadata({
+        sessionId,
+        turnDurationMs:
+          typeof kiro.elapsedTime === 'number' ? kiro.elapsedTime : undefined,
+        meteringUsage,
+      });
+    }
+    return true;
+  }
+
+  private applyV3Metadata(
+    patch: { sessionId: string } & Partial<SessionMetadata>,
+  ): void {
+    this.metadata = { ...this.metadata, ...patch } as SessionMetadata;
+    log('kiro metadata', {
+      session: this.id,
+      acpSessionId: patch.sessionId,
+      kind: 'v3',
+      contextUsagePercentage: patch.contextUsagePercentage,
+      turnDurationMs: patch.turnDurationMs,
+      credits: patch.meteringUsage
+        ? sumMeteringCredits(patch.meteringUsage)
+        : undefined,
+    });
+    try {
+      this.onMetadata?.(this.metadata);
+    } catch (error) {
+      log('onMetadata handler failed', {
+        session: this.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
   private handleMetadata(params: Record<string, unknown>): void {
     const sessionId =
       typeof params.sessionId === 'string'
@@ -1012,6 +1110,81 @@ export class AcpSession {
     });
 
     this.started = true;
+  }
+
+  /** Cache the configOptions a V3 response or update carries. */
+  private storeConfigOptions(options: unknown): void {
+    if (this.engine !== 'v3' || !Array.isArray(options)) return;
+    this.configOptions = options;
+  }
+
+  /** Model and effort for one turn, through session/set_config_option. V3
+   * never errors on a value it cannot use — an unknown model even becomes the
+   * reported currentValue — so both are checked against the advertised options
+   * first, and only what kiro echoes back is recorded as applied. */
+  private async applyV3TurnConfig(modelId: string): Promise<void> {
+    const previousModelId = this.currentModelId;
+    this.effortReconcilePending = false;
+    if (this.currentModelId !== modelId) {
+      const offered = configOptionValues(this.configOptions, 'model');
+      if (!offered.includes(modelId))
+        throw new Error(
+          `Kiro V3 does not offer model ${modelId} (offered: ${offered.join(', ') || 'none'}); refresh the model list or pick another`,
+        );
+      await this.v3SetConfigOption('model', modelId);
+      this.currentModelId = modelId;
+      // Selecting a model replaces the level with that model's own default.
+      this.currentEffort = null;
+      log('v3 model set', {
+        session: this.id,
+        modelId,
+        previousModel: previousModelId,
+      });
+    }
+
+    const level = this.desiredEffort;
+    if (level === null) return;
+    const advertised = modelEffortLevels(this.configOptions, modelId);
+    if (!advertised.includes(level)) {
+      // V3 also drops the effortLevel option for such a model, so the write
+      // would be accepted and ignored.
+      log('v3 effort level not advertised by the model — skipped', {
+        session: this.id,
+        modelId,
+        level,
+        effortLevels: advertised,
+      });
+      return;
+    }
+    if (this.currentEffort === level) return;
+    if (await this.v3SetConfigOption('effortLevel', level)) {
+      this.currentEffort = level;
+      log('v3 effort applied', { session: this.id, modelId, level });
+    }
+  }
+
+  /** One config_option write; true when kiro reports the value as current. */
+  private async v3SetConfigOption(
+    configId: string,
+    value: string,
+  ): Promise<boolean> {
+    const result = (await this.rpcSend(
+      'session/set_config_option',
+      { sessionId: this.acpSessionId, configId, value },
+      30000,
+    )) as any;
+    this.storeConfigOptions(result?.configOptions);
+    const applied = configOptionCurrentValue(this.configOptions, configId);
+    if (applied !== value) {
+      log('v3 config option not applied', {
+        session: this.id,
+        configId,
+        value,
+        applied,
+      });
+      return false;
+    }
+    return true;
   }
 
   /** Bring kiro's live effort level in line with desiredEffort.
@@ -1305,6 +1478,7 @@ export class AcpSession {
         );
       }
       this.acpSessionId = result.sessionId;
+      this.storeConfigOptions(result?.configOptions);
       this.systemPromptHash = null;
       this.conversationFingerprint = null;
       log('acp session/new', {
@@ -1375,6 +1549,7 @@ export class AcpSession {
             return false;
           }
           this.acpSessionId = kiroSessionId;
+          this.storeConfigOptions((result as any)?.configOptions);
           // Re-bind current pi instructions after resume/load.
           this.systemPromptHash = null;
           log('restored persisted kiro session', {
@@ -1458,11 +1633,6 @@ export class AcpSession {
     images: { type: 'image'; data: string; mimeType: string }[] = [],
     options: StartPromptOptions = {},
   ): Promise<void> {
-    // The V3 turn path (model and effort via session/set_config_option, the
-    // updates and metadata it reports, permissions) is unimplemented: fail
-    // before any backend I/O rather than drive a half-wired turn.
-    if (this.engine === 'v3')
-      throw new Error('Kiro V3 turn path not implemented yet');
     const startPromptAt = Date.now();
     const shouldReplayHistory = await this.ensureBackendSession(options);
     const backendReadyAt = Date.now();
@@ -1477,7 +1647,9 @@ export class AcpSession {
 
     const previousModelId = this.currentModelId;
     const modelChanged = this.currentModelId !== modelId;
-    if (modelChanged) {
+    if (this.engine === 'v3') {
+      await this.applyV3TurnConfig(modelId);
+    } else if (modelChanged) {
       await this.rpcSend(
         'session/set_model',
         { sessionId: this.acpSessionId, modelId },
@@ -1503,6 +1675,7 @@ export class AcpSession {
     // would kill the session this prompt is about to use. ensureStarted owns
     // the clear, before the turn starts.
     if (
+      this.engine !== 'v3' &&
       this.desiredEffort !== null &&
       (modelChanged || this.effortReconcilePending)
     ) {
