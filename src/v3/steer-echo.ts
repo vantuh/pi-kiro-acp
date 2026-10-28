@@ -4,7 +4,9 @@
  * and nothing is dropped unless its id is a steer this session queued. */
 
 const MARKER = '[STEERING ';
-const ID_RE = /^\[STEERING ([^\s:\]]+)/;
+/** An id only ends at a terminator, so `[STEERING steer-ab` (a chunk that
+ * stopped mid-id) is not read as a complete, unknown id. */
+const ID_RE = /^\[STEERING ([^\s:\]]+)[\s:\]]/;
 const TRAILING_SPACE_RE = /[ \t\r\n]+$/;
 /** Release an unterminated marker once this much text is held: keeping it
  * costs a rescan per chunk, and a note that never closes is not ours. */

@@ -365,9 +365,10 @@ test('the model’s steer note never reaches pi', async () => {
     );
     await waitFor(() => live.session.steerMessageIds.size === 1);
     const [messageId] = [...live.session.steerMessageIds];
-    live.emitText('Here is the answer.\n\n[STE');
-    live.emitText(`ERING ${messageId}: `);
-    live.emitText('CANARY]');
+    // Cut inside the id: a partial id must not be read as a complete, unknown
+    // one, or the note is released to pi.
+    live.emitText('Here is the answer.\n\n[STEERING steer-');
+    live.emitText(`${messageId.slice('steer-'.length)}: CANARY]`);
     await tick();
     finishTurn();
     await running;
