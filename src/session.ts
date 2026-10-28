@@ -434,6 +434,14 @@ export class AcpSession {
     }
   }
 
+  rpcRespondError(id: number, code: number, message: string): void {
+    if (this.proc?.stdin?.writable) {
+      this.proc.stdin.write(
+        JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }) + '\n',
+      );
+    }
+  }
+
   handleStdoutLine(line: string): void {
     const s = line.trim();
     if (!s) return;
@@ -574,17 +582,11 @@ export class AcpSession {
    * a JSON-RPC error there; a null result leaves it waiting on an answer it
    * never gets. V2 tolerated the null result and keeps getting it. */
   private respondToUnknownRequest(id: number): void {
-    if (this.engine !== 'v3' || !this.proc?.stdin?.writable) {
+    if (this.engine !== 'v3') {
       this.rpcRespond(id, null);
       return;
     }
-    this.proc.stdin.write(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id,
-        error: { code: -32601, message: 'Method not found' },
-      }) + '\n',
-    );
+    this.rpcRespondError(id, -32601, 'Method not found');
   }
 
   private respondToPermissionRequest(id: number, params: unknown): void {
@@ -1009,6 +1011,9 @@ export class AcpSession {
    * and then reconciles once more only if the level it wanted is still not
    * the one applied. */
   private async syncEffort(): Promise<void> {
+    // V3 has no `/effort` command prompt (that is a v2 session/prompt); its
+    // level goes through session/set_config_option once the turn path exists.
+    if (this.engine === 'v3') return;
     if (this.effortSyncInFlight) {
       const running = this.effortSyncInFlight;
       await running;
@@ -1383,13 +1388,13 @@ export class AcpSession {
     images: { type: 'image'; data: string; mimeType: string }[] = [],
     options: StartPromptOptions = {},
   ): Promise<void> {
-    const startPromptAt = Date.now();
-    const shouldReplayHistory = await this.ensureBackendSession(options);
     // The V3 turn path (model and effort via session/set_config_option, the
-    // updates and metadata it reports, permissions) is unimplemented. Fail here
-    // — before any turn RPC — rather than drive a half-wired turn.
+    // updates and metadata it reports, permissions) is unimplemented: fail
+    // before any backend I/O rather than drive a half-wired turn.
     if (this.engine === 'v3')
       throw new Error('Kiro V3 turn path not implemented yet');
+    const startPromptAt = Date.now();
+    const shouldReplayHistory = await this.ensureBackendSession(options);
     const backendReadyAt = Date.now();
     const promptUserMessage =
       shouldReplayHistory && options.replayUserMessage
