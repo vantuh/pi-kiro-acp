@@ -4,13 +4,7 @@
 // spends credits, so it is never started here).
 // Run: npm test -- test/agent-engine.test.ts
 
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -26,8 +20,10 @@ import {
   acpInvocations,
   assert,
   fakeKiroCli,
+  hermeticEnv,
   kiroContext,
   kiroModel,
+  setEnv,
   settled,
   wait,
 } from './support.ts';
@@ -381,8 +377,8 @@ test('supportsExtension follows the methods advertised in initialize', async () 
 
 test('a v3 turn streams text and telemetry through the real stream path', async () => {
   const fake = fakeKiroCli();
-  const savedEngine = process.env.PI_KIRO_ACP_AGENT_ENGINE;
-  process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v3';
+  const env = hermeticEnv();
+  setEnv('PI_KIRO_ACP_AGENT_ENGINE', 'v3');
   vi.resetModules();
   try {
     const { SessionManager } = await import('../src/session-manager.ts');
@@ -442,21 +438,17 @@ test('a v3 turn streams text and telemetry through the real stream path', async 
       await manager.stopAllSessions();
     }
   } finally {
-    if (savedEngine === undefined) delete process.env.PI_KIRO_ACP_AGENT_ENGINE;
-    else process.env.PI_KIRO_ACP_AGENT_ENGINE = savedEngine;
+    env.restore();
     fake.restore();
   }
 });
 
 test('the engine from kiro-acp.json reaches the routed session', async () => {
-  const home = mkdtempSync(join(tmpdir(), 'kiro-acp-home-'));
-  mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+  const env = hermeticEnv();
   writeFileSync(
-    join(home, '.pi', 'agent', 'kiro-acp.json'),
+    join(env.home, '.pi', 'agent', 'kiro-acp.json'),
     JSON.stringify({ agentEngine: 'v3' }),
   );
-  const savedHome = process.env.HOME;
-  process.env.HOME = home;
   try {
     vi.resetModules();
     const { SessionManager } = await import('../src/session-manager.ts');
@@ -474,7 +466,6 @@ test('the engine from kiro-acp.json reaches the routed session', async () => {
       await manager.stopAllSessions();
     }
   } finally {
-    process.env.HOME = savedHome;
-    rmSync(home, { recursive: true, force: true });
+    env.restore();
   }
 });

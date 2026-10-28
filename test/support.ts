@@ -144,9 +144,43 @@ export function setEnv(name: string, value: string | undefined): void {
   else process.env[name] = value;
 }
 
-/** Puts the fake on PATH as `kiro-cli` and points it at a scratch log dir.
- * `modes` overrides the mode the fake reports for session/new or session/load;
- * unset, it echoes the requested `_meta.kiro.modeId` like a working profile. */
+/** Set env vars for one test, then restore exactly those keys — a key that was
+ * unset before ends up unset again instead of holding the string "undefined". */
+export function withEnv(
+  values: Record<string, string | undefined>,
+): () => void {
+  const saved = Object.keys(values).map(
+    (name) => [name, process.env[name]] as const,
+  );
+  for (const [name, value] of Object.entries(values)) setEnv(name, value);
+  return () => {
+    for (const [name, value] of saved) setEnv(name, value);
+  };
+}
+
+/** Keep one test away from the developer's real setup: `HOME` (where
+ * kiro-acp.json lives), `XDG_DATA_HOME` (persisted sessions) and the engine
+ * override all point at scratch state. */
+export function hermeticEnv(): { home: string; restore: () => void } {
+  const root = mkdtempSync(join(tmpdir(), 'kiro-acp-home-'));
+  const home = join(root, 'home');
+  const data = join(root, 'data');
+  mkdirSync(join(home, '.pi', 'agent'), { recursive: true });
+  mkdirSync(data, { recursive: true });
+  const restoreEnv = withEnv({
+    HOME: home,
+    XDG_DATA_HOME: data,
+    PI_KIRO_ACP_AGENT_ENGINE: undefined,
+  });
+  return {
+    home,
+    restore() {
+      restoreEnv();
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
+}
+
 function readLog(dir: string, name: string): any[] {
   const file = join(dir, name);
   if (!existsSync(file)) return [];
@@ -156,6 +190,9 @@ function readLog(dir: string, name: string): any[] {
     .map((line) => JSON.parse(line));
 }
 
+/** Puts the fake on PATH as `kiro-cli` and points it at a scratch log dir.
+ * `modes` overrides the mode the fake reports for session/new or session/load;
+ * unset, it echoes the requested `_meta.kiro.modeId` like a working profile. */
 export function fakeKiroCli(
   extensionMethods: string[] = [],
   modes: { new?: string; load?: string } = {},
@@ -188,12 +225,9 @@ export function fakeKiroCli(
     frames: () => readLog(logDir, 'frames.log'),
     replies: () => readLog(logDir, 'replies.log'),
     restore() {
-      process.env.PATH = savedPath;
-      if (savedDir === undefined) delete process.env.FAKE_KIRO_DIR;
-      else process.env.FAKE_KIRO_DIR = savedDir;
-      if (savedMethods === undefined)
-        delete process.env.FAKE_KIRO_EXTENSION_METHODS;
-      else process.env.FAKE_KIRO_EXTENSION_METHODS = savedMethods;
+      setEnv('PATH', savedPath);
+      setEnv('FAKE_KIRO_DIR', savedDir);
+      setEnv('FAKE_KIRO_EXTENSION_METHODS', savedMethods);
       setEnv('FAKE_KIRO_NEW_MODE', savedNewMode);
       setEnv('FAKE_KIRO_LOAD_MODE', savedLoadMode);
       rmSync(root, { recursive: true, force: true });

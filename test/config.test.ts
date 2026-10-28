@@ -8,16 +8,14 @@ import {
   resolveLoggerConfig,
   resolveUsageFooterConfig,
 } from '../src/config.ts';
-import { assert } from './support.ts';
+import { assert, setEnv, withEnv } from './support.ts';
 
 test('kiro-acp.json config resolvers', () => {
-  const savedEnv = { ...process.env };
-
-  // --- resolveLoggerConfig ---
-
   // Env vars are ignored: logging is config-only.
-  process.env.PI_KIRO_ACP_DEBUG = '1';
-  process.env.PI_KIRO_ACP_VERBOSE = '3';
+  const restoreEnv = withEnv({
+    PI_KIRO_ACP_DEBUG: '1',
+    PI_KIRO_ACP_VERBOSE: '3',
+  });
   let logger = resolveLoggerConfig({});
   assert(
     logger.debug === false && logger.verbose === 0,
@@ -64,12 +62,13 @@ test('kiro-acp.json config resolvers', () => {
     'invalid pollMinutes falls back to 10',
   );
 
-  process.env = savedEnv;
+  restoreEnv();
 });
 
 test('kiro-acp.json agent engine resolver', () => {
-  const savedEnv = { ...process.env };
-  delete process.env.PI_KIRO_ACP_AGENT_ENGINE;
+  const engineEnv = () => process.env.PI_KIRO_ACP_AGENT_ENGINE;
+  const originalEngine = engineEnv();
+  const restoreEnv = withEnv({ PI_KIRO_ACP_AGENT_ENGINE: undefined });
   try {
     assert(resolveAgentEngine({}) === 'v2', 'the engine defaults to v2');
     assert(
@@ -86,23 +85,27 @@ test('kiro-acp.json agent engine resolver', () => {
     );
 
     // The env override lets a launcher switch engines without touching HOME.
-    process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v3';
+    setEnv('PI_KIRO_ACP_AGENT_ENGINE', 'v3');
     assert(
       resolveAgentEngine({}) === 'v3' &&
         resolveAgentEngine({ agentEngine: 'v2' }) === 'v3',
       'the env override wins over the config file',
     );
-    process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v2';
+    setEnv('PI_KIRO_ACP_AGENT_ENGINE', 'v2');
     assert(
       resolveAgentEngine({ agentEngine: 'v3' }) === 'v2',
       'the env override can pin v2 as well',
     );
-    process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v4';
+    setEnv('PI_KIRO_ACP_AGENT_ENGINE', 'v4');
     assert(
       resolveAgentEngine({ agentEngine: 'v3' }) === 'v3',
       'an unrecognised env value is ignored',
     );
   } finally {
-    process.env = savedEnv;
+    restoreEnv();
+    assert(
+      engineEnv() === originalEngine,
+      `the override is restored exactly — unset stays unset, not "undefined" (got ${engineEnv()})`,
+    );
   }
 });

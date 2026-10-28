@@ -6,12 +6,18 @@
 
 import { test, vi } from 'vitest';
 
-import { acpInvocations, assert, fakeKiroCli } from './support.ts';
+import {
+  acpInvocations,
+  assert,
+  fakeKiroCli,
+  hermeticEnv,
+  setEnv,
+} from './support.ts';
 
 test('v3 model discovery reads the model config option', async () => {
   const fake = fakeKiroCli();
-  const savedEngine = process.env.PI_KIRO_ACP_AGENT_ENGINE;
-  process.env.PI_KIRO_ACP_AGENT_ENGINE = 'v3';
+  const env = hermeticEnv();
+  setEnv('PI_KIRO_ACP_AGENT_ENGINE', 'v3');
   vi.resetModules();
   try {
     const { discoverKiroModels } = await import('../src/models/discovery.ts');
@@ -32,14 +38,16 @@ test('v3 model discovery reads the model config option', async () => {
       'discovered names keep the provider suffix',
     );
   } finally {
-    if (savedEngine === undefined) delete process.env.PI_KIRO_ACP_AGENT_ENGINE;
-    else process.env.PI_KIRO_ACP_AGENT_ENGINE = savedEngine;
+    env.restore();
     fake.restore();
   }
 });
 
 test('v2 model discovery still reads availableModels with no flags', async () => {
   const fake = fakeKiroCli();
+  // No engine override and no kiro-acp.json: the developer's own config must
+  // not decide which engine (and which model list) this test sees.
+  const env = hermeticEnv();
   vi.resetModules();
   try {
     const { discoverKiroModels } = await import('../src/models/discovery.ts');
@@ -55,5 +63,6 @@ test('v2 model discovery still reads availableModels with no flags', async () =>
     );
   } finally {
     fake.restore();
+    env.restore();
   }
 });
