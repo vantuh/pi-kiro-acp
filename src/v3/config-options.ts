@@ -8,6 +8,9 @@ interface Choice {
   /** `_meta.kiro.effortLevels` on a model option: the levels its selection
    * accepts. Absent (or `hasEffort: false`) means the model has no effort. */
   effortLevels: string[];
+  /** `_meta.kiro.defaultEffortLevel`: the level the model starts at, i.e. the
+   * only way to clear a level pi no longer wants. */
+  defaultEffortLevel: string | null;
 }
 
 function asRecord(value: unknown): Record<string, any> | undefined {
@@ -33,13 +36,18 @@ export function configOptionChoices(all: unknown, id: string): Choice[] {
     .filter((choice): choice is Record<string, any> => !!choice)
     .filter((choice) => typeof choice.value === 'string' && choice.value)
     .map((choice) => {
-      const levels = asRecord(choice._meta?.kiro)?.effortLevels;
+      const kiro = asRecord(choice._meta?.kiro);
+      const levels = kiro?.effortLevels;
       return {
         value: choice.value as string,
         name: typeof choice.name === 'string' ? choice.name : undefined,
         effortLevels: Array.isArray(levels)
           ? levels.filter((level): level is string => typeof level === 'string')
           : [],
+        defaultEffortLevel:
+          typeof kiro?.defaultEffortLevel === 'string'
+            ? kiro.defaultEffortLevel
+            : null,
       };
     });
 }
@@ -65,5 +73,18 @@ export function modelEffortLevels(all: unknown, modelValue: string): string[] {
     configOptionChoices(all, 'model').find(
       (choice) => choice.value === modelValue,
     )?.effortLevels ?? []
+  );
+}
+
+/** The level the model starts at. Used to clear a level pi no longer wants:
+ * kiro has no "unset effort" value. */
+export function modelDefaultEffortLevel(
+  all: unknown,
+  modelValue: string,
+): string | null {
+  return (
+    configOptionChoices(all, 'model').find(
+      (choice) => choice.value === modelValue,
+    )?.defaultEffortLevel ?? null
   );
 }

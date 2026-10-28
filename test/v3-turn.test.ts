@@ -3,8 +3,12 @@
 // fake ACP session: no kiro-cli is spawned.
 // Run: npm test -- test/v3-turn.test.ts
 
-// Keep session.ts's persistence import hermetic before it loads.
-process.env.XDG_DATA_HOME ??= '/tmp/kiro-acp-test-data';
+// Persisted sessions must never land in the developer's data dir.
+process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), 'kiro-acp-data-'));
+
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { test } from 'vitest';
 
@@ -282,6 +286,171 @@ test('v3 selects a model even when kiro reported no options', async () => {
     configOptionFrames(written).length === 1,
     'the effort level is skipped when the model options were unknown',
   );
+});
+
+test('v3 clears a stale effort level back to the model default', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('claude-sonnet-4.6', 'high'));
+  session.currentModelId = 'claude-sonnet-4.6';
+  session.currentEffort = 'high';
+  session.desiredEffort = null;
+
+  const turn = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+
+  const [effortFrame] = configOptionFrames(written);
+  assert(
+    effortFrame?.params?.configId === 'effortLevel' &&
+      effortFrame.params.value === 'high',
+    `pi turning reasoning off writes the model's default level again (got ${JSON.stringify(effortFrame?.params)})`,
+  );
+  session.handleStdoutLine(
+    resultFor(effortFrame.id, {
+      configOptions: optionsFor('claude-sonnet-4.6', 'high'),
+    }),
+  );
+  await tick();
+  const promptFrame = framesSoFar(written).find(
+    (frame) => frame.method === 'session/prompt',
+  );
+  session.handleStdoutLine(
+    resultFor(promptFrame.id, { stopReason: 'end_turn' }),
+  );
+  await turn;
+  assert(
+    session.currentEffort === null,
+    `the cleared level is not re-applied next turn (got ${session.currentEffort})`,
+  );
+
+  // Next turn: nothing to write, the model default is already live.
+  const before = written.length;
+  const next = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+  assert(
+    written.length === before + 1,
+    'a cleared level costs no further config writes',
+  );
+  session.handleStdoutLine(
+    resultFor(framesSoFar(written).at(-1)!.id, { stopReason: 'end_turn' }),
+  );
+  await next;
+});
+
+test('v3 refuses a model kiro does not echo back', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('auto', null));
+
+  const turn = await settled(
+    (async () => {
+      const running = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+      await tick();
+      const [modelFrame] = configOptionFrames(written);
+      // kiro reports the old model: nothing was applied.
+      session.handleStdoutLine(
+        resultFor(modelFrame.id, { configOptions: optionsFor('auto', null) }),
+      );
+      return running;
+    })(),
+  );
+
+  assert(!turn.ok, 'startPrompt rejects when the model was not applied');
+  assert(
+    turn.error?.message ===
+      'Kiro V3 did not apply model claude-sonnet-4.6 (reported: auto); refusing to run the turn',
+    `the error names the requested and reported model (got "${turn.error?.message}")`,
+  );
+  assert(
+    framesSoFar(written).every((frame) => frame.method !== 'session/prompt'),
+    'no prompt is sent on the wrong model',
+  );
+  assert(session.currentModelId === null, 'nothing is recorded as applied');
+});
+
+test('v3 refuses a model kiro echoes but does not offer', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('auto', null));
+  const modelsWithoutTarget = MODEL_CHOICES.filter(
+    (choice) => choice.value !== 'claude-sonnet-4.6',
+  );
+
+  const turn = await settled(
+    (async () => {
+      const running = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+      await tick();
+      const [modelFrame] = configOptionFrames(written);
+      // No option list was known, so the pre-check let the write through; kiro
+      // echoes the id but never offers it.
+      session.handleStdoutLine(
+        resultFor(modelFrame.id, {
+          configOptions: [
+            {
+              type: 'select',
+              id: 'model',
+              currentValue: 'claude-sonnet-4.6',
+              options: modelsWithoutTarget,
+            },
+          ],
+        }),
+      );
+      return running;
+    })(),
+  );
+
+  assert(!turn.ok, 'startPrompt rejects for an unoffered echoed model');
+  assert(
+    turn.error?.message.includes('does not offer it'),
+    `the error says kiro does not offer the model (got "${turn.error?.message}")`,
+  );
+  assert(session.currentModelId === null, 'nothing is recorded as applied');
+});
+
+test('v3 compares the persisted model id with the live options', async () => {
+  const { session, written } = v3Session();
+  // A restore adopts the persisted record's model, but the restored backend
+  // reports its own: trusting the record would run the wrong model silently.
+  session.currentModelId = 'auto';
+  feedConfigOptions(session, optionsFor('claude-sonnet-4.6', null));
+
+  const turn = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+
+  assert(
+    configOptionFrames(written).length === 0,
+    'no model write when the live options already run the requested model',
+  );
+  const promptFrame = framesSoFar(written).find(
+    (frame) => frame.method === 'session/prompt',
+  );
+  session.handleStdoutLine(
+    resultFor(promptFrame.id, { stopReason: 'end_turn' }),
+  );
+  await turn;
+
+  // The reverse: the record says the model is live, the options say otherwise.
+  const second = v3Session();
+  second.session.currentModelId = 'claude-sonnet-4.6';
+  second.session.effortReconcilePending = false;
+  feedConfigOptions(second.session, optionsFor('auto', null));
+  const secondTurn = second.session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+  const [modelFrame] = configOptionFrames(second.written);
+  assert(
+    modelFrame?.params?.value === 'claude-sonnet-4.6',
+    `the live options win over the persisted id (wrote ${JSON.stringify(modelFrame?.params)})`,
+  );
+  second.session.handleStdoutLine(
+    resultFor(modelFrame.id, {
+      configOptions: optionsFor('claude-sonnet-4.6', null),
+    }),
+  );
+  await tick();
+  const secondPrompt = framesSoFar(second.written).find(
+    (frame) => frame.method === 'session/prompt',
+  );
+  second.session.handleStdoutLine(
+    resultFor(secondPrompt.id, { stopReason: 'end_turn' }),
+  );
+  await secondTurn;
 });
 
 test('v3 session_info_update telemetry reaches the metadata only', async () => {

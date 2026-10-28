@@ -51,6 +51,7 @@ import type {
 import {
   configOptionCurrentValue,
   configOptionValues,
+  modelDefaultEffortLevel,
   modelEffortLevels,
 } from './v3/config-options.ts';
 import {
@@ -1157,9 +1158,14 @@ export class AcpSession {
    * reported currentValue — so both are checked against the advertised options
    * first, and only what kiro echoes back is recorded as applied. */
   private async applyV3TurnConfig(modelId: string): Promise<void> {
-    const previousModelId = this.currentModelId;
     this.effortReconcilePending = false;
-    if (this.currentModelId !== modelId) {
+    // kiro's own report wins over `currentModelId`: a restored session adopts
+    // the model id from the persisted record, which says nothing about the
+    // model the restored backend is actually running.
+    const liveModel =
+      configOptionCurrentValue(this.configOptions, 'model') ??
+      this.currentModelId;
+    if (liveModel !== modelId) {
       const offered = configOptionValues(this.configOptions, 'model');
       // An empty list means kiro reported no configOptions (a restore whose
       // response carried none): write the value and let the echo decide
@@ -1169,18 +1175,54 @@ export class AcpSession {
           `Kiro V3 does not offer model ${modelId} (offered: ${offered.join(', ') || 'none'}); refresh the model list or pick another`,
         );
       await this.v3SetConfigOption('model', modelId);
+      const applied = configOptionCurrentValue(this.configOptions, 'model');
+      if (applied !== modelId)
+        throw new Error(
+          `Kiro V3 did not apply model ${modelId} (reported: ${applied ?? 'none'}); refusing to run the turn`,
+        );
+      // kiro echoes even a value it cannot use, so the reported model also has
+      // to be one the options actually offer.
+      const offeredAfter = configOptionValues(this.configOptions, 'model');
+      if (offeredAfter.length > 0 && !offeredAfter.includes(modelId))
+        throw new Error(
+          `Kiro V3 reported model ${modelId} as current but does not offer it (offered: ${offeredAfter.join(', ')}); refresh the model list or pick another`,
+        );
       this.currentModelId = modelId;
       // Selecting a model replaces the level with that model's own default.
       this.currentEffort = null;
       log('v3 model set', {
         session: this.id,
         modelId,
-        previousModel: previousModelId,
+        previousModel: liveModel,
       });
     }
 
     const level = this.desiredEffort;
-    if (level === null) return;
+    if (level === null) {
+      if (this.currentEffort === null) return;
+      // pi turned reasoning off after a level was applied. kiro has no "unset
+      // effort", so go back to the model's default instead of silently running
+      // the rest of the session at the old level.
+      const fallback = modelDefaultEffortLevel(this.configOptions, modelId);
+      if (fallback === null) {
+        log('v3 effort level cannot be cleared (no model default)', {
+          session: this.id,
+          modelId,
+          currentEffort: this.currentEffort,
+        });
+        return;
+      }
+      const applied = await this.v3SetConfigOption('effortLevel', fallback);
+      if (applied !== fallback) return;
+      // Back to kiro's own choice: nothing to keep re-applying.
+      this.currentEffort = null;
+      log('v3 effort level reset to the model default', {
+        session: this.id,
+        modelId,
+        level: fallback,
+      });
+      return;
+    }
     const advertised = modelEffortLevels(this.configOptions, modelId);
     if (!advertised.includes(level)) {
       // V3 also drops the effortLevel option for such a model, so the write
@@ -1194,17 +1236,19 @@ export class AcpSession {
       return;
     }
     if (this.currentEffort === level) return;
-    if (await this.v3SetConfigOption('effortLevel', level)) {
-      this.currentEffort = level;
-      log('v3 effort applied', { session: this.id, modelId, level });
-    }
+    const applied = await this.v3SetConfigOption('effortLevel', level);
+    if (applied !== level) return;
+    this.currentEffort = level;
+    log('v3 effort applied', { session: this.id, modelId, level });
   }
 
-  /** One config_option write; true when kiro reports the value as current. */
+  /** One config_option write; the value kiro reports as current afterwards
+   * (null when it reported none). An unusable value is not an error to kiro,
+   * so the caller has to compare. */
   private async v3SetConfigOption(
     configId: string,
     value: string,
-  ): Promise<boolean> {
+  ): Promise<string | null> {
     const result = (await this.rpcSend(
       'session/set_config_option',
       { sessionId: this.acpSessionId, configId, value },
@@ -1219,9 +1263,8 @@ export class AcpSession {
         value,
         applied,
       });
-      return false;
     }
-    return true;
+    return applied;
   }
 
   /** Bring kiro's live effort level in line with desiredEffort.
