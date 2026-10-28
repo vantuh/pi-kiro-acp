@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { test } from 'vitest';
 
 import { AcpSession } from '../src/session.ts';
+import { configOptionValues } from '../src/v3/config-options.ts';
 import { assert, fakeSession, parseLines, settled, tick } from './support.ts';
 
 /** The model select kiro returns: only `claude-sonnet-4.6` supports effort. */
@@ -453,6 +454,33 @@ test('v3 compares the persisted model id with the live options', async () => {
   await secondTurn;
 });
 
+test('v3 ignores config options from another ACP session', () => {
+  const { session } = v3Session();
+  feedConfigOptions(session, optionsFor('auto', null));
+  const cached = () =>
+    configOptionValues((session as any).configOptions, 'model');
+
+  session.handleStdoutLine(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: 'previous-acp-session',
+        update: {
+          sessionUpdate: 'config_option_update',
+          configOptions: optionsFor('model-from-the-past', null, [
+            { value: 'model-from-the-past', name: 'Past' },
+          ]),
+        },
+      },
+    }),
+  );
+  assert(
+    cached().join(',') === 'auto,claude-sonnet-4.6,claude-haiku-4.5',
+    `a stale config_option_update is ignored (got ${cached().join(',')})`,
+  );
+});
+
 test('v3 session_info_update telemetry reaches the metadata only', async () => {
   const { session } = v3Session();
   const seen: any[] = [];
@@ -501,6 +529,17 @@ test('v3 session_info_update telemetry reaches the metadata only', async () => {
     'the earlier context usage survives the next tick',
   );
 
+  // A tick carries only its own fields: an absent one must not erase what this
+  // turn already reported.
+  info({ kind: 'turn_completion' });
+  assert(
+    seen.length === 3 &&
+      seen[2].turnDurationMs === 1234 &&
+      seen[2].meteringUsage?.length === 2 &&
+      seen[2].contextUsagePercentage === 12.5,
+    `a field-less tick keeps the earlier values (got ${JSON.stringify(seen[2])})`,
+  );
+
   for (const kind of [
     'turn_start',
     'turn_end',
@@ -511,11 +550,11 @@ test('v3 session_info_update telemetry reaches the metadata only', async () => {
     'user_message_id_assigned',
   ])
     info({ kind });
-  assert(seen.length === 2, 'the other kinds record nothing');
+  assert(seen.length === 3, 'the other kinds record nothing');
 
   info({ kind: 'context_usage', usagePercentage: 99 }, 'someone-else');
   assert(
-    seen.length === 2 && seen[1].contextUsagePercentage === 12.5,
+    seen.length === 3 && seen[2].contextUsagePercentage === 12.5,
     'a foreign session id is ignored',
   );
   assert(forwarded.length === 0, 'no session_info_update reaches the stream');

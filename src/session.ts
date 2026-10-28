@@ -824,18 +824,18 @@ export class AcpSession {
     update: SessionUpdate,
     updateSessionId: unknown,
   ): boolean {
+    const sessionId =
+      typeof updateSessionId === 'string' ? updateSessionId : this.acpSessionId;
+    // Late frames from a previous ACP session must not touch this one — not
+    // even a stale model/effort list or a command list.
+    if (!sessionId || (this.acpSessionId && sessionId !== this.acpSessionId))
+      return true;
     if (update.sessionUpdate === 'config_option_update') {
       this.storeConfigOptions((update as any).configOptions);
       return true;
     }
     if (update.sessionUpdate === 'available_commands_update') return true;
     if (update.sessionUpdate !== 'session_info_update') return false;
-
-    const sessionId =
-      typeof updateSessionId === 'string' ? updateSessionId : this.acpSessionId;
-    // Late frames from a previous ACP session must not touch this one.
-    if (!sessionId || (this.acpSessionId && sessionId !== this.acpSessionId))
-      return true;
 
     const rawKiro = (update as any)._meta?.kiro;
     const kiro: Record<string, any> =
@@ -876,7 +876,12 @@ export class AcpSession {
   private applyV3Metadata(
     patch: { sessionId: string } & Partial<SessionMetadata>,
   ): void {
-    this.metadata = { ...this.metadata, ...patch } as SessionMetadata;
+    // A tick only carries its own fields: spreading `turnDurationMs:
+    // undefined` would erase what an earlier tick reported for this turn.
+    const defined = Object.fromEntries(
+      Object.entries(patch).filter(([, value]) => value !== undefined),
+    );
+    this.metadata = { ...this.metadata, ...defined } as SessionMetadata;
     log('kiro metadata', {
       session: this.id,
       acpSessionId: patch.sessionId,
@@ -1535,6 +1540,9 @@ export class AcpSession {
     }
 
     if (!this.acpSessionId) {
+      // A fresh ACP session reports its own options; a stale list from the
+      // previous one must not be read as its model/effort.
+      this.configOptions = [];
       const result = (await this.rpcSend(
         'session/new',
         this.engine === 'v3'
@@ -1596,6 +1604,7 @@ export class AcpSession {
         // a clean tools list landing during the window lifts those, but it
         // must not erase a hazard signal this snapshot already emitted.
         const hazardAtStart = this.hazardGeneration;
+        this.configOptions = [];
         const result = await this.rpcSend(
           attempt.method,
           this.engine === 'v3'
@@ -1926,6 +1935,7 @@ export class AcpSession {
     this.conversationFingerprint = null;
     this.systemPromptHash = null;
     this.currentModelId = null;
+    this.configOptions = [];
     // The dead backend owned the applied effort and its reasoning report;
     // the replacement process starts with none and re-applies in-band.
     this.currentEffort = null;
