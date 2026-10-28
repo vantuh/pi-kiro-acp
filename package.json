@@ -4,13 +4,24 @@
     "pi-package"
   ],
   "license": "MIT",
+  "files": [
+    "src",
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./provider": "./src/provider.ts",
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "import": "./dist/provider.js"
+    },
     "./pocket": "./src/pocket.ts"
   },
   "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "pretest": "npm run build",
     "test": "vitest run",
     "lint": "oxlint --deny-warnings",
     "format": "oxfmt --write .",
@@ -18,13 +29,17 @@
     "check": "npm run lint && npm run format:check && npm test"
   },
   "devDependencies": {
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@types/node": "^26.6.5",
     "oxfmt": "^0.72.0",
     "oxlint": "^1.87.0",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.4"
   },
   "peerDependencies": {
-    "@earendil-works/pi-ai": "*",
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0"
   },
   "peerDependenciesMeta": {
     "@earendil-works/pi-coding-agent": {

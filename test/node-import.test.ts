@@ -1,5 +1,5 @@
-// Test: the source-only provider subpath imports in plain Node, without a
-// transform step hiding non-erasable TypeScript.
+// Test: the provider subpath imports in plain Node from its built output, and
+// the pi entry point from source the loader strips.
 // Run: npm test -- test/node-import.test.ts
 
 import { execFileSync } from 'node:child_process';

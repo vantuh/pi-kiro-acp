@@ -1,2 +1,3 @@
 # Also matches the dev symlink to pi's node_modules (a trailing slash would not).
 node_modules
+dist

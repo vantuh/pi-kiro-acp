@@ -59,7 +59,11 @@ Restart pi, then pick a `kiro-acp` model with `/model`.
 
 ## Using the provider directly
 
-The package exports a native pi-ai `Provider` with its own Kiro ACP runtime:
+The package exports a native pi-ai `Provider` with its own Kiro ACP runtime.
+Hosts that register the provider import the built subpath, `dist/*.js` with its
+declarations, so its `@earendil-works/pi-ai` is the host's single instance; run
+`npm run build` in the checkout before installing it that way. Pi and Pi Pocket
+load the TypeScript source instead.
 
 ```ts
 import { createModels } from '@earendil-works/pi-ai';
@@ -233,11 +237,13 @@ Tuning knobs; defaults work for most setups.
 
 ## Development
 
-No build step. Pi loads `src/index.ts` directly.
+Pi loads `src/index.ts` directly. `npm run build` emits `dist/` for the
+`./provider` subpath; `npm test` runs it first.
 
 ```sh
 npm ci                           # install locked dependencies
-npm test                         # vitest run over test/*.test.ts
+npm run build                    # tsc -p tsconfig.build.json
+npm test                         # build, then vitest run over test/*.test.ts
 npm test -- test/usage.test.ts   # selected tests
 npm run lint                     # oxlint (warnings fail)
 npm run format                   # oxfmt --write
