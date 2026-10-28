@@ -503,6 +503,9 @@ export function streamKiroAcp(
       const gen = ++session.streamGen;
       turnGen = gen;
       let promptError: Error | null = null;
+      // The error is recorded inside the settle callbacks below, which the
+      // outer flow cannot see; read it through a call so its type stays open.
+      const promptFailure = () => promptError;
       let toolFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
       const outcome = await new Promise<'toolUse' | 'stop' | 'error'>(
@@ -748,7 +751,7 @@ export function streamKiroAcp(
         session.conversationFingerprint = null;
         output.stopReason = 'error';
         output.errorMessage = tagKiroContextOverflow(
-          promptError?.message || 'Kiro ACP prompt failed',
+          promptFailure()?.message || 'Kiro ACP prompt failed',
         );
         stream.push({ type: 'error', reason: 'error', error: output });
       } else {
