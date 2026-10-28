@@ -1,3 +1,5 @@
+import { loadKiroAcpConfig, resolveAgentEngine } from '../config.ts';
+import { configOptionChoices } from '../v3/config-options.ts';
 import { DiscoveryClient } from './discovery-client.ts';
 import { KIRO_MODELS, type KiroModelConfig } from './fallback.ts';
 import { normalizeDiscoveredModel, dedupeModels } from './normalize.ts';
@@ -42,7 +44,8 @@ export async function discoverKiroModels(
   cwd = process.cwd(),
   signal?: AbortSignal,
 ): Promise<KiroModelConfig[]> {
-  const client = new DiscoveryClient(cwd);
+  const engine = resolveAgentEngine(loadKiroAcpConfig());
+  const client = new DiscoveryClient(cwd, engine);
   try {
     if (signal?.aborted) throw abortError();
     await client.start();
@@ -65,7 +68,14 @@ export async function discoverKiroModels(
       signal,
     )) as any;
     if (signal?.aborted) throw abortError();
-    const available = session?.models?.availableModels;
+    // V3 lists models as the `model` config option of the session; the shape
+    // maps onto the same normalizer as v2's `models.availableModels`.
+    const available =
+      engine === 'v3'
+        ? configOptionChoices(session?.configOptions, 'model').map(
+            (choice) => ({ modelId: choice.value, name: choice.name }),
+          )
+        : session?.models?.availableModels;
     if (!Array.isArray(available) || available.length === 0) return KIRO_MODELS;
 
     return dedupeModels(

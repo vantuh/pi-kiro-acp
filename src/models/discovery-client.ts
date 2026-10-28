@@ -4,7 +4,9 @@ import {
   type Interface as ReadlineInterface,
 } from 'node:readline';
 
+import type { AgentEngine } from '../config.ts';
 import { terminateProcessTree } from '../process-utils.ts';
+import { v3SpawnArgs } from '../v3/launch.ts';
 
 type JsonRpcResponse = {
   id?: number;
@@ -18,6 +20,9 @@ export class DiscoveryClient {
   private nextId = 1;
   private stderr = '';
   private readonly cwd: string;
+  /** V3 needs its engine flags; its model list lives in the session's
+   * configOptions instead of `models.availableModels`. */
+  private readonly engine: AgentEngine;
   private readonly pending = new Map<
     number,
     {
@@ -27,12 +32,14 @@ export class DiscoveryClient {
     }
   >();
 
-  constructor(cwd: string) {
+  constructor(cwd: string, engine: AgentEngine = 'v2') {
     this.cwd = cwd;
+    this.engine = engine;
   }
 
   async start(): Promise<void> {
-    this.proc = spawn('kiro-cli', ['acp'], {
+    const args = this.engine === 'v3' ? v3SpawnArgs() : ['acp'];
+    this.proc = spawn('kiro-cli', args, {
       cwd: this.cwd,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
