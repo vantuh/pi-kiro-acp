@@ -2,6 +2,8 @@ import { getCurrentSystemPrompt } from '@earendil-works/pi-ai';
 import type {
   AssistantMessage,
   Context,
+  JsonObject,
+  JsonValue,
   TranscriptContext,
 } from '@earendil-works/pi-ai';
 
@@ -401,6 +403,17 @@ export function estimateUsage(
   };
 }
 
+/** JSON has no `undefined`: a field kiro never reported is left out entirely. */
+function definedJson(
+  entries: Record<string, JsonValue | undefined>,
+): JsonObject {
+  const out: JsonObject = {};
+  for (const [key, value] of Object.entries(entries)) {
+    if (value !== undefined) out[key] = value;
+  }
+  return out;
+}
+
 export function appendKiroMetadataDiagnostic(
   output: AssistantMessage,
   metadata?: SessionMetadata | null,
@@ -411,7 +424,7 @@ export function appendKiroMetadataDiagnostic(
     {
       type: 'kiro_metadata',
       timestamp: Date.now(),
-      details: {
+      details: definedJson({
         sessionId: metadata.sessionId,
         contextUsagePercentage: metadata.contextUsagePercentage,
         contextUsed: metadata.contextUsed,
@@ -420,7 +433,7 @@ export function appendKiroMetadataDiagnostic(
         meteringUsage: metadata.meteringUsage,
         turnDurationMs: metadata.turnDurationMs,
         credits: sumMeteringCredits(metadata.meteringUsage) || undefined,
-      },
+      }),
     },
   ];
 }
