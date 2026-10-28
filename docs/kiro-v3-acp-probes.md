@@ -133,6 +133,68 @@ With it no `session/request_permission` arrived in any run, and the model said i
 no `disclose_context` when asked to call it. V3 skips a profile that has
 `allowedTools` but no `permissions`, so the v2 profile cannot be reused as is.
 
+## Model, effort and telemetry
+
+Free RPCs only — `initialize`, `session/new`, `session/set_config_option`, `session/load`,
+`session/close`; no turn was prompted.
+
+`session/new` carries a `configOptions` array instead of v2's `models`. Ids in a fresh
+session: `mode`, `model`, `memoryReflection`, `autopilot`, `contentCollection`. The
+`model` select lists 15 values, and each choice documents its own effort support in
+`_meta.kiro`:
+
+```json
+{ "value": "claude-opus-5.5", "name": "Claude Opus 5.5",
+  "_meta": { "kiro": { "rateMultiplier": 2, "rateUnit": "Credit", "hasEffort": true,
+    "effortSchemaPath": "output_config",
+    "effortLevels": ["low","medium","high","xhigh","max"], "defaultEffortLevel": "medium" } } }
+```
+
+- Effort-capable: `claude-opus-5.5`, `claude-sonnet-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna`,
+  `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-sonnet-4.6`. The GPT
+  models also offer `none`, and `claude-sonnet-4.6` stops at `max` without `xhigh`.
+- No effort: `auto`, `claude-haiku-4.5`, `deepseek-3.2`, `minimax-m2.5`, `minimax-m2.1`,
+  `glm-5`, `qwen3-coder-next` (`hasEffort: false`).
+- There is **no `effortLevel` option** until an effort-capable model is current, and it
+  disappears again when a model without effort is selected.
+
+`session/set_config_option { sessionId, configId, value }` answers with the full
+`configOptions` array and emits a `config_option_update` with the same array. Selecting a
+model also emits `session_info_update` (`context_usage`) and `available_commands_update`
+frames; setting the effort level emits only the `config_option_update`.
+
+The trap: **an unusable value is not an error**. `model: "no-such-model"` is echoed back as
+`currentValue` (and drops the `effortLevel` option), and an `effortLevel` the model does not
+list is answered with the unchanged `currentValue`. So the caller has to check the value
+against the advertised options before writing it, and read `currentValue` back to know what
+was actually applied. The provider does exactly that: model ids it did not see are refused
+with an explicit error, an effort level the model does not advertise is logged and skipped,
+and `currentEffort` is only set when kiro echoes the level back.
+
+The ids themselves are portable: the 15 v2 `availableModels.modelId` values and the 15 v3
+`model` option values are the same set, in the same order, with no difference in either
+direction.
+
+Telemetry arrives as `session/update` frames, not as the v2 `_kiro.dev/metadata`
+notification. Every `session_info_update` carries `_meta.kiro.kind`:
+
+| kind | payload used |
+|---|---|
+| `context_usage` | `usagePercentage` → `contextUsagePercentage` |
+| `turn_completion` | `elapsedTime` (ms), `promptTurnSummaries[].{unit,unitPlural,usage}` → credits |
+| `turn_start`, `turn_end`, `focus_update`, `steering_queued`, `steering_injected`, `steering_cleared`, `user_message_id_assigned` | nothing to record |
+
+A turn still ends on the `session/prompt` result, so those kinds are consumed and dropped
+rather than surfaced to the stream.
+
+Tool identity differs from v2 as well: a forwarded call is tagged
+`_meta.kiro.mcpTool.identity.{serverName,toolName}` or a `title` of `@pi_host/<tool>`, while
+the meta tools are titled `Tool Load` and `tool_call` with no identity at all — so they can
+never be mistaken for a `pi_host` call. `session/request_permission` on V3 offers
+`{ optionId, name, kind }`; the provider only ever selects `allow_once`/`reject_once` and
+cancels a request that offers nothing else, since a standing grant would run the tool for
+the rest of the session without pi seeing it.
+
 ## Native steering: `_session/steer`
 
 Request `{ sessionId, message: string }` (`prompt` or `content` arrays are rejected as
@@ -177,6 +239,13 @@ scenario, 0.03 for short prompts.
   it outside a tool call.
 - `_session/steer` is unadvertised, so a future build can drop it. A failed call needs
   the synthetic `<user_message_during_run>` path as a fallback.
+
+For the turn path: no `session/prompt` was ever sent in the phase-3a probe, so the
+`session_info_update` sequence around a real turn (and whether `turn_completion` arrives
+before or after the `stopReason`) is taken from the frame contract, not observed. No
+`session/request_permission` arrived either — every probe run had `autopilot: on`, so the V3
+option shape is ACP-spec based. `memoryReflection`, `autopilot` and `contentCollection` are
+left at their defaults.
 
 ## Not verified
 
