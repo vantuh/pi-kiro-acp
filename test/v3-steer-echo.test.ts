@@ -72,12 +72,8 @@ test('brackets that are not a steering note pass through', () => {
   // A `[` on its own is undecided for one chunk, then released.
   const [first, second] = run(filter, ['cost [', '5] total']);
   assert(
-    first === 'cost' && 'cost' + second !== first,
-    'the undecided bracket waits for the next chunk',
-  );
-  assert(
-    first + second === 'cost [5] total',
-    `a non-marker bracket is released unchanged (got ${JSON.stringify(first + second)})`,
+    first === 'cost' && second === ' [5] total',
+    `the undecided bracket waits for the next chunk (got ${JSON.stringify([first, second])})`,
   );
 });
 
@@ -123,4 +119,48 @@ test('ids recorded mid-turn are honoured', () => {
     early === 'start ' && rest.trim() === '' && tail === '',
     `a steer queued after the first chunk still gets its note stripped (got ${JSON.stringify([early, rest, tail])})`,
   );
+});
+
+test('a bracket inside the note does not end it', () => {
+  const filter = createSteerEchoFilter(ids('steer-abc'));
+  const [only] = run(filter, [
+    'Answer.\n\n[STEERING steer-abc: Added [x] to answer.]',
+  ]);
+  assert(
+    only === 'Answer.',
+    `the whole nested note is stripped (got ${JSON.stringify(only)})`,
+  );
+});
+
+test('an open note with another id is released at once', () => {
+  const filter = createSteerEchoFilter(ids('steer-abc'));
+  const [first, second] = run(filter, [
+    'Answer. [STEERING steer-other: not ',
+    'ours] tail',
+  ]);
+  // Only the trailing space is still held: it may introduce the next note.
+  assert(
+    first === 'Answer. [STEERING steer-other: not',
+    `a note that is not ours is not held (got ${JSON.stringify(first)})`,
+  );
+  assert(
+    first + second === 'Answer. [STEERING steer-other: not ours] tail',
+    'the rest follows unchanged',
+  );
+});
+
+test('a note that never closes is released once the hold cap is reached', () => {
+  const filter = createSteerEchoFilter(ids('steer-abc'));
+  const head = 'Answer. [STEERING steer-abc: ';
+  const first = filter.push(head);
+  assert(
+    first === 'Answer.',
+    `the note is held at first (got ${JSON.stringify(first)})`,
+  );
+  const rest = filter.push('x'.repeat(1200));
+  assert(
+    rest === head.slice('Answer.'.length) + 'x'.repeat(1200),
+    `an unterminated note is released, not held forever (got ${JSON.stringify(rest.slice(0, 40))}…)`,
+  );
+  assert(filter.flush() === '', 'nothing is left held after the cap');
 });

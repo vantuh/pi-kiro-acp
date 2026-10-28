@@ -6,12 +6,39 @@
 const MARKER = '[STEERING ';
 const ID_RE = /^\[STEERING ([^\s:\]]+)/;
 const TRAILING_SPACE_RE = /[ \t\r\n]+$/;
+/** Release an unterminated marker once this much text is held: keeping it
+ * costs a rescan per chunk, and a note that never closes is not ours. */
+const MAX_HOLD = 1024;
 
 export interface SteerEchoFilter {
   /** Text to emit now; anything undecided stays held. */
   push(text: string): string;
   /** Everything still held — call when the text block or the turn ends. */
   flush(): string;
+}
+
+/** Index of the bracket that closes the note, or -1 while it is still open.
+ * Brackets nest, so a `[…]` inside the note does not end it early. */
+function noteEnd(buffer: string): number {
+  let depth = 0;
+  for (let i = 0; i < buffer.length; i++) {
+    if (buffer[i] === '[') depth += 1;
+    else if (buffer[i] === ']') {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+function hasAny(ids: Iterable<string>): boolean {
+  for (const _ of ids) return true;
+  return false;
+}
+
+function hasId(ids: Iterable<string>, id: string): boolean {
+  for (const candidate of ids) if (candidate === id) return true;
+  return false;
 }
 
 /** `steerIds` is read on every push, so ids recorded mid-turn are honoured.
@@ -22,8 +49,8 @@ export function createSteerEchoFilter(
   let held = '';
 
   const drain = (final: boolean): string => {
-    const ids = new Set(steerIds());
-    if (!final && ids.size === 0) {
+    const ids = steerIds();
+    if (!final && !hasAny(ids)) {
       const rest = held;
       held = '';
       return rest;
@@ -52,10 +79,17 @@ export function createSteerEchoFilter(
         buffer = buffer.slice(1);
         continue;
       }
-      const close = buffer.indexOf(']');
+      const close = noteEnd(buffer);
       if (close < 0) {
-        // The marker is real but the note is not complete.
-        if (!final) break;
+        // An open note. A complete id that is not ours settles it now; anything
+        // else is held, and released once the cap says it will never close.
+        const openId = ID_RE.exec(buffer)?.[1];
+        if (openId && !hasId(ids, openId)) {
+          out += buffer;
+          buffer = '';
+          break;
+        }
+        if (!final && buffer.length < MAX_HOLD) break;
         out += buffer;
         buffer = '';
         break;
@@ -63,7 +97,7 @@ export function createSteerEchoFilter(
       const block = buffer.slice(0, close + 1);
       const id = ID_RE.exec(block)?.[1];
       buffer = buffer.slice(close + 1);
-      if (id && ids.has(id)) {
+      if (id && hasId(ids, id)) {
         // The blank lines that introduced the note go with it.
         out = out.replace(TRAILING_SPACE_RE, '');
         continue;
