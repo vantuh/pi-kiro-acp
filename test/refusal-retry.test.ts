@@ -127,9 +127,12 @@ test('a recovery prompt kiro-cli refuses is re-sent', async () => {
       retries.length === 2,
       `the refused recovery prompt is re-sent (got ${retries.length})`,
     );
+    // The first prompt also opened the session with the standing instructions,
+    // which are not repeated.
     assert(
-      String(retries[1].params.prompt[0].text) ===
-        String(first[0].params.prompt[0].text),
+      String(first[0].params.prompt[0].text).endsWith(
+        String(retries[1].params.prompt[0].text),
+      ),
       'the retry carries the same recovery prompt',
     );
     assert(

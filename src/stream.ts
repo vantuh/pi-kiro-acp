@@ -430,7 +430,9 @@ export function streamKiroAcp(
               : '') +
             `\n\nPlease answer the user's question based on the attached image(s). ` +
             `Do not guess or describe what you think the image might show if you cannot see it — say so explicitly instead.` +
-            (steers.length > 0 ? `\n\n${buildSteerBlock(steers)}` : '');
+            (steers.length > 0
+              ? `\n\n${buildSteerBlock(steers, session.steerBlockId)}`
+              : '');
 
           const { systemPrompt } = buildPromptParts(context, false);
           try {
@@ -457,7 +459,7 @@ export function streamKiroAcp(
                   tr === carrier
                     ? {
                         ...tr,
-                        text: `${tr.text}\n\n${buildSteerBlock(steers)}`,
+                        text: `${tr.text}\n\n${buildSteerBlock(steers, session.steerBlockId)}`,
                       }
                     : tr,
                 )

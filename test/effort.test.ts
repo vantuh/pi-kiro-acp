@@ -250,7 +250,7 @@ test('the reasoning level reaches kiro-cli in-band through /effort', async () =>
 
     await answerCommand(session, written, 'Effort set to high\n');
     const realPrompt = frames(written).find(
-      (f) => f.method === 'session/prompt' && promptText(f) === 'hi',
+      (f) => f.method === 'session/prompt' && promptText(f).endsWith('hi'),
     );
     assert(
       realPrompt !== undefined,
@@ -287,7 +287,7 @@ test('the reasoning level reaches kiro-cli in-band through /effort', async () =>
     session.handleStdoutLine(rpcResult(setModel!.id!));
     await tick();
     const realPrompt = frames(written).find(
-      (f) => f.method === 'session/prompt' && promptText(f) === 'hi',
+      (f) => f.method === 'session/prompt' && promptText(f).endsWith('hi'),
     );
     session.handleStdoutLine(rpcResult(realPrompt!.id!));
     await prompting;
@@ -400,7 +400,7 @@ test('the reasoning level reaches kiro-cli in-band through /effort', async () =>
       const prompting = session.startPrompt('m1', '', message);
       await tick();
       const real = frames(written).find(
-        (f) => f.method === 'session/prompt' && promptText(f) === message,
+        (f) => f.method === 'session/prompt' && promptText(f).endsWith(message),
       );
       assert(real !== undefined, `the turn's own prompt (${message}) is sent`);
       session.handleStdoutLine(rpcResult(real!.id!));
@@ -600,7 +600,7 @@ test('the reasoning level reaches kiro-cli in-band through /effort', async () =>
       'a level nobody asked for schedules no re-apply',
     );
     const realPrompt = frames(written).find(
-      (f) => f.method === 'session/prompt' && promptText(f) === 'hi',
+      (f) => f.method === 'session/prompt' && promptText(f).endsWith('hi'),
     );
     session.handleStdoutLine(rpcResult(realPrompt!.id!));
     await noEffortTurn;
@@ -690,7 +690,7 @@ test('the reasoning level reaches kiro-cli in-band through /effort', async () =>
       'the default report alone does not schedule a re-apply',
     );
     const real = frames(written).find(
-      (f) => f.method === 'session/prompt' && promptText(f) === 'hi',
+      (f) => f.method === 'session/prompt' && promptText(f).endsWith('hi'),
     );
     session.handleStdoutLine(rpcResult(real!.id!));
     await prompting;

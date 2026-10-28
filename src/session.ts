@@ -11,7 +11,7 @@ import {
 import type { SimpleStreamOptions } from '@earendil-works/pi-ai';
 
 import { loadKiroAcpConfig, resolveLoggerConfig } from './config.ts';
-import { stableJson, sumMeteringCredits } from './helpers.ts';
+import { buildSteerRule, stableJson, sumMeteringCredits } from './helpers.ts';
 import { log, msSince } from './logging.ts';
 import { KIRO_THINKING_LEVEL_MAP } from './models/fallback.ts';
 import {
@@ -191,6 +191,10 @@ export class AcpSession {
   conversationFingerprint: string | null = null;
   /** SHA-256 of last system prompt wrapped into this ACP session; null = not sent. */
   systemPromptHash: string | null = null;
+  /** Names the one genuine <user_message_during_run> tag. Random per session so
+   * tool output cannot guess it; the rule that defines it is in the system
+   * instructions, which are re-sent whenever a session is restored or replayed. */
+  readonly steerBlockId = randomBytes(8).toString('hex');
   currentModelId: string | null = null;
   /** Effort kiro's live session currently has. Applied in-band with the
    * intercepted `/effort <level>` command prompt (kiro-cli 2.24.1 silently
@@ -1371,10 +1375,15 @@ export class AcpSession {
     const modelReadyAt = Date.now();
 
     // Send full <system_instructions> once per ACP session (and again if pi changes it).
-    const systemHash = systemPrompt ? hashSystemPrompt(systemPrompt) : null;
-    const includeSystem = !!systemHash && systemHash !== this.systemPromptHash;
+    // The steer rule rides along: it has to reach the model through a channel it
+    // trusts, so it is part of the instructions, never of a tool result.
+    const instructions = [systemPrompt, buildSteerRule(this.steerBlockId)]
+      .filter(Boolean)
+      .join('\n\n');
+    const systemHash = hashSystemPrompt(instructions);
+    const includeSystem = systemHash !== this.systemPromptHash;
     const promptText = includeSystem
-      ? `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n${promptUserMessage}`
+      ? `<system_instructions>\n${instructions}\n</system_instructions>\n\n${promptUserMessage}`
       : promptUserMessage;
 
     this.metadata = null;
@@ -1441,9 +1450,9 @@ export class AcpSession {
       modelId,
       replayHistory: shouldReplayHistory,
       promptChars: promptText.length,
-      systemPromptChars: includeSystem ? systemPrompt.length : 0,
+      systemPromptChars: includeSystem ? instructions.length : 0,
       systemPromptIncluded: includeSystem,
-      systemPromptSkipped: !!systemPrompt && !includeSystem,
+      systemPromptSkipped: !includeSystem,
       userMessageChars: promptUserMessage.length,
       imageCount: images.length,
       timing: {
