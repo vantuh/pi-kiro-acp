@@ -21,10 +21,10 @@ export function tagKiroContextOverflow(errorMessage: string): string {
   return `context_length_exceeded: ${errorMessage}`;
 }
 
-export function normalizeKiroContextOverflow(
-  message: AssistantErrorMessage,
+export function normalizeKiroContextOverflow<M extends AssistantErrorMessage>(
+  message: M,
   ctx: { model?: { provider?: string } },
-): { message: AssistantErrorMessage } | undefined {
+): { message: M } | undefined {
   if (message.role !== 'assistant') return;
   if (message.stopReason !== 'error') return;
   if (
