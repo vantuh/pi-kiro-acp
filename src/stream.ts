@@ -406,7 +406,9 @@ export function streamKiroAcp(
             tools: routed.toolResults.map((tr) => tr.toolName),
           });
           suppressUpdates = true;
-          session.deliverToolResults(routed.toolResults, { textOnly: true });
+          await session.deliverToolResults(routed.toolResults, {
+            textOnly: true,
+          });
 
           const imageTools = routed.toolResults.filter((tr) =>
             (tr.content ?? []).some((b) => b.type === 'image'),
@@ -449,11 +451,15 @@ export function streamKiroAcp(
           } finally {
             suppressUpdates = false;
           }
+        } else if (session.engine === 'v3') {
+          // Kiro injects a native steer right after the tool result, so the
+          // result goes back unchanged; the session falls back to the block.
+          await session.deliverToolResults(routed.toolResults, { steers });
         } else {
           const carrier = session
             .matchingToolResults(routed.toolResults)
             .at(-1);
-          session.deliverToolResults(
+          await session.deliverToolResults(
             steers.length > 0 && carrier
               ? routed.toolResults.map((tr) =>
                   tr === carrier

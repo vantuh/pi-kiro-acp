@@ -15,7 +15,12 @@ import {
   resolveLoggerConfig,
   type AgentEngine,
 } from './config.ts';
-import { buildSteerRule, stableJson, sumMeteringCredits } from './helpers.ts';
+import {
+  buildSteerBlock,
+  buildSteerRule,
+  stableJson,
+  sumMeteringCredits,
+} from './helpers.ts';
 import { log, msSince } from './logging.ts';
 import { KIRO_THINKING_LEVEL_MAP } from './models/fallback.ts';
 import {
@@ -146,6 +151,10 @@ const EFFORT_COMMAND_REPLY_PREFIXES = [
  * a fixed one-liner, so anything past this is a leak, not a signal. */
 const EFFORT_COMMAND_REPLY_MAX_CHARS = 1024;
 
+/** `_session/steer` is a queue write that answers at once; a slow one means the
+ * turn is gone, and waiting longer only delays the tool result the model needs. */
+const NATIVE_STEER_TIMEOUT_MS = 10000;
+
 export function toKiroEffort(
   reasoning: SimpleStreamOptions['reasoning'],
 ): KiroEffort | null {
@@ -223,6 +232,12 @@ export class AcpSession {
    * tool output cannot guess it; the rule that defines it is in the system
    * instructions, which are re-sent whenever a session is restored or replayed. */
   readonly steerBlockId = randomBytes(8).toString('hex');
+  /** `messageId`s of the steers this session queued with `_session/steer`; the
+   * model's `[STEERING <id>: …]` notes for them are stripped from its output. */
+  readonly steerMessageIds = new Set<string>();
+  /** Set once kiro would not take a native steer: every subsequent steer
+   * travels inside the tool result instead of retrying the RPC. */
+  private nativeSteerDisabled = false;
   currentModelId: string | null = null;
   /** Effort kiro's live session currently has. Applied in-band with the
    * intercepted `/effort <level>` command prompt (kiro-cli 2.24.1 silently
@@ -2014,23 +2029,46 @@ export class AcpSession {
     }
   }
 
-  deliverToolResults(
+  /** Answer kiro's tools/call with pi's results. A steer that joined the
+   * transcript behind them is sent as a native `_session/steer` first (kiro
+   * injects it right after the tool result); what kiro will not take travels
+   * inside that result as the synthetic block, so no steer is ever sent twice. */
+  async deliverToolResults(
     toolResults: ToolResultInfo[],
-    options: { textOnly?: boolean } = {},
-  ): void {
+    options: { textOnly?: boolean; steers?: string[] } = {},
+  ): Promise<void> {
     const textOnly = !!options.textOnly;
+    const steers = options.steers ?? [];
+    // Kiro only injects a steer behind a tool result it is still waiting on.
+    const carrier =
+      steers.length > 0
+        ? this.matchingToolResults(toolResults).at(-1)
+        : undefined;
+    if (steers.length > 0 && !carrier)
+      log('steer has no live tool result to carry it', {
+        session: this.id,
+        steers: steers.length,
+        toolResults: toolResults.length,
+      });
+    const syntheticSteers = carrier ? await this.queueNativeSteers(steers) : [];
+
     for (const tr of toolResults) {
       const match = this.findToolCallMatch(tr);
       if (match) {
         const [callId, call] = match;
         this.pendingToolCalls.delete(callId);
+        const text =
+          tr === carrier && syntheticSteers.length > 0
+            ? `${tr.text}\n\n${buildSteerBlock(syntheticSteers, this.steerBlockId)}`
+            : tr.text;
         log('delivering tool result', {
           session: this.id,
           callId,
           toolName: call.toolName,
-          resultLen: tr.text.length,
+          resultLen: text.length,
           isError: tr.isError,
           textOnly,
+          syntheticSteers: tr === carrier ? syntheticSteers.length : 0,
           ...(textOnly
             ? {}
             : {
@@ -2043,8 +2081,8 @@ export class AcpSession {
         });
         call.resolve(
           textOnly
-            ? { result: tr.text, isError: tr.isError }
-            : { result: tr.text, isError: tr.isError, content: tr.content },
+            ? { result: text, isError: tr.isError }
+            : { result: text, isError: tr.isError, content: tr.content },
         );
       } else {
         log('UNMATCHED tool result', {
@@ -2056,6 +2094,46 @@ export class AcpSession {
         });
       }
     }
+  }
+
+  /** Queue each steer on the running turn in order, returning the ones kiro did
+   * not accept — those still have to reach the model inside the tool result. A
+   * failure disables native steering for the rest of the session: a steer that
+   * is both queued and appended would reach the model twice. */
+  private async queueNativeSteers(steers: string[]): Promise<string[]> {
+    if (steers.length === 0) return [];
+    if (this.engine !== 'v3' || this.nativeSteerDisabled) return steers;
+    for (let i = 0; i < steers.length; i++) {
+      const message = steers[i];
+      try {
+        const result = (await this.rpcSend(
+          '_session/steer',
+          { sessionId: this.acpSessionId, message },
+          NATIVE_STEER_TIMEOUT_MS,
+        )) as any;
+        const messageId =
+          typeof result?.messageId === 'string' ? result.messageId : '';
+        if (result?.queued !== true || !messageId)
+          throw new Error(`steer was not queued (${JSON.stringify(result)})`);
+        this.steerMessageIds.add(messageId);
+        log('native steer queued', {
+          session: this.id,
+          messageId,
+          chars: message.length,
+          index: i,
+        });
+      } catch (error) {
+        this.nativeSteerDisabled = true;
+        log('native steer failed — the steer goes in the tool result instead', {
+          session: this.id,
+          index: i,
+          syntheticSteers: steers.length - i,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        return steers.slice(i);
+      }
+    }
+    return [];
   }
 
   /**
