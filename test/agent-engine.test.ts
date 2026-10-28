@@ -19,7 +19,10 @@ import { join } from 'node:path';
 
 import { test, vi } from 'vitest';
 
-import { savePersistedKiroSession } from '../src/session-persistence.ts';
+import {
+  loadPersistedKiroSession,
+  savePersistedKiroSession,
+} from '../src/session-persistence.ts';
 import { AcpSession } from '../src/session.ts';
 import type { ForwardedToolCatalog } from '../src/tool-catalog.ts';
 import { assert, kiroContext, settled, wait } from './support.ts';
@@ -81,8 +84,18 @@ function readLog(dir: string, name: string): any[] {
     .map((line) => JSON.parse(line));
 }
 
-/** Puts the fake on PATH as `kiro-cli` and points it at a scratch log dir. */
-function fakeKiroCli(extensionMethods: string[] = []): FakeKiroCli {
+function setEnv(name: string, value: string | undefined): void {
+  if (value === undefined) delete process.env[name];
+  else process.env[name] = value;
+}
+
+/** Puts the fake on PATH as `kiro-cli` and points it at a scratch log dir.
+ * `modes` overrides the mode the fake reports for session/new or session/load;
+ * unset, it echoes the requested `_meta.kiro.modeId` like a working profile. */
+function fakeKiroCli(
+  extensionMethods: string[] = [],
+  modes: { new?: string; load?: string } = {},
+): FakeKiroCli {
   const root = mkdtempSync(join(tmpdir(), 'kiro-acp-engine-'));
   const binDir = join(root, 'bin');
   const logDir = join(root, 'log');
@@ -98,9 +111,13 @@ function fakeKiroCli(extensionMethods: string[] = []): FakeKiroCli {
   const savedPath = process.env.PATH;
   const savedDir = process.env.FAKE_KIRO_DIR;
   const savedMethods = process.env.FAKE_KIRO_EXTENSION_METHODS;
+  const savedNewMode = process.env.FAKE_KIRO_NEW_MODE;
+  const savedLoadMode = process.env.FAKE_KIRO_LOAD_MODE;
   process.env.PATH = `${binDir}:${savedPath ?? ''}`;
   process.env.FAKE_KIRO_DIR = logDir;
   process.env.FAKE_KIRO_EXTENSION_METHODS = JSON.stringify(extensionMethods);
+  setEnv('FAKE_KIRO_NEW_MODE', modes.new);
+  setEnv('FAKE_KIRO_LOAD_MODE', modes.load);
 
   return {
     invocations: () => readLog(logDir, 'invocations.log'),
@@ -113,6 +130,8 @@ function fakeKiroCli(extensionMethods: string[] = []): FakeKiroCli {
       if (savedMethods === undefined)
         delete process.env.FAKE_KIRO_EXTENSION_METHODS;
       else process.env.FAKE_KIRO_EXTENSION_METHODS = savedMethods;
+      setEnv('FAKE_KIRO_NEW_MODE', savedNewMode);
+      setEnv('FAKE_KIRO_LOAD_MODE', savedLoadMode);
       rmSync(root, { recursive: true, force: true });
     },
   };
@@ -243,6 +262,10 @@ test('v3 session/new selects the agent through the session workspace', async () 
         params.mcpServers[0].url === session.toolBridge?.url,
       'the pi_host bridge rides in the session params',
     );
+    assert(
+      session.acpSessionId === 'fake-session',
+      'a session created in our mode is adopted',
+    );
   } finally {
     await session.stop();
     fake.restore();
@@ -298,6 +321,10 @@ test('v3 session/load restores with the same agent selection', async () => {
       !fake.frames().some((frame) => frame.method === 'session/new'),
       'a successful restore creates no fresh session',
     );
+    assert(
+      session.acpSessionId === 'persisted-v3',
+      'a load that reports our mode is adopted',
+    );
   } finally {
     await session.stop();
     fake.restore();
@@ -305,6 +332,78 @@ test('v3 session/load restores with the same agent selection', async () => {
     else process.env.XDG_DATA_HOME = savedDataHome;
     rmSync(dataHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('a v3 session/new that lands in the vibe mode is refused', async () => {
+  const fake = fakeKiroCli([], { new: 'vibe' });
+  const session = new AcpSession(process.cwd(), 'v3');
+  try {
+    await session.ensureStarted(catalogProvider);
+    const handshake = await settled((session as any).ensureBackendSession({}));
+
+    assert(!handshake.ok, 'the handshake rejects');
+    assert(
+      handshake.error?.message ===
+        `Kiro V3 did not select agent ${session.agentName} (mode: vibe); refusing a session with Kiro built-in tools`,
+      `the error names the actual mode (got "${handshake.error?.message}")`,
+    );
+    assert(
+      session.acpSessionId === null,
+      'the session running Kiro built-ins is not adopted',
+    );
+  } finally {
+    await session.stop();
+    fake.restore();
+  }
+});
+
+test('a v3 session/load that lands in the vibe mode is dropped for a fresh session', async () => {
+  const fake = fakeKiroCli([], { load: 'vibe' });
+  const dataHome = mkdtempSync(join(tmpdir(), 'kiro-acp-data-'));
+  const savedDataHome = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = dataHome;
+  const session = new AcpSession(process.cwd(), 'v3');
+  session.persistenceKey = 'agent-engine/v3-load-vibe';
+  try {
+    await session.ensureStarted(catalogProvider);
+    savePersistedKiroSession(session.persistenceKey, {
+      version: 1,
+      kiroSessionId: 'persisted-vibe',
+      historyFingerprint: 'history-hash',
+      agentConfigFingerprint: session.agentConfigFingerprint!,
+      modelId: 'auto',
+      createdAt: Date.now(),
+      lastUsed: Date.now(),
+    });
+
+    const replay = await (session as any).ensureBackendSession({
+      expectedHistoryFingerprint: 'history-hash',
+    });
+
+    assert(replay === true, "the history is replayed from pi's transcript");
+    assert(
+      loadPersistedKiroSession(session.persistenceKey) === null,
+      'the record that restores a Kiro-builtin mode is dropped',
+    );
+    assert(
+      !!frameParams(fake.frames(), 'session/load'),
+      'the stored session was loaded first',
+    );
+    assert(
+      !!frameParams(fake.frames(), 'session/new'),
+      'a fresh session follows the refused restore',
+    );
+    assert(
+      session.acpSessionId === 'fake-session',
+      'the fresh session in our mode is adopted',
+    );
+  } finally {
+    await session.stop();
+    fake.restore();
+    if (savedDataHome === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = savedDataHome;
+    rmSync(dataHome, { recursive: true, force: true });
   }
 });
 

@@ -29,6 +29,16 @@ export function v3SessionParams(options: V3SessionOptions) {
   };
 }
 
+/** The mode a session/new or session/load result reports. V3 answers an
+ * unusable profile with a normal response and silently runs the session in
+ * `vibe` (all Kiro builtins), so this is the only synchronous signal that our
+ * agent profile was selected. */
+export function v3SelectedMode(result: unknown): string | null {
+  const mode = (result as { modes?: { currentModeId?: unknown } } | undefined)
+    ?.modes?.currentModeId;
+  return typeof mode === 'string' ? mode : null;
+}
+
 export function v3LoadSessionParams(
   sessionId: string,
   options: V3SessionOptions,

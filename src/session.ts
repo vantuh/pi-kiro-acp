@@ -49,6 +49,7 @@ import type {
 import {
   v3AgentProfile,
   v3LoadSessionParams,
+  v3SelectedMode,
   v3SessionParams,
   v3SpawnArgs,
 } from './v3/launch.ts';
@@ -569,6 +570,28 @@ export class AcpSession {
           requestedAgent: msg.params?.requestedAgent ?? null,
           fallbackAgent: msg.params?.fallbackAgent ?? null,
         });
+      } else if (
+        this.engine === 'v3' &&
+        (msg.method === '_kiro/customAgent/not_found' ||
+          msg.method === '_kiro/customAgent/config_error')
+      ) {
+        // Post-mortem detail for the mode-mismatch refusal above: V3 sends it
+        // only after the response, and the response's mode already decided the
+        // session. Logged, never acted on.
+        log(
+          msg.method === '_kiro/customAgent/not_found'
+            ? 'KIRO V3 custom agent not found'
+            : 'KIRO V3 custom agent config error',
+          {
+            session: this.id,
+            requestedAgent: msg.params?.requestedAgent ?? null,
+            fallbackAgent: msg.params?.fallbackAgent ?? null,
+            reasonCode:
+              msg.params?.skipped?.reasonCode ?? msg.params?.reasonCode ?? null,
+            error: msg.params?.skipped?.error ?? msg.params?.error ?? null,
+            path: msg.params?.path ?? null,
+          },
+        );
       }
     }
   }
@@ -1265,6 +1288,22 @@ export class AcpSession {
           ? v3SessionParams(this.v3SessionOptions())
           : { cwd: this.cwd, mcpServers: this.mcpServersConfig() },
       )) as any;
+      // V3 never errors on an unusable profile: it answers normally and runs
+      // the session in mode `vibe` with every Kiro builtin tool. The reported
+      // mode is the only synchronous signal, so a mismatch is refused instead
+      // of adopted — the next turn retries with the same profile.
+      const selectedMode = v3SelectedMode(result);
+      if (this.engine === 'v3' && selectedMode !== this.agentName) {
+        log('KIRO V3 AGENT NOT SELECTED — refusing the session', {
+          session: this.id,
+          requestedAgent: this.agentName,
+          actualMode: selectedMode,
+          acpSessionId: result?.sessionId ?? null,
+        });
+        throw new Error(
+          `Kiro V3 did not select agent ${this.agentName} (mode: ${selectedMode ?? 'unknown'}); refusing a session with Kiro built-in tools`,
+        );
+      }
       this.acpSessionId = result.sessionId;
       this.systemPromptHash = null;
       this.conversationFingerprint = null;
@@ -1303,7 +1342,7 @@ export class AcpSession {
         // a clean tools list landing during the window lifts those, but it
         // must not erase a hazard signal this snapshot already emitted.
         const hazardAtStart = this.hazardGeneration;
-        await this.rpcSend(
+        const result = await this.rpcSend(
           attempt.method,
           this.engine === 'v3'
             ? v3LoadSessionParams(kiroSessionId, this.v3SessionOptions())
@@ -1314,6 +1353,37 @@ export class AcpSession {
               },
           15000,
         );
+        // V3 has no leak notifications and a load that cannot resolve the
+        // profile prints nothing: the mode in the load response is synchronous
+        // and final (`_meta.kiro.modeId` is ignored, the stored record wins, so
+        // a fallback session stays `vibe` forever). That mismatch replaces the
+        // v2 hazard window below and drops the record like a failed restore, so
+        // ensureBackendSession replays the history into a fresh session.
+        if (this.engine === 'v3') {
+          const selectedMode = v3SelectedMode(result);
+          if (selectedMode !== this.agentName) {
+            log('abandoning restored kiro session — wrong agent mode', {
+              session: this.id,
+              method: attempt.method,
+              acpSessionId: kiroSessionId,
+              requestedAgent: this.agentName,
+              actualMode: selectedMode,
+            });
+            if (this.persistenceKey)
+              clearPersistedKiroSession(this.persistenceKey);
+            await this.restartAfterRestoreFailure();
+            return false;
+          }
+          this.acpSessionId = kiroSessionId;
+          // Re-bind current pi instructions after resume/load.
+          this.systemPromptHash = null;
+          log('restored persisted kiro session', {
+            session: this.id,
+            method: attempt.method,
+            acpSessionId: this.acpSessionId,
+          });
+          return true;
+        }
         await new Promise((resolve) =>
           setTimeout(resolve, RESTORE_LEAK_CHECK_MS),
         );

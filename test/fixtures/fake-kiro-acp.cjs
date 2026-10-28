@@ -20,6 +20,17 @@ const extensionMethods = JSON.parse(
 const send = (message) => process.stdout.write(JSON.stringify(message) + '\n');
 let unknownRequestId = 7001;
 
+// V3 answers even an unusable profile with a normal response, so the mode the
+// client sees is what these tests steer. Defaults to the requested profile.
+const modeOf = (params, envName) => {
+  const override = process.env[envName];
+  return override || params?._meta?.kiro?.modeId || 'vibe';
+};
+const modes = (currentModeId) => ({
+  currentModeId,
+  availableModes: [{ id: currentModeId, name: currentModeId }],
+});
+
 const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   let msg;
@@ -71,7 +82,18 @@ rl.on('line', (line) => {
     send({
       jsonrpc: '2.0',
       id: msg.id,
-      result: { sessionId: 'fake-session' },
+      result: {
+        sessionId: 'fake-session',
+        modes: modes(modeOf(msg.params, 'FAKE_KIRO_NEW_MODE')),
+      },
+    });
+    return;
+  }
+  if (msg.method === 'session/load' || msg.method === 'session/resume') {
+    send({
+      jsonrpc: '2.0',
+      id: msg.id,
+      result: { modes: modes(modeOf(msg.params, 'FAKE_KIRO_LOAD_MODE')) },
     });
     return;
   }
