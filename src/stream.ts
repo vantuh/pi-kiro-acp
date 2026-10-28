@@ -80,7 +80,9 @@ export function streamKiroAcp(
     // Set once the turn bumps streamGen so the finally below can clear the
     // turn's handlers without clobbering a newer turn's assignments.
     let turnGen: number | null = null;
-    let session: AcpSession | null = null;
+    // The session this turn routed to. The turn body binds it to a `const`
+    // below, so the closures it defines see a non-null session.
+    let activeSession: AcpSession | null = null;
     let releaseRoute: (() => void) | null = null;
     // Durable aborts a turn's signal when its request phase ends; a listener
     // that outlives the stream would cancel Kiro while pi runs its tool.
@@ -89,6 +91,7 @@ export function streamKiroAcp(
     const releaseTerminalAnonymous = (
       terminal: 'stop' | 'error' | 'toolUse',
     ) => {
+      const session = activeSession;
       if (!session || terminal === 'toolUse') return;
       // A newer turn owns the handlers and the session.
       if (turnGen !== null && turnGen !== session.streamGen) return;
@@ -101,7 +104,8 @@ export function streamKiroAcp(
       sessionManager.pruneIdleSessions();
       const routed = await sessionManager.routeSession(context, options);
       releaseRoute = routed.release;
-      session = routed.session;
+      const session = routed.session;
+      activeSession = session;
       session.lastUsedAt = Date.now();
       // Capture before ensureStarted: a cold/parallel process gets an acpSessionId
       // for an empty conversation, which must not look like in-place recovery.
@@ -784,7 +788,7 @@ export function streamKiroAcp(
       releaseTerminalAnonymous(outcome);
       stream.end();
     } catch (error) {
-      if (session) session.conversationFingerprint = null;
+      if (activeSession) activeSession.conversationFingerprint = null;
       log('streamKiroAcp FATAL error', {
         error:
           error instanceof Error ? error.stack || error.message : String(error),
@@ -801,6 +805,7 @@ export function streamKiroAcp(
       releaseRoute?.();
       // Clear the handlers on every exit path (normal end and fatal catch),
       // but only if no newer turn has already reassigned them.
+      const session = activeSession;
       if (session && turnGen !== null && turnGen === session.streamGen) {
         session.updateHandler = null;
         session.onMetadata = null;
