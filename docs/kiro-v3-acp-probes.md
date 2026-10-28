@@ -194,10 +194,13 @@ rather than surfaced to the stream.
 Tool identity differs from v2 as well: a forwarded call is tagged
 `_meta.kiro.mcpTool.identity.{serverName,toolName}` or a `title` of `@pi_host/<tool>`, while
 the meta tools are titled `Tool Load` and `tool_call` with no identity at all — so they can
-never be mistaken for a `pi_host` call. `session/request_permission` on V3 offers
-`{ optionId, name, kind }`; the provider only ever selects `allow_once`/`reject_once` and
-cancels a request that offers nothing else, since a standing grant would run the tool for
-the rest of the session without pi seeing it.
+never be mistaken for a `pi_host` call. Because a server name is now only part of the title,
+V3 cannot use v2's name-only fallback: a call is ours only when the tag says `pi_host` *and*
+the forwarded catalog still lists the tool, otherwise `@evil/slow` would pass on the strength
+of a forwarded `slow`. `session/request_permission` on V3 offers `{ optionId, name, kind }`;
+the provider only ever selects `allow_once`/`reject_once` and cancels a request that offers
+nothing else, since a standing grant would run the tool for the rest of the session without
+pi seeing it.
 
 ## Native steering: `_session/steer`
 
@@ -244,12 +247,27 @@ scenario, 0.03 for short prompts.
 - `_session/steer` is unadvertised, so a future build can drop it. A failed call needs
   the synthetic `<user_message_during_run>` path as a fallback.
 
-For the turn path: no `session/prompt` was ever sent in the phase-3a probe, so the
-`session_info_update` sequence around a real turn (and whether `turn_completion` arrives
-before or after the `stopReason`) is taken from the frame contract, not observed. No
-`session/request_permission` arrived either — every probe run had `autopilot: on`, so the V3
-option shape is ACP-spec based. `memoryReflection`, `autopilot` and `contentCollection` are
-left at their defaults.
+The free-RPC probe never sent `session/prompt`. A later real run (default pi model,
+`claude-sonnet-4.6`, `PI_KIRO_ACP_AGENT_ENGINE=v3`) confirmed the turn itself: the agent was
+selected, `v3 model set claude-sonnet-4.6` was logged, text streamed, the turn stopped, abort
+worked, and both `session_info_update` kinds arrived — `turn_completion` (`elapsedTime`, and
+`promptTurnSummaries` with 0.021 credits) *before* the stream ended, not after the
+`stopReason`. No `session/request_permission` has been observed yet: every run so far had
+`autopilot: on`, so the V3 option shape stays ACP-spec based. `memoryReflection`, `autopilot`
+and `contentCollection` are left at their defaults.
+
+Two properties the client has to enforce itself, because kiro reports nothing:
+
+- **Clearing a level.** pi can turn reasoning off after a level was applied, and V3 has no
+  "unset effort" value (neither does v2's `/effort`). The provider writes the model's
+  `defaultEffortLevel` back and treats the level as unset again; a model that reports no
+  default is logged and left alone.
+- **Deciding what is live.** A restored session adopts `modelId` from the persisted record,
+  which says nothing about the model the restored backend runs. When `configOptions` carry a
+  `model` option its `currentValue` wins; the record is only a fallback for a response with
+  no options at all. The cached options are dropped on a process restart and before every
+  `session/new`/`session/load`, and every `config_option_update` is scoped to the current
+  ACP session so a stale frame cannot replace them.
 
 ## Not verified
 
@@ -257,3 +275,5 @@ left at their defaults.
 - Steer during a `session/request_permission` wait.
 - Behaviour of models other than the default `auto` selection.
 - Whether context compaction keeps an injected steer.
+- The `session/request_permission` option shape on a live V3 session (`autopilot: off`).
+- Whether `session/load` returns `configOptions` — handled defensively either way.
