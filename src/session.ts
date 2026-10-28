@@ -10,7 +10,11 @@ import {
 
 import type { SimpleStreamOptions } from '@earendil-works/pi-ai';
 
-import { loadKiroAcpConfig, resolveLoggerConfig } from './config.ts';
+import {
+  loadKiroAcpConfig,
+  resolveLoggerConfig,
+  type AgentEngine,
+} from './config.ts';
 import { buildSteerRule, stableJson, sumMeteringCredits } from './helpers.ts';
 import { log, msSince } from './logging.ts';
 import { KIRO_THINKING_LEVEL_MAP } from './models/fallback.ts';
@@ -42,6 +46,12 @@ import type {
   ToolResultContentBlock,
   ToolResultInfo,
 } from './types.ts';
+import {
+  v3AgentProfile,
+  v3LoadSessionParams,
+  v3SessionParams,
+  v3SpawnArgs,
+} from './v3/launch.ts';
 
 interface StartPromptOptions {
   expectedHistoryFingerprint?: string;
@@ -178,9 +188,18 @@ function chunkTextOf(update: SessionUpdate): string {
   return typeof text === 'string' ? text : '';
 }
 
+/** Agent prompt for both profile shapes: identity comes from
+ * <system_instructions>, and delegation has to cross the pi_host bridge. */
+const PI_HOST_AGENT_PROMPT =
+  'You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives. Do not use Kiro native subagent/delegate/crew pipelines; delegate only through pi_host tools (the forwarded Pi subagent tool is named pi_subagent).';
+
 export class AcpSession {
   readonly id = `s-${randomBytes(4).toString('hex')}`;
   cwd: string;
+  /** Which Kiro CLI engine this session drives. V3 changes the launch flags,
+   * the agent-profile shape, the session params and how an unknown
+   * agent-to-client request is answered; the rest of the session is shared. */
+  engine: AgentEngine;
   proc: ChildProcess | null = null;
   rl: ReadlineInterface | null = null;
   rpcId = 0;
@@ -281,6 +300,10 @@ export class AcpSession {
   onMetadata: ((m: SessionMetadata) => void) | null = null;
   metadata: SessionMetadata | null = null;
   agentCapabilities: any = null;
+  /** Method names the backend advertised in
+   * `initialize.agentCapabilities._meta.kiro.extensionMethods`; V3 optional
+   * methods must be gated on this (V3 does not implement every v2 method). */
+  private extensionMethods = new Set<string>();
   persistenceKey: string | null = null;
   pendingToolCalls = new Map<string, PendingToolCall>();
   /** Calls Kiro abandoned at its own deadline while pi kept executing them,
@@ -343,8 +366,9 @@ export class AcpSession {
    * ticks do not repeat it. */
   private lastReasoningFingerprint: string | null = null;
 
-  constructor(cwd: string) {
+  constructor(cwd: string, engine: AgentEngine = 'v2') {
     this.cwd = cwd;
+    this.engine = engine;
   }
 
   get busy(): boolean {
@@ -470,7 +494,7 @@ export class AcpSession {
       if (msg.method === 'session/request_permission') {
         this.respondToPermissionRequest(msg.id, msg.params);
       } else {
-        this.rpcRespond(msg.id, null);
+        this.respondToUnknownRequest(msg.id);
       }
     } else if (hasMethod) {
       if (
@@ -544,6 +568,23 @@ export class AcpSession {
   private forwardedKiroNames(): string[] {
     if (!this.catalogProvider) return [];
     return this.currentCatalog().tools.map((tool) => tool.kiroName);
+  }
+
+  /** An agent-to-client request this client does not implement. V3 requires
+   * a JSON-RPC error there; a null result leaves it waiting on an answer it
+   * never gets. V2 tolerated the null result and keeps getting it. */
+  private respondToUnknownRequest(id: number): void {
+    if (this.engine !== 'v3' || !this.proc?.stdin?.writable) {
+      this.rpcRespond(id, null);
+      return;
+    }
+    this.proc.stdin.write(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32601, message: 'Method not found' },
+      }) + '\n',
+    );
   }
 
   private respondToPermissionRequest(id: number, params: unknown): void {
@@ -868,7 +909,9 @@ export class AcpSession {
 
     // Overlap with spawn/initialize — setting is global and only needed before
     // tools. configureMcpTimeout never rejects (execFile errors are swallowed).
-    const mcpCfgPromise = this.configureMcpTimeout();
+    // `mcp.noInteractiveTimeout` is a v2 kiro-cli setting: V3 has no such knob.
+    const mcpCfgPromise =
+      this.engine === 'v3' ? Promise.resolve(0) : this.configureMcpTimeout();
 
     log('starting kiro session', {
       session: this.id,
@@ -881,13 +924,10 @@ export class AcpSession {
     // Kiro builtins (AgentCrew/FsRead/…) which then ran inside kiro-cli with no
     // pi_host tools/call. `--trust-tools=@pi_host` plus deny-by-default in
     // session/request_permission is the execution gate.
-    const args = [
-      'acp',
-      '--agent',
-      this.agentName,
-      '--trust-tools',
-      '@pi_host',
-    ];
+    const args =
+      this.engine === 'v3'
+        ? v3SpawnArgs()
+        : ['acp', '--agent', this.agentName, '--trust-tools', '@pi_host'];
     // No `--effort` flag: kiro-cli 2.24.1 silently drops it unless the process
     // also fixes `--model` (session model `auto`), and it warns on every
     // start. The level is applied in-band by syncEffort instead.
@@ -924,6 +964,13 @@ export class AcpSession {
     const initDoneAt = Date.now();
     const mcpCfgMs = await mcpCfgPromise;
     this.agentCapabilities = init?.agentCapabilities || null;
+    this.extensionMethods = new Set<string>(
+      Array.isArray(init?.agentCapabilities?._meta?.kiro?.extensionMethods)
+        ? init.agentCapabilities._meta.kiro.extensionMethods.filter(
+            (method: unknown): method is string => typeof method === 'string',
+          )
+        : [],
+    );
     log('session initialized', {
       session: this.id,
       bridgePort: this.toolBridge?.port ?? null,
@@ -1143,6 +1190,11 @@ export class AcpSession {
     return !!this.agentCapabilities?.sessionCapabilities?.resume;
   }
 
+  /** Whether the backend advertised this optional method in initialize. */
+  supportsExtension(method: string): boolean {
+    return this.extensionMethods.has(method);
+  }
+
   private async ensureBackendSession(
     options: StartPromptOptions,
   ): Promise<boolean> {
@@ -1202,10 +1254,12 @@ export class AcpSession {
     }
 
     if (!this.acpSessionId) {
-      const result = (await this.rpcSend('session/new', {
-        cwd: this.cwd,
-        mcpServers: this.mcpServersConfig(),
-      })) as any;
+      const result = (await this.rpcSend(
+        'session/new',
+        this.engine === 'v3'
+          ? v3SessionParams(this.v3SessionOptions())
+          : { cwd: this.cwd, mcpServers: this.mcpServersConfig() },
+      )) as any;
       this.acpSessionId = result.sessionId;
       this.systemPromptHash = null;
       this.conversationFingerprint = null;
@@ -1246,11 +1300,13 @@ export class AcpSession {
         const hazardAtStart = this.hazardGeneration;
         await this.rpcSend(
           attempt.method,
-          {
-            sessionId: kiroSessionId,
-            cwd: this.cwd,
-            mcpServers: this.mcpServersConfig(),
-          },
+          this.engine === 'v3'
+            ? v3LoadSessionParams(kiroSessionId, this.v3SessionOptions())
+            : {
+                sessionId: kiroSessionId,
+                cwd: this.cwd,
+                mcpServers: this.mcpServersConfig(),
+              },
           15000,
         );
         await new Promise((resolve) =>
@@ -1329,6 +1385,11 @@ export class AcpSession {
   ): Promise<void> {
     const startPromptAt = Date.now();
     const shouldReplayHistory = await this.ensureBackendSession(options);
+    // The V3 turn path (model and effort via session/set_config_option, the
+    // updates and metadata it reports, permissions) is unimplemented. Fail here
+    // — before any turn RPC — rather than drive a half-wired turn.
+    if (this.engine === 'v3')
+      throw new Error('Kiro V3 turn path not implemented yet');
     const backendReadyAt = Date.now();
     const promptUserMessage =
       shouldReplayHistory && options.replayUserMessage
@@ -1824,6 +1885,17 @@ export class AcpSession {
     return catalog;
   }
 
+  /** The directories and profile name V3 resolves the agent from; V3 reads
+   * them from the session, not from the process cwd. */
+  private v3SessionOptions() {
+    return {
+      agentName: this.agentName,
+      cwd: this.cwd,
+      agentRootPath: this.agentRootPath,
+      mcpServers: this.mcpServersConfig(),
+    };
+  }
+
   private mcpServersConfig(): Array<{
     type: 'http';
     name: string;
@@ -1977,18 +2049,20 @@ export class AcpSession {
     // registers no builtins (verified against kiro-cli 2.21.1); the permission
     // deny + --trust-tools=@pi_host remain as the execution gate for restored
     // sessions whose snapshot resurrects builtins.
-    const config = {
-      name: this.agentName,
-      tools: ['@pi_host'],
-      allowedTools: ['@pi_host'],
-      // Forward-compat for CLI 3.x: parsed by 2.21 but ineffective there
-      // (fresh sessions already exclude builtins via `tools`).
-      excludedTools: ['@builtin'],
-      includeMcpJson: false,
-      mcpServers: {},
-      prompt:
-        'You are a coding assistant. Your identity and standing instructions are defined by the <system_instructions> block when present (typically on the first request of a session, or when instructions change). Continue following those instructions for later turns even if the block is omitted. Use tools proactively. If a tool call fails, retry or try alternatives. Do not use Kiro native subagent/delegate/crew pipelines; delegate only through pi_host tools (the forwarded Pi subagent tool is named pi_subagent).',
-    };
+    const config =
+      this.engine === 'v3'
+        ? v3AgentProfile(this.agentName, PI_HOST_AGENT_PROMPT)
+        : {
+            name: this.agentName,
+            tools: ['@pi_host'],
+            allowedTools: ['@pi_host'],
+            // Forward-compat for CLI 3.x: parsed by 2.21 but ineffective there
+            // (fresh sessions already exclude builtins via `tools`).
+            excludedTools: ['@builtin'],
+            includeMcpJson: false,
+            mcpServers: {},
+            prompt: PI_HOST_AGENT_PROMPT,
+          };
 
     const agentsDir = join(this.agentRootPath, '.kiro', 'agents');
     mkdirSync(agentsDir, { recursive: true, mode: 0o700 });

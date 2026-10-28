@@ -1,11 +1,15 @@
 import type { Context, SimpleStreamOptions } from '@earendil-works/pi-ai';
 
+import { loadKiroAcpConfig, resolveAgentEngine } from './config.ts';
 import { extractToolResults } from './helpers.ts';
 import { log } from './logging.ts';
 import { persistenceKeyForSession } from './session-persistence.ts';
 import { AcpSession, type KiroEffort } from './session.ts';
 import { hostToolCatalog } from './tool-catalog.ts';
 import type { ToolResultInfo } from './types.ts';
+
+/** Engine from kiro-acp.json; read once per process, like the logger settings. */
+const AGENT_ENGINE = resolveAgentEngine(loadKiroAcpConfig());
 
 export interface RoutedSession {
   session: AcpSession;
@@ -168,7 +172,7 @@ async function routeSession(
       return take(existing);
     }
 
-    const created = new AcpSession(requestedCwd);
+    const created = new AcpSession(requestedCwd, AGENT_ENGINE);
     const taken = !!existing && (existing.busy || reserved(existing));
     const actualKey = taken ? `${key}:parallel:${created.id}` : key;
     created.persistenceKey = actualKey === key ? persistenceKey : null;
@@ -187,7 +191,7 @@ async function routeSession(
 
   // No session id: an anonymous request must never inherit another independent
   // conversation that happens to be idle in the same cwd.
-  const created = new AcpSession(requestedCwd);
+  const created = new AcpSession(requestedCwd, AGENT_ENGINE);
   created.persistenceKey = null;
   sessions.set(`anon:${created.id}`, created);
   log('route new anon session', {

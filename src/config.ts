@@ -15,6 +15,8 @@ interface KiroAcpConfig {
     /** Poll interval in minutes. Default: 10. */
     pollMinutes?: number;
   };
+  /** Kiro CLI engine to drive. Default: v2. */
+  agentEngine?: 'v2' | 'v3';
 }
 
 const CONFIG_PATH = join(homedir(), '.pi', 'agent', 'kiro-acp.json');
@@ -44,6 +46,13 @@ export function resolveLoggerConfig(config: KiroAcpConfig): LoggerConfig {
 interface UsageFooterConfig {
   enabled: boolean;
   pollMinutes: number;
+}
+
+export type AgentEngine = 'v2' | 'v3';
+
+/** Engine setting: v2 unless explicitly v3; any other value falls back. */
+export function resolveAgentEngine(config: KiroAcpConfig): AgentEngine {
+  return config.agentEngine === 'v3' ? 'v3' : 'v2';
 }
 
 /** Footer settings: config with defaults (off, poll every 10 minutes). */
