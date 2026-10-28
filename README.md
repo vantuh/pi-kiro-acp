@@ -260,13 +260,14 @@ Pi loads `src/index.ts` directly. `npm run build` emits `dist/` for the
 
 ```sh
 npm ci                           # install locked dependencies
-npm run build                    # tsc -p tsconfig.build.json
+npm run build                    # tsc -p tsconfig.build.json (emits, no type check)
+npm run typecheck                # tsc over src with strict checks on
 npm test                         # build, then vitest run over test/*.test.ts
 npm test -- test/usage.test.ts   # selected tests
 npm run lint                     # oxlint (warnings fail)
 npm run format                   # oxfmt --write
 npm run format:check             # oxfmt --check
-npm run check                    # lint + format:check + test
+npm run check                    # lint + format:check + typecheck + test
 ```
 
 The tests import pi's packages from the local `node_modules`, which npm fills in
