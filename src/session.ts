@@ -20,6 +20,7 @@ import { log, msSince } from './logging.ts';
 import { KIRO_THINKING_LEVEL_MAP } from './models/fallback.ts';
 import {
   isPiHostPermission,
+  isPiHostToolCall,
   kiroToolIdentity,
   pickPermissionOptionId,
   pickV3PermissionOptionId,
@@ -665,7 +666,7 @@ export class AcpSession {
     const options = Array.isArray((params as any)?.options)
       ? ((params as any).options as Array<{ optionId?: string; kind?: string }>)
       : [];
-    const allow = isPiHostPermission(params, this.forwardedKiroNames());
+    const allow = isPiHostToolCall(params, this.forwardedKiroNames());
     const optionId = pickV3PermissionOptionId(options, allow);
     const { toolName, mcpServer } = kiroToolIdentity(params);
     log('permission request', {

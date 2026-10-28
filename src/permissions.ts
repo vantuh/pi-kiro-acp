@@ -90,6 +90,23 @@ export function isPiHostPermission(
   return new Set(forwardedKiroNames).has(name);
 }
 
+/** V3 gate: an MCP call is ours only when it is tagged `pi_host` *and* the
+ * catalog still forwards that tool. The name-only fallback of
+ * `isPiHostPermission` is unsafe there: V3 identifies a call by its
+ * `@<server>/<tool>` title or its `mcpTool.identity`, so the tool name alone
+ * would let `@evil/slow` through on the strength of a forwarded `slow`. */
+export function isPiHostToolCall(
+  params: unknown,
+  forwardedKiroNames: Iterable<string>,
+): boolean {
+  const { toolName, mcpServer } = kiroToolIdentity(params);
+  return (
+    mcpServer === 'pi_host' &&
+    typeof toolName === 'string' &&
+    new Set(forwardedKiroNames).has(toolName)
+  );
+}
+
 /** V3 offers `{optionId, name, kind}` options. Only the one-shot kind is ever
  * selected: `allow_always` would let the tool run for the rest of the session
  * without pi seeing another request, so a missing one-shot option cancels. */

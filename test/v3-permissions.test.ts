@@ -3,8 +3,12 @@
 // kiro-cli is spawned.
 // Run: npm test -- test/v3-permissions.test.ts
 
-// Keep session.ts's persistence import hermetic before it loads.
-process.env.XDG_DATA_HOME ??= '/tmp/kiro-acp-test-data';
+// Persisted sessions must never land in the developer's data dir.
+process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), 'kiro-acp-data-'));
+
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { test } from 'vitest';
 
@@ -12,9 +16,17 @@ import { AcpSession } from '../src/session.ts';
 import type { ForwardedToolCatalog } from '../src/tool-catalog.ts';
 import { assert, fakeSession, parseLines } from './support.ts';
 
+/** A catalog forwarding one tool, `slow`, under its kiro name. */
 const catalogProvider = (): ForwardedToolCatalog => ({
-  tools: [],
-  piNameByKiroName: new Map<string, string>(),
+  tools: [
+    {
+      piName: 'slow',
+      kiroName: 'slow',
+      description: 'slow tool',
+      parameters: {},
+    },
+  ],
+  piNameByKiroName: new Map([['slow', 'slow']]),
   fingerprint: 'v3-permissions-test',
   diagnostics: [],
 });
@@ -81,6 +93,30 @@ test('v3 allows only a once-off pi_host tool run', () => {
   assert(
     byTitle?.outcome?.optionId === 'allow_once',
     'a pi_host tool (title) is allowed once',
+  );
+
+  // V3 identifies a call by title/identity, so a name that is in the catalog
+  // must still name pi_host as its server.
+  const foreignServer = permissionRequest(
+    session,
+    written,
+    { title: '@evil/slow' },
+    V3_OPTIONS,
+  );
+  assert(
+    foreignServer?.outcome?.optionId === 'reject_once',
+    `a catalogue tool name under another server is rejected (got ${JSON.stringify(foreignServer)})`,
+  );
+
+  const notForwarded = permissionRequest(
+    session,
+    written,
+    { title: '@pi_host/nope' },
+    V3_OPTIONS,
+  );
+  assert(
+    notForwarded?.outcome?.optionId === 'reject_once',
+    'a pi_host tool the catalog does not forward is rejected',
   );
 
   const builtin = permissionRequest(
