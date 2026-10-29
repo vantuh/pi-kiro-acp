@@ -126,6 +126,19 @@ test("a rejected meta call is described from Kiro's own update", () => {
   );
 });
 
+test('an error Kiro reports in several fields is shown once', () => {
+  const message = 'Invalid input for tool_call — arguments: expected object';
+  const args = rejectedMetaCallArgs(
+    {
+      status: 'failed',
+      content: [{ type: 'content', content: { type: 'text', text: message } }],
+      rawOutput: message,
+    },
+    undefined,
+  );
+  assert(args.error === message, `the message is not repeated: ${args.error}`);
+});
+
 test('a Kiro-rejected meta tool call', async () => {
   // --- Kiro keeps its turn open: pi sees the call, then the continuation ---
   {

@@ -71,7 +71,9 @@ function errorTextOf(update: Record<string, any>): string | null {
   push(typeof rawOutput === 'string' ? rawOutput : rawOutput?.text);
   for (const candidate of [update.error, update.errorMessage])
     push(typeof candidate === 'string' ? candidate : candidate?.message);
-  return texts.length > 0 ? clip(texts.join('\n')) : null;
+  // Kiro repeats the same message in `content` and `rawOutput`.
+  const unique = [...new Set(texts)];
+  return unique.length > 0 ? clip(unique.join('\n')) : null;
 }
 
 const NO_ERROR_TEXT =
