@@ -416,6 +416,22 @@ test('a cancelled turn ends aborted and drops the snapshot it can no longer resu
       written.find((frame) => frame.method === 'session/new'),
       'acp-2',
     );
+    // V2 reapplies the model after session/new; V3 gets it from configOptions.
+    await until(
+      () =>
+        written.some((frame) => frame.method === 'session/set_model') ||
+        written.filter((frame) => frame.method === 'session/prompt').length ===
+          2,
+      'the next turn settles the model',
+    );
+    const setModel = written.find(
+      (frame) => frame.method === 'session/set_model',
+    );
+    if (setModel) {
+      session.handleStdoutLine(
+        JSON.stringify({ jsonrpc: '2.0', id: setModel.id, result: {} }),
+      );
+    }
     await until(
       () =>
         written.filter((frame) => frame.method === 'session/prompt').length ===
