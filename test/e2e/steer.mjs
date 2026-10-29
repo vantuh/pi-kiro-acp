@@ -81,7 +81,7 @@ const { SessionManager } = await import('../../src/session-manager.ts');
 const { streamKiroAcp } = await import('../../src/stream.ts');
 const { buildSteerRule, sumMeteringCredits } =
   await import('../../src/helpers.ts');
-const { LOG_FILE } = await import('../../src/logging.ts');
+const { logFile } = await import('../../src/logging.ts');
 const { loadKiroAcpConfig, resolveLoggerConfig } =
   await import('../../src/config.ts');
 
@@ -145,7 +145,7 @@ function describe(terminal) {
 // Character offset, not byte size: the log holds multi-byte lines.
 const logStart = (() => {
   try {
-    return readFileSync(LOG_FILE, 'utf-8').length;
+    return readFileSync(logFile(), 'utf-8').length;
   } catch {
     return 0;
   }
@@ -156,7 +156,7 @@ function providerLog(acpSessionId) {
   if (!debugLogging) return [];
   let text = '';
   try {
-    text = readFileSync(LOG_FILE, 'utf-8').slice(logStart);
+    text = readFileSync(logFile(), 'utf-8').slice(logStart);
   } catch {
     return [];
   }
