@@ -704,8 +704,17 @@ test('a confirmed plain-text cancel continues the same ACP session next turn', a
       followUp?.params?.sessionId === 'acp-1',
       'it prompts the session the cancelled turn left behind',
     );
+    // The warm turn names the cancellation instead of replaying it: the model
+    // must see that the previous answer was cut off, and answer this request.
+    const followUpText = followUp.params.prompt[0].text;
     assert(
-      followUp.params.prompt[0].text === 'and then?',
+      followUpText.includes('interrupted by cancellation') &&
+        followUpText.endsWith('\n\nand then?'),
+      `the follow-up carries the current request after a cancellation note (got "${followUpText}")`,
+    );
+    assert(
+      !followUpText.includes('<conversation_history>') &&
+        !followUpText.includes('half an ans'),
       'no conversation replay is needed',
     );
 

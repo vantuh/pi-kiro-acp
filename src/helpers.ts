@@ -231,16 +231,32 @@ export function buildPromptParts(
         });
     }
   }
+  const userMessage = includeHistory
+    ? buildConversationPrompt(context)
+    : lastUserMessage(context);
+  // Pi inserts system deltas between turns; they are not a turn, so skip them.
+  let previousIdx = lastUserIdx - 1;
+  while (previousIdx >= 0 && msgs[previousIdx].role === 'system') previousIdx--;
+  const previous = previousIdx >= 0 ? msgs[previousIdx] : undefined;
+  // pi's aborted stop reason is otherwise absent from the prompt text.
+  const cancelledTurn =
+    previous?.role === 'assistant' && previous.stopReason === 'aborted';
   return {
     // Providers receive a TranscriptContext: the prompt and the tool declarations
     // live in the transcript system messages, not in Context.systemPrompt/tools.
     systemPrompt: getCurrentSystemPrompt(context.messages),
-    userMessage: includeHistory
-      ? buildConversationPrompt(context)
-      : lastUserMessage(context),
+    userMessage: cancelledTurn
+      ? `${CANCELLED_TURN_NOTE}\n\n${userMessage}`
+      : userMessage,
     images,
   };
 }
+
+const CANCELLED_TURN_NOTE =
+  'The previous assistant response was interrupted by cancellation. ' +
+  'Treat it as incomplete history, not a task to finish automatically. ' +
+  'Follow the current user request; continue the earlier task only if the user now asks for it. ' +
+  'Earlier context and preferences still apply.';
 
 function messageText(
   msg: Context['messages'][number],

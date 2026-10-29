@@ -42,7 +42,9 @@ flowchart LR
 - **Native recovery after cancel.** Confirmed text/thinking-only cancellations
   keep the ACP session and snapshot. If the next context still matches, the
   conversation continues natively; cancellations with no output, without Kiro's
-  confirmation, or involving tools fall back to replay.
+  confirmation, or involving tools fall back to replay. The next prompt
+  explicitly marks a cancelled answer and asks the model to follow the current
+  request rather than automatically finish the interrupted one.
 - **Clean shutdown.** Idle sessions (10 min) and all sessions on pi exit are stopped,
   including the `kiro-cli` process tree.
 
