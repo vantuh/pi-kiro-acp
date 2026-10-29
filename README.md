@@ -194,7 +194,7 @@ Optional file `~/.pi/agent/kiro-acp.json`. Restart pi after editing.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `logger.debug` | `false` | Write `$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD.log` |
+| `logger.debug` | `false` | Write `$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD/<session>.log` |
 | `logger.verbose` | `0` | Pass `-v` to `kiro-cli acp` 0–3 times |
 | `usageFooter.enabled` | `false` | Show Kiro plan usage in the footer |
 | `usageFooter.pollMinutes` | `10` | Footer refresh interval |
@@ -240,7 +240,7 @@ findings: [docs/kiro-v3-acp-probes.md](docs/kiro-v3-acp-probes.md).
 
 | What | Path |
 |---|---|
-| Debug logs | `$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD.log` |
+| Debug logs | `$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD/<session>.log` |
 | Persisted ACP sessions | `~/.local/share/pi-kiro-acp/sessions/` |
 | Agent scratch dir | `$TMPDIR/kiro-acp/agent-root-<id>` |
 

@@ -142,21 +142,13 @@ function describe(terminal) {
   return error ? `${reason}: ${error}` : reason;
 }
 
-// Character offset, not byte size: the log holds multi-byte lines.
-const logStart = (() => {
-  try {
-    return readFileSync(logFile(), 'utf-8').length;
-  } catch {
-    return 0;
-  }
-})();
 const debugLogging = resolveLoggerConfig(loadKiroAcpConfig()).debug;
 
 function providerLog(acpSessionId) {
   if (!debugLogging) return [];
   let text = '';
   try {
-    text = readFileSync(logFile(), 'utf-8').slice(logStart);
+    text = readFileSync(logFile(acpSessionId), 'utf-8');
   } catch {
     return [];
   }

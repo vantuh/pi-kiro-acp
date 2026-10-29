@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 interface KiroAcpConfig {
   logger?: {
-    /** Write $TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD.log. Default: off. */
+    /** Write $TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD/<session>.log. Default: off. */
     debug?: boolean;
     /** kiro-cli `-v` repeat count, 0 = off, max 3. Default: 0. */
     verbose?: number;

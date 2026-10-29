@@ -8,10 +8,29 @@ export const LOG_DIR = join(tmpdir(), 'kiro-acp-debug-logs');
 
 const pad = (n: number, width = 2) => String(n).padStart(width, '0');
 
-/** One file per local day, matching the local time in each line. */
-export function logFile(date = new Date()): string {
+export function logDir(date = new Date()): string {
   const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
-  return join(LOG_DIR, `${day}.log`);
+  return join(LOG_DIR, day);
+}
+
+/** One file per local day and session; lines without a session go to `_general`. */
+export function logFile(session?: string, date = new Date()): string {
+  const name = session ? session.replace(/[^\w.-]/g, '_') : '_general';
+  return join(logDir(date), `${name}.log`);
+}
+
+function sessionOf(args: unknown[]): string | undefined {
+  for (const a of args) {
+    if (
+      a &&
+      typeof a === 'object' &&
+      'session' in a &&
+      typeof a.session === 'string'
+    ) {
+      return a.session;
+    }
+  }
+  return undefined;
 }
 
 function localTime(date: Date): string {
@@ -24,9 +43,9 @@ export function log(...args: any[]): void {
   if (!DEBUG) return;
   const now = new Date();
   const ts = localTime(now);
-  mkdirSync(LOG_DIR, { recursive: true });
+  mkdirSync(logDir(now), { recursive: true });
   appendFile(
-    logFile(now),
+    logFile(sessionOf(args), now),
     `[${ts}] ${args.map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a))).join(' ')}\n`,
     () => {},
   );

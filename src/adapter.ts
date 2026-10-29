@@ -4,7 +4,7 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 
 import { loadKiroAcpConfig, resolveUsageFooterConfig } from './config.ts';
-import { log, logFile } from './logging.ts';
+import { log, logDir } from './logging.ts';
 import { stripAssistantContentFrames } from './native-tool-frame.ts';
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from './overflow.ts';
 import { createKiroAcpProvider, type KiroAcpProvider } from './provider.ts';
@@ -24,7 +24,7 @@ export default function (pi: ExtensionAPI) {
   log('extension loaded', {
     pid: process.pid,
     models: provider.getModels().length,
-    logFile: logFile(),
+    logDir: logDir(),
   });
 
   // Capture the mode's UI surface so the usage footer can drive the transient

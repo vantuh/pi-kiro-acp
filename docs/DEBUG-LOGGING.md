@@ -7,15 +7,17 @@
 
 ## Log Files
 
-One file per local day in a directory under Node `os.tmpdir()` (not always `/tmp` on macOS):
+One folder per local day, one file per session, in a directory under Node `os.tmpdir()` (not always `/tmp` on macOS):
 
 ```
-$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD.log
+$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD/<session>.log
+$TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD/_general.log   # lines without a session
 ```
 
-Example on this machine: `/var/folders/.../T/kiro-acp-debug-logs/2025-01-31.log`.  
-On load, `extension loaded` includes `{ logFile }` (today's file) when debug is on.
-The day and the `[HH:MM:SS.mmm]` time in each line are in the system's local time zone. A long-running pi process switches to the next file at local midnight.
+Example on this machine: `/var/folders/.../T/kiro-acp-debug-logs/2025-01-31/s-b2563001.log`.  
+The session is the `session` field of the first object passed to `log()`.
+On load, `extension loaded` includes `{ logDir }` (today's folder) when debug is on.
+The day and the `[HH:MM:SS.mmm]` time in each line are in the system's local time zone. A long-running pi process switches to the next folder at local midnight; a session that spans midnight gets a file in each day.
 Older logs from before this change sit in the single `$TMPDIR/kiro-acp-debug.log`; it is no longer written.
 
 Format: `[HH:MM:SS.mmm] message {json}` — written by `logging.ts:log()` via `appendFile`.
@@ -23,12 +25,13 @@ Format: `[HH:MM:SS.mmm] message {json}` — written by `logging.ts:log()` via `a
 ### Watch in real-time
 
 ```sh
-LOG="${TMPDIR%/}/kiro-acp-debug-logs/$(date +%F).log"
-tail -f "$LOG"
-# filter to one session
-tail -f "$LOG" | grep '"session":"abc123"'
-# clear and restart
-: > "$LOG" && tail -f "$LOG"
+DAY="${TMPDIR%/}/kiro-acp-debug-logs/$(date +%F)"
+# one session
+tail -f "$DAY/abc123.log"
+# all of today's files (tail prints a header per file)
+tail -f "$DAY"/*.log
+# clear one session and restart
+: > "$DAY/abc123.log" && tail -f "$DAY/abc123.log"
 ```
 
 ---
@@ -304,10 +307,10 @@ in its applied level, so the next turn re-sends the command.
 ### Streaming feels slow / waiting
 
 1. Enable debug in `~/.pi/agent/kiro-acp.json`: `{ "logger": { "debug": true } }` (env `PI_KIRO_ACP_DEBUG` is ignored) and restart pi
-2. Clear log: `LOG="${TMPDIR%/}/kiro-acp-debug-logs/$(date +%F).log"; : > "$LOG"`
+2. Pick the day folder: `DAY="${TMPDIR%/}/kiro-acp-debug-logs/$(date +%F)"`
 3. Reproduce one slow turn, then:
    ```sh
-   grep -E 'timing first|prompt sent|outcome|bridge tool call|rpc ←|delivering tool' "$LOG"
+   grep -E 'timing first|prompt sent|outcome|bridge tool call|rpc ←|delivering tool' "$DAY"/*.log
    ```
 4. Interpret:
    - Large `promptReadyMs` / `rpc ← initialize|session/new|set_model` → cold init / model set
@@ -362,7 +365,7 @@ Three layers handle a leak:
    `excludedTools`.
 
 ```sh
-grep -E 'model-visible tools|BUILTINS LEAKED|AGENT NOT FOUND|native ACP tool update|permission request|NameCollision|Aliasing ' "$LOG"
+grep -E 'model-visible tools|BUILTINS LEAKED|AGENT NOT FOUND|native ACP tool update|permission request|NameCollision|Aliasing ' "$DAY"/*.log
 ```
 
 `native ACP tool update` is an ACP `tool_call` with `mcpServer` set and not `pi_host`,
@@ -388,7 +391,7 @@ MCP progress notifications do not extend it, and the deadline is not configurabl
 slower than that (subagents, deep research) always takes the recovery path:
 
 ```sh
-grep -E 'ABANDONED by kiro|DEDUPED|route orphaned|recoverInPlace|orphaned tool result' "$LOG"
+grep -E 'ABANDONED by kiro|DEDUPED|route orphaned|recoverInPlace|orphaned tool result' "$DAY"/*.log
 ```
 
 Expected sequence for one slow tool:
@@ -412,7 +415,7 @@ instead means recovery failed and Kiro is being asked the original question agai
 The recovery prompt was refused outright. Signature:
 
 ```sh
-grep -E 'STRANDED|empty refusal|"stopReason":"refusal"' "$LOG"
+grep -E 'STRANDED|empty refusal|"stopReason":"refusal"' "$DAY"/*.log
 ```
 
 `active prompt settled { stopReason: "refusal", elapsedMs: 4-20 }` with an `outcome` of
