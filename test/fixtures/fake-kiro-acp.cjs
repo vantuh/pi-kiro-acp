@@ -104,6 +104,58 @@ const update = (u) =>
     params: { sessionId, update: u },
   });
 
+// A turn where Kiro rejects its own `tool_call` meta call: pi never sees a
+// tools/call for it, only the failed ACP update, and the turn carries on.
+// Enabled with FAKE_KIRO_REJECTED_META_CALL=1.
+function rejectedMetaCallTurn(promptId) {
+  const delay = (ms, fn) => setTimeout(fn, ms);
+  delay(50, () => {
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'meta-call-1',
+      title: 'Tool Call',
+      status: 'pending',
+      rawInput: {
+        tool_id: 'pi_host::bash',
+        arguments: '{"command":"ls"}',
+      },
+    });
+    update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'meta-call-1',
+      status: 'failed',
+      content: [
+        {
+          type: 'content',
+          content: {
+            type: 'text',
+            text: 'Invalid input for tool_call — arguments: expected object, received string',
+          },
+        },
+      ],
+    });
+    // A pi_host call Kiro ran and failed: pi owns that one, nothing to surface.
+    update({
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'pi-host-call-1',
+      status: 'failed',
+      _meta: { kiro: { mcpServerName: 'pi_host', toolName: 'bash' } },
+    });
+    update({
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'I made a mistake.' },
+    });
+  });
+  // Long enough for pi to run the rejected call and come back for the rest.
+  delay(Number(process.env.FAKE_KIRO_REJECTED_CONTINUATION_MS || 600), () => {
+    update({
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'continuing after the rejection' },
+    });
+    send({ jsonrpc: '2.0', id: promptId, result: { stopReason: 'end_turn' } });
+  });
+}
+
 const rl = readline.createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   let msg;
@@ -207,6 +259,10 @@ rl.on('line', (line) => {
   }
   if (msg.method === 'session/prompt') {
     if (msg.params && msg.params.sessionId) sessionId = msg.params.sessionId;
+    if (process.env.FAKE_KIRO_REJECTED_META_CALL === '1') {
+      rejectedMetaCallTurn(msg.id);
+      return;
+    }
     update({
       sessionUpdate: 'session_info_update',
       _meta: { kiro: { kind: 'context_usage', usagePercentage: 12.5 } },

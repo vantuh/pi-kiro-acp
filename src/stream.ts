@@ -19,6 +19,11 @@ import {
   splitTrailingSteers,
 } from './helpers.ts';
 import { log, msSince } from './logging.ts';
+import {
+  rejectedMetaCallArgs,
+  rejectedMetaToolName,
+  toolUpdateInput,
+} from './meta-tool-call.ts';
 import { tagKiroContextOverflow } from './overflow.ts';
 import { kiroToolIdentity } from './permissions.ts';
 import { SessionManager } from './session-manager.ts';
@@ -245,6 +250,14 @@ export function streamKiroAcp(
       let textChunks = 0;
       // Tool starts can reach Kiro's history before the bridge sees them.
       let sawToolCallStart = false;
+      // ACP splits a tool call over two updates: the start carries the name and
+      // the input, the failed one may carry neither. A rejected meta call must
+      // still reach pi exactly once, with what the start reported.
+      const kiroToolCalls = new Map<
+        string,
+        { name?: string; input?: Record<string, any> }
+      >();
+      const surfacedRejections = new Set<string>();
 
       /** Streams one kind of assistant content block (text or thinking): opens
        * it on the first delta, appends, and closes it on demand. A changed
@@ -426,6 +439,42 @@ export function streamKiroAcp(
               kind: (update as any).kind ?? null,
             },
           );
+          const kiroCallId =
+            typeof update.toolCallId === 'string'
+              ? update.toolCallId
+              : typeof update.id === 'string'
+                ? update.id
+                : null;
+          if (kiroCallId) {
+            const seen = kiroToolCalls.get(kiroCallId) ?? {};
+            const name = kiroToolName ?? seen.name;
+            const input = toolUpdateInput(update) ?? seen.input;
+            kiroToolCalls.set(kiroCallId, { name, input });
+            // Kiro validates its own meta tools, so a call it rejects never
+            // reaches the bridge and the model only ever apologises for it in
+            // text. Hand it to pi as a tool call anyway: pi answers an unknown
+            // tool with an error result, which is the failed line the apology
+            // cannot show.
+            const rejectedName = surfacedRejections.has(kiroCallId)
+              ? null
+              : rejectedMetaToolName(update, { toolName: name, mcpServer });
+            if (rejectedName) {
+              surfacedRejections.add(kiroCallId);
+              const pending = session.addRejectedMetaToolCall(
+                rejectedName,
+                rejectedMetaCallArgs(update, input),
+              );
+              log('rejected kiro meta tool call → stream', {
+                session: session.id,
+                kiroCallId,
+                callId: pending.callId,
+                toolName: pending.toolName,
+              });
+              // Same path as a bridge call: it joins the pending batch, or the
+              // attach sweep picks it up when nothing is listening.
+              session.onToolCallFromBridge?.(pending);
+            }
+          }
         } else if (update.sessionUpdate) {
           log('unhandled ACP sessionUpdate', {
             session: session.id,
@@ -434,7 +483,16 @@ export function streamKiroAcp(
         }
       };
 
+      // Set when the turn's tool results answer nothing but Kiro-rejected meta
+      // calls: no prompt waits on those, so a settled prompt leaves nothing to
+      // read.
+      let rejectedOnly = false;
       if (routed.kind === 'resumption') {
+        rejectedOnly =
+          routed.toolResults.length > 0 &&
+          routed.toolResults.every(
+            (tr) => session.pendingToolCalls.get(tr.toolCallId)?.rejected,
+          );
         const imageBlocks = imagesFromToolResults(routed.toolResults);
         // A steer kiro already queued must not be handed to the model again by
         // a recovery prompt or an image follow-up.
@@ -688,6 +746,13 @@ export function streamKiroAcp(
             // No prompt in flight: settle now instead of awaiting a promise that never arrives.
             if (!session.activePromptDone && !settled) {
               if (!flushToolCalls()) {
+                if (rejectedOnly) {
+                  log('rejected meta tool call: prompt already ended', {
+                    session: session.id,
+                  });
+                  finish('stop');
+                  return;
+                }
                 promptError =
                   session.lastPromptError ??
                   new Error('Kiro ACP session has no active prompt');

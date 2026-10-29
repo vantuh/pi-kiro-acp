@@ -22,6 +22,9 @@ export interface PendingToolCall {
     content?: ToolResultContentBlock[];
   }) => void;
   emitted?: boolean;
+  /** Kiro rejected the call itself (its `tool_call`/`tool_load` meta tool), so
+   * pi is shown it but no tools/call holds the result. */
+  rejected?: boolean;
   /** Date.now() when the pi_host bridge received Kiro's tools/call */
   receivedAt: number;
 }

@@ -8,7 +8,7 @@ import {
   type Interface as ReadlineInterface,
 } from 'node:readline';
 
-import type { SimpleStreamOptions } from '@earendil-works/pi-ai';
+import type { JsonObject, SimpleStreamOptions } from '@earendil-works/pi-ai';
 
 import {
   loadKiroAcpConfig,
@@ -2079,6 +2079,17 @@ export class AcpSession {
       if (match) {
         const [callId, call] = match;
         this.pendingToolCalls.delete(callId);
+        if (call.rejected) {
+          // Kiro rejected the call itself, so no tools/call holds this tool_use:
+          // pi already answered it locally and the result stays there.
+          log('rejected meta tool call result (not sent to Kiro)', {
+            session: this.id,
+            callId,
+            toolName: call.toolName,
+            isError: tr.isError,
+          });
+          continue;
+        }
         const text =
           tr === carrier && syntheticSteers.length > 0
             ? `${tr.text}\n\n${buildSteerBlock(syntheticSteers, this.steerBlockId)}`
@@ -2356,6 +2367,30 @@ export class AcpSession {
         ],
       },
     ];
+  }
+
+  /** Surface a meta tool call Kiro rejected itself (a malformed `tool_call`/
+   * `tool_load`) as a synthetic pending call: pi shows it and answers the
+   * unknown tool name with an error result, while nothing on Kiro's side holds
+   * a tool_use, so its result never leaves pi. */
+  addRejectedMetaToolCall(name: string, args: JsonObject): PendingToolCall {
+    const callId = `${this.id}-${++this.bridgeCallSeq}`;
+    const pending: PendingToolCall = {
+      callId,
+      toolName: name,
+      args,
+      receivedAt: Date.now(),
+      resolve: () => {},
+      rejected: true,
+    };
+    this.pendingToolCalls.set(callId, pending);
+    log('rejected kiro meta tool call queued', {
+      session: this.id,
+      callId,
+      toolName: name,
+      argsKeys: Object.keys(args),
+    });
+    return pending;
   }
 
   /** Bridge an MCP tools/call from Kiro into Pi's outer tool turn using the
