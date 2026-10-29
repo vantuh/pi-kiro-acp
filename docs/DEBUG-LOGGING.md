@@ -7,7 +7,7 @@
 
 ## Log Files
 
-One file per UTC day in a directory under Node `os.tmpdir()` (not always `/tmp` on macOS):
+One file per local day in a directory under Node `os.tmpdir()` (not always `/tmp` on macOS):
 
 ```
 $TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD.log
@@ -15,7 +15,7 @@ $TMPDIR/kiro-acp-debug-logs/YYYY-MM-DD.log
 
 Example on this machine: `/var/folders/.../T/kiro-acp-debug-logs/2025-01-31.log`.  
 On load, `extension loaded` includes `{ logFile }` (today's file) when debug is on.
-The day is UTC, matching the UTC time in each line. A long-running pi process switches to the next file at UTC midnight.
+The day and the `[HH:MM:SS.mmm]` time in each line are in the system's local time zone. A long-running pi process switches to the next file at local midnight.
 Older logs from before this change sit in the single `$TMPDIR/kiro-acp-debug.log`; it is no longer written.
 
 Format: `[HH:MM:SS.mmm] message {json}` — written by `logging.ts:log()` via `appendFile`.
@@ -23,7 +23,7 @@ Format: `[HH:MM:SS.mmm] message {json}` — written by `logging.ts:log()` via `a
 ### Watch in real-time
 
 ```sh
-LOG="${TMPDIR%/}/kiro-acp-debug-logs/$(date -u +%F).log"
+LOG="${TMPDIR%/}/kiro-acp-debug-logs/$(date +%F).log"
 tail -f "$LOG"
 # filter to one session
 tail -f "$LOG" | grep '"session":"abc123"'
@@ -304,7 +304,7 @@ in its applied level, so the next turn re-sends the command.
 ### Streaming feels slow / waiting
 
 1. Enable debug in `~/.pi/agent/kiro-acp.json`: `{ "logger": { "debug": true } }` (env `PI_KIRO_ACP_DEBUG` is ignored) and restart pi
-2. Clear log: `LOG="${TMPDIR%/}/kiro-acp-debug-logs/$(date -u +%F).log"; : > "$LOG"`
+2. Clear log: `LOG="${TMPDIR%/}/kiro-acp-debug-logs/$(date +%F).log"; : > "$LOG"`
 3. Reproduce one slow turn, then:
    ```sh
    grep -E 'timing first|prompt sent|outcome|bridge tool call|rpc ←|delivering tool' "$LOG"

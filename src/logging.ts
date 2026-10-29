@@ -6,9 +6,16 @@ import { loadKiroAcpConfig, resolveLoggerConfig } from './config.ts';
 
 export const LOG_DIR = join(tmpdir(), 'kiro-acp-debug-logs');
 
-/** One file per UTC day, matching the UTC time in each line. */
+const pad = (n: number, width = 2) => String(n).padStart(width, '0');
+
+/** One file per local day, matching the local time in each line. */
 export function logFile(date = new Date()): string {
-  return join(LOG_DIR, `${date.toISOString().slice(0, 10)}.log`);
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  return join(LOG_DIR, `${day}.log`);
+}
+
+function localTime(date: Date): string {
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
 }
 
 const DEBUG = resolveLoggerConfig(loadKiroAcpConfig()).debug;
@@ -16,7 +23,7 @@ const DEBUG = resolveLoggerConfig(loadKiroAcpConfig()).debug;
 export function log(...args: any[]): void {
   if (!DEBUG) return;
   const now = new Date();
-  const ts = now.toISOString().slice(11, 23);
+  const ts = localTime(now);
   mkdirSync(LOG_DIR, { recursive: true });
   appendFile(
     logFile(now),
