@@ -23,6 +23,7 @@ import { tagKiroContextOverflow } from './overflow.ts';
 import { kiroToolIdentity } from './permissions.ts';
 import { SessionManager } from './session-manager.ts';
 import {
+  clearPersistedKiroSession,
   historyFingerprintAfterAssistantTurn,
   historyFingerprintBeforeCurrentUser,
   loadPersistedKiroSession,
@@ -506,6 +507,9 @@ export function streamKiroAcp(
       // The error is recorded inside the settle callbacks below, which the
       // outer flow cannot see; read it through a call so its type stays open.
       const promptFailure = () => promptError;
+      // Kiro answers a cancelled prompt with a normal result, so the terminal
+      // branch cannot tell an abandoned turn from a finished one.
+      let acpCancelled = false;
       let toolFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
       const outcome = await new Promise<'toolUse' | 'stop' | 'error'>(
@@ -653,6 +657,7 @@ export function streamKiroAcp(
             session.activePromptDone?.then(
               (result) => {
                 if (gen === session.streamGen && !settled) {
+                  acpCancelled ||= result?.stopReason === 'cancelled';
                   if (!flushToolCalls()) {
                     if (isEmptyRefusal(result?.stopReason)) {
                       retryAfterRefusal();
@@ -754,6 +759,21 @@ export function streamKiroAcp(
           promptFailure()?.message || 'Kiro ACP prompt failed',
         );
         stream.push({ type: 'error', reason: 'error', error: output });
+      } else if (acpCancelled || options?.signal?.aborted) {
+        session.activePromptDone = null;
+        // A cancelled backend's history is not known to match pi's: pi drops
+        // the aborted partial. Force a replay and drop the resumable snapshot.
+        session.conversationFingerprint = null;
+        if (session.persistenceKey) {
+          clearPersistedKiroSession(session.persistenceKey);
+        }
+        output.stopReason = 'aborted';
+        log('cancelled turn → aborted', {
+          session: session.id,
+          acpCancelled,
+          signalAborted: !!options?.signal?.aborted,
+        });
+        stream.push({ type: 'error', reason: 'aborted', error: output });
       } else {
         session.activePromptDone = null;
         output.stopReason = 'stop';

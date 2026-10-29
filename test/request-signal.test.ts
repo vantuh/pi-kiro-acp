@@ -1,14 +1,35 @@
-// Test: a turn's request signal cannot cancel Kiro after that turn ends.
+// Test: a turn's request signal cannot cancel Kiro after that turn ends, and a
+// cancelled turn is reported as aborted instead of ending as a finished turn.
 // Durable aborts each invocation's signal when its request phase ends; the
 // stream must drop the listener then, or it cancels Kiro while pi runs the tool.
 // Run: npm test -- test/request-signal.test.ts
 
 process.env.PI_KIRO_ACP_TOOL_BATCH_MS = '5';
 
-import { test } from 'vitest';
+import { beforeEach, test, vi } from 'vitest';
+
+// Session persistence is an in-memory store, so no test reads or writes the
+// real XDG data dir and an earlier turn's snapshot can be seeded.
+const store = vi.hoisted(() => new Map<string, any>());
+
+vi.mock('../src/session-persistence.ts', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  loadPersistedKiroSession: vi.fn((key: string) => store.get(key) ?? null),
+  savePersistedKiroSession: vi.fn((key: string, record: unknown) => {
+    store.set(key, record);
+  }),
+  clearPersistedKiroSession: vi.fn((key: string) => {
+    store.delete(key);
+  }),
+}));
 
 import { SessionManager } from '../src/session-manager.ts';
-import { historyFingerprintBeforeCurrentUser } from '../src/session-persistence.ts';
+import {
+  clearPersistedKiroSession,
+  historyFingerprintAfterAssistantTurn,
+  historyFingerprintBeforeCurrentUser,
+  savePersistedKiroSession,
+} from '../src/session-persistence.ts';
 import { assert, kiroContext, kiroModel, wait } from './support.ts';
 
 // Imported after the env override so the debounce is picked up.
@@ -16,6 +37,14 @@ const { streamKiroAcp } = await import('../src/stream.ts');
 
 const CWD = '/tmp/kiro-acp-request-signal';
 const model = kiroModel();
+const persistedSaves = vi.mocked(savePersistedKiroSession);
+const persistedClears = vi.mocked(clearPersistedKiroSession);
+
+beforeEach(() => {
+  persistedSaves.mockClear();
+  persistedClears.mockClear();
+  store.clear();
+});
 
 /** Wait until `condition` holds, up to a bound. */
 async function until(condition: () => boolean, label: string) {
@@ -24,6 +53,51 @@ async function until(condition: () => boolean, label: string) {
     if (Date.now() > deadline) throw new Error(`timed out: ${label}`);
     await wait(5);
   }
+}
+
+/** One text delta from Kiro on the fake conversation. */
+function textChunk(session: any, text: string) {
+  session.handleStdoutLine(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'session/update',
+      params: {
+        sessionId: session.acpSessionId,
+        update: {
+          sessionUpdate: 'agent_message_chunk',
+          content: { type: 'text', text },
+        },
+      },
+    }),
+  );
+}
+
+/** Answers session/new the way kiro-cli does: the requested agent, already on
+ * the model this turn runs, so no config RPC is needed before the prompt. */
+function answerSessionNew(session: any, frame: any, acpSessionId: string) {
+  session.handleStdoutLine(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: frame.id,
+      result: {
+        sessionId: acpSessionId,
+        modes: { currentModeId: session.agentName },
+        configOptions: [
+          {
+            id: 'model',
+            currentValue: model.id,
+            options: [{ value: model.id, name: model.id }],
+          },
+        ],
+      },
+    }),
+  );
+}
+
+function eventSummary(event: any): string {
+  if (event.type === 'error') return `error:${event.reason}`;
+  if (event.type === 'done') return `done:${event.reason}`;
+  return event.type;
 }
 
 /** A routed session that captures ACP writes instead of spawning kiro-cli. */
@@ -199,12 +273,16 @@ test('an ended turn signal cannot cancel the tool it asked for', async () => {
       secondEvents.includes('done:stop'),
       `the second turn ends normally (got ${secondEvents.join(',')})`,
     );
+    assert(
+      persistedSaves.mock.calls.length === 1,
+      'a finished turn is persisted',
+    );
   } finally {
     await sessionManager.stopAllSessions();
   }
 });
 
-test('an active turn signal cancels Kiro', async () => {
+test('a cancelled turn ends aborted and drops the snapshot it can no longer resume', async () => {
   const sessionManager = new SessionManager();
 
   try {
@@ -212,25 +290,56 @@ test('an active turn signal cancels Kiro', async () => {
       sessionManager,
       'S-active',
     );
+    // An earlier turn persisted this ACP session. Its fingerprint is exactly
+    // the prefix the next request carries once the aborted partial is dropped,
+    // so a surviving snapshot would resume the cancelled conversation.
+    const earlier = kiroContext('read notes.md').messages[0];
+    const earlierAnswer = {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'the notes say hi' }],
+    } as any;
+    const earlierFingerprint = historyFingerprintAfterAssistantTurn(
+      kiroContext('read notes.md'),
+      earlierAnswer,
+    );
+    session.conversationFingerprint = earlierFingerprint;
+    session.agentConfigFingerprint = 'agent-config';
+    (session as any).agentCapabilities = { loadSession: true };
+    store.set(session.persistenceKey!, {
+      version: 1,
+      kiroSessionId: 'acp-1',
+      historyFingerprint: earlierFingerprint,
+      agentConfigFingerprint: 'agent-config',
+      modelId: model.id,
+      createdAt: Date.now(),
+      lastUsed: Date.now(),
+    });
+
+    const cancelledContext = kiroContext('and then?');
+    cancelledContext.messages.unshift(earlier, earlierAnswer);
     const request = new AbortController();
-    const events: string[] = [];
+    const events: any[] = [];
     const stream = (async () => {
       for await (const event of streamKiroAcp(
         sessionManager,
         model,
-        kiroContext('read notes.md'),
+        cancelledContext,
         { ...opts, signal: request.signal },
       )) {
-        events.push(
-          event.type === 'done' ? `done:${(event as any).reason}` : event.type,
-        );
+        events.push(event);
       }
     })();
-    await until(() => events.includes('start'), 'the turn starts');
+    await until(() => events.length > 0, 'the turn starts');
     const promptFrame = written.find(
       (frame) => frame.method === 'session/prompt',
     );
     assert(!!promptFrame, 'the prompt is sent');
+
+    textChunk(session, 'half an ans');
+    await until(
+      () => events.some((event) => event.type === 'text_delta'),
+      'the partial answer streams',
+    );
 
     request.abort();
     const cancel = written.find((frame) => frame.method === 'session/cancel');
@@ -247,7 +356,163 @@ test('an active turn signal cancels Kiro', async () => {
       }),
     );
     await stream;
-    assert(events.includes('done:stop'), 'the cancelled turn ends the stream');
+
+    const failure = events.find((event) => event.type === 'error');
+    assert(!!failure, 'the cancelled turn ends with a pi error event');
+    assert(
+      failure.reason === 'aborted',
+      'the error event carries reason aborted',
+    );
+    assert(
+      failure.error.stopReason === 'aborted',
+      'the partial message is marked aborted',
+    );
+    assert(
+      session.conversationFingerprint === null,
+      'the cancelled turn clears the session fingerprint',
+    );
+    assert(
+      persistedSaves.mock.calls.length === 0,
+      'the cancelled turn is not persisted as a success',
+    );
+    assert(
+      persistedClears.mock.calls.length === 1 &&
+        persistedClears.mock.calls[0][0] === session.persistenceKey,
+      'the cancelled conversation loses its resumable snapshot',
+    );
+    assert(
+      !store.has(session.persistenceKey!),
+      'no stale snapshot is left behind',
+    );
+
+    // pi drops the aborted partial; rewinding to the earlier history would let
+    // the old snapshot match again, so the next request must not resume it.
+    const nextContext = kiroContext('never mind');
+    nextContext.messages.unshift(earlier, earlierAnswer);
+    const secondEvents: string[] = [];
+    const second = (async () => {
+      for await (const event of streamKiroAcp(
+        sessionManager,
+        model,
+        nextContext,
+        opts,
+      )) {
+        secondEvents.push(eventSummary(event));
+      }
+    })();
+    await until(
+      () => written.some((frame) => frame.method === 'session/new'),
+      'the next turn opens a fresh ACP session',
+    );
+    assert(
+      !written.some(
+        (frame) =>
+          frame.method === 'session/resume' || frame.method === 'session/load',
+      ),
+      'the cancelled ACP session is not resumed',
+    );
+    answerSessionNew(
+      session,
+      written.find((frame) => frame.method === 'session/new'),
+      'acp-2',
+    );
+    await until(
+      () =>
+        written.filter((frame) => frame.method === 'session/prompt').length ===
+        2,
+      'the next turn replays the conversation',
+    );
+    const replay = written.filter(
+      (frame) => frame.method === 'session/prompt',
+    )[1];
+    const replayText = replay.params.prompt[0].text;
+    assert(
+      replayText.includes('read notes.md') && replayText.includes('never mind'),
+      'the replay carries the history the cancelled turn never finished',
+    );
+
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: replay.id,
+        result: { stopReason: 'end_turn' },
+      }),
+    );
+    await second;
+    assert(
+      secondEvents.includes('done:stop'),
+      `the replay turn completes (got ${secondEvents.join(',')})`,
+    );
+  } finally {
+    await sessionManager.stopAllSessions();
+  }
+});
+
+// Either half of the check is enough on its own: Kiro's own cancel, and a
+// local abort whose prompt comes back as a normal completion.
+test.each([
+  ['an ACP cancelled turn without a local abort', false, 'cancelled'],
+  ['a locally aborted turn whose prompt ends normally', true, 'end_turn'],
+])('%s also ends aborted', async (_label, withSignal, stopReason) => {
+  const sessionManager = new SessionManager();
+
+  try {
+    const { session, opts, written } = await fakeTurnSession(
+      sessionManager,
+      'S-cancelled',
+    );
+    const request = new AbortController();
+    const events: any[] = [];
+    const stream = (async () => {
+      for await (const event of streamKiroAcp(
+        sessionManager,
+        model,
+        kiroContext('read notes.md'),
+        { ...opts, signal: withSignal ? request.signal : undefined },
+      )) {
+        events.push(event);
+      }
+    })();
+    await until(() => events.length > 0, 'the turn starts');
+    const promptFrame = written.find(
+      (frame) => frame.method === 'session/prompt',
+    );
+    assert(!!promptFrame, 'the prompt is sent');
+
+    textChunk(session, 'half an ans');
+    await until(
+      () => events.some((event) => event.type === 'text_delta'),
+      'the partial answer streams',
+    );
+
+    if (withSignal) request.abort();
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: promptFrame.id,
+        result: { stopReason },
+      }),
+    );
+    await stream;
+
+    const failure = events.find((event) => event.type === 'error');
+    assert(!!failure, 'the turn ends with a pi error event');
+    assert(
+      failure.reason === 'aborted',
+      'the cancelled turn reads as aborted, not as a finished turn',
+    );
+    assert(
+      failure.error.stopReason === 'aborted',
+      'the partial message is marked aborted',
+    );
+    assert(
+      session.conversationFingerprint === null,
+      'the fingerprint is cleared',
+    );
+    assert(
+      persistedSaves.mock.calls.length === 0,
+      'nothing is persisted as a success',
+    );
   } finally {
     await sessionManager.stopAllSessions();
   }
