@@ -243,6 +243,8 @@ export function streamKiroAcp(
       let textChars = 0;
       let thinkingChunks = 0;
       let textChunks = 0;
+      // Tool starts can reach Kiro's history before the bridge sees them.
+      let sawToolCallStart = false;
 
       /** Streams one kind of assistant content block (text or thinking): opens
        * it on the first delta, appends, and closes it on demand. A changed
@@ -390,6 +392,7 @@ export function streamKiroAcp(
           update.sessionUpdate === 'tool_call' ||
           update.sessionUpdate === 'tool_call_update'
         ) {
+          if (update.sessionUpdate === 'tool_call') sawToolCallStart = true;
           const { mcpServer, toolName: metaToolName } =
             kiroToolIdentity(update);
           const kiroToolName =
@@ -759,53 +762,72 @@ export function streamKiroAcp(
           promptFailure()?.message || 'Kiro ACP prompt failed',
         );
         stream.push({ type: 'error', reason: 'error', error: output });
-      } else if (acpCancelled || options?.signal?.aborted) {
-        session.activePromptDone = null;
-        // A cancelled backend's history is not known to match pi's: pi drops
-        // the aborted partial. Force a replay and drop the resumable snapshot.
-        session.conversationFingerprint = null;
-        if (session.persistenceKey) {
-          clearPersistedKiroSession(session.persistenceKey);
-        }
-        output.stopReason = 'aborted';
-        log('cancelled turn → aborted', {
-          session: session.id,
-          acpCancelled,
-          signalAborted: !!options?.signal?.aborted,
-        });
-        stream.push({ type: 'error', reason: 'aborted', error: output });
       } else {
         session.activePromptDone = null;
-        output.stopReason = 'stop';
-        const turnFingerprint = historyFingerprintAfterAssistantTurn(
-          context,
-          output,
-        );
-        session.conversationFingerprint = turnFingerprint;
-        if (session.backendQuarantined) {
-          // The backend's snapshot leaked Kiro builtins; persisting it would
-          // re-resume the leak next turn (config fingerprint matches). The
-          // record was already cleared; the next turn restarts fresh.
-          log('skip persisting kiro session (backend quarantined)', {
-            session: session.id,
-            acpSessionId: session.acpSessionId,
-          });
-        } else if (session.persistenceKey && session.acpSessionId) {
-          const now = Date.now();
-          const existingPersisted = loadPersistedKiroSession(
-            session.persistenceKey,
+        const aborted = acpCancelled || !!options?.signal?.aborted;
+        output.stopReason = aborted ? 'aborted' : 'stop';
+        // Confirmed cancellation bounds the streamed partial; the next
+        // context must still pass the history fingerprint gate.
+        const resumable =
+          !aborted ||
+          (acpCancelled &&
+            routed.toolResults.length === 0 &&
+            session.pendingToolCalls.size === 0 &&
+            !sawToolCallStart &&
+            thinkingChars + textChars > 0);
+        if (resumable) {
+          const turnFingerprint = historyFingerprintAfterAssistantTurn(
+            context,
+            output,
           );
-          savePersistedKiroSession(session.persistenceKey, {
-            version: 1,
-            kiroSessionId: session.acpSessionId,
-            historyFingerprint: turnFingerprint,
-            agentConfigFingerprint: session.agentConfigFingerprint ?? undefined,
-            modelId: session.currentModelId,
-            createdAt: existingPersisted?.createdAt ?? now,
-            lastUsed: now,
-          });
+          session.conversationFingerprint = turnFingerprint;
+          if (session.backendQuarantined) {
+            // The backend's snapshot leaked Kiro builtins; persisting it would
+            // re-resume the leak next turn (config fingerprint matches). The
+            // record was already cleared; the next turn restarts fresh.
+            log('skip persisting kiro session (backend quarantined)', {
+              session: session.id,
+              acpSessionId: session.acpSessionId,
+            });
+          } else if (session.persistenceKey && session.acpSessionId) {
+            const now = Date.now();
+            const existingPersisted = loadPersistedKiroSession(
+              session.persistenceKey,
+            );
+            savePersistedKiroSession(session.persistenceKey, {
+              version: 1,
+              kiroSessionId: session.acpSessionId,
+              historyFingerprint: turnFingerprint,
+              agentConfigFingerprint:
+                session.agentConfigFingerprint ?? undefined,
+              modelId: session.currentModelId,
+              createdAt: existingPersisted?.createdAt ?? now,
+              lastUsed: now,
+            });
+          }
+        } else {
+          // Without a safe cancellation boundary, backend history is unknown.
+          session.conversationFingerprint = null;
+          if (session.persistenceKey) {
+            clearPersistedKiroSession(session.persistenceKey);
+          }
         }
-        stream.push({ type: 'done', reason: 'stop', message: output });
+        if (aborted) {
+          log('cancelled turn → aborted', {
+            session: session.id,
+            acpCancelled,
+            signalAborted: !!options?.signal?.aborted,
+            resumable,
+            thinkingChars,
+            textChars,
+            toolResults: routed.toolResults.length,
+            pendingToolCalls: session.pendingToolCalls.size,
+            sawToolCallStart,
+          });
+          stream.push({ type: 'error', reason: 'aborted', error: output });
+        } else {
+          stream.push({ type: 'done', reason: 'stop', message: output });
+        }
       }
 
       releaseTerminalAnonymous(outcome);

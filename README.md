@@ -39,6 +39,10 @@ flowchart LR
 - **Resilience.** Handles aborts (`session/cancel`), orphaned and late tool calls,
   empty refusals (one retry), Kiro's MCP tool-call deadline, and context-overflow
   errors (tagged `context_length_exceeded:` so pi can compact).
+- **Native recovery after cancel.** Confirmed text/thinking-only cancellations
+  keep the ACP session and snapshot. If the next context still matches, the
+  conversation continues natively; cancellations with no output, without Kiro's
+  confirmation, or involving tools fall back to replay.
 - **Clean shutdown.** Idle sessions (10 min) and all sessions on pi exit are stopped,
   including the `kiro-cli` process tree.
 
