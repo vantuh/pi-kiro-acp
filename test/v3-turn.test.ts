@@ -12,7 +12,7 @@ import { join } from 'node:path';
 
 import { test } from 'vitest';
 
-import { AcpSession } from '../src/session.ts';
+import { AcpSession, toKiroThinking } from '../src/session.ts';
 import { configOptionValues } from '../src/v3/config-options.ts';
 import { assert, fakeSession, parseLines, settled, tick } from './support.ts';
 
@@ -27,6 +27,8 @@ const MODEL_CHOICES = [
         hasEffort: true,
         effortLevels: ['low', 'medium', 'high', 'max'],
         defaultEffortLevel: 'high',
+        thinkingToggleable: true,
+        defaultThinkingEnabled: true,
       },
     },
   },
@@ -42,6 +44,7 @@ function optionsFor(
   model: string,
   effort: string | null,
   models: any[] = MODEL_CHOICES,
+  thinking = 'on',
 ): any[] {
   const choice = models.find((option) => option.value === model);
   const options: any[] = [
@@ -60,6 +63,13 @@ function optionsFor(
       id: 'effortLevel',
       currentValue: effort ?? choice._meta.kiro.defaultEffortLevel,
       options: levels.map((value: string) => ({ value })),
+    });
+  if (choice?._meta?.kiro?.thinkingToggleable)
+    options.push({
+      type: 'select',
+      id: 'thinking',
+      currentValue: thinking,
+      options: [{ value: 'on' }, { value: 'off' }],
     });
   return options;
 }
@@ -235,6 +245,150 @@ test('v3 records only the config values kiro echoes back', async () => {
     session.currentEffort === null,
     `an unapplied level is not recorded (got ${session.currentEffort})`,
   );
+});
+
+function thinkingFrames(written: string[]): any[] {
+  return configOptionFrames(written).filter(
+    (frame) => frame.params?.configId === 'thinking',
+  );
+}
+
+/** Finish the turn startPrompt has put on the wire. */
+async function finishTurn(
+  session: AcpSession,
+  written: string[],
+  turn: Promise<unknown>,
+): Promise<void> {
+  const promptFrame = framesSoFar(written).findLast(
+    (frame) => frame.method === 'session/prompt',
+  );
+  assert(!!promptFrame, 'the turn is sent');
+  session.handleStdoutLine(
+    resultFor(promptFrame.id, { stopReason: 'end_turn' }),
+  );
+  await turn;
+}
+
+test('pi thinking levels map onto the kiro thinking toggle', () => {
+  // pi reports "off" as a missing level, the same convention its own adapters
+  // assume, so a turn without one must disable the toggle instead of leaving it.
+  assert(toKiroThinking(undefined) === 'off', 'no level means thinking off');
+  for (const level of [
+    'minimal',
+    'low',
+    'medium',
+    'high',
+    'xhigh',
+    'max',
+  ] as const)
+    assert(toKiroThinking(level) === 'on', `${level} keeps thinking on`);
+});
+
+test('v3 writes thinking off once and reads the echo as the state', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('claude-sonnet-4.6', 'high'));
+  session.currentModelId = 'claude-sonnet-4.6';
+  session.desiredThinking = 'off';
+
+  const turn = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+  const [frame] = thinkingFrames(written);
+  assert(
+    frame?.params?.value === 'off',
+    'thinking off is written as a thinking config option',
+  );
+  assert(
+    configOptionFrames(written).length === 1,
+    'nothing else is written alongside it',
+  );
+  session.handleStdoutLine(
+    resultFor(frame.id, {
+      configOptions: optionsFor(
+        'claude-sonnet-4.6',
+        'high',
+        MODEL_CHOICES,
+        'off',
+      ),
+    }),
+  );
+  await tick();
+  await finishTurn(session, written, turn);
+
+  const before = written.length;
+  const next = session.startPrompt('claude-sonnet-4.6', '', 'again');
+  await tick();
+  assert(
+    thinkingFrames(written).length === 1 && written.length === before + 1,
+    'a second identical turn writes no thinking frame',
+  );
+  await finishTurn(session, written, next);
+});
+
+test('v3 writes thinking again when kiro kept the old value', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('claude-sonnet-4.6', 'high'));
+  session.currentModelId = 'claude-sonnet-4.6';
+  session.desiredThinking = 'off';
+
+  const turn = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+  // kiro answers with the old value, so nothing counts as applied.
+  session.handleStdoutLine(
+    resultFor(thinkingFrames(written)[0].id, {
+      configOptions: optionsFor('claude-sonnet-4.6', 'high'),
+    }),
+  );
+  await tick();
+  await finishTurn(session, written, turn);
+
+  const next = session.startPrompt('claude-sonnet-4.6', '', 'again');
+  await tick();
+  assert(
+    thinkingFrames(written).length === 2,
+    'an unapplied thinking value is written again on the next turn',
+  );
+  session.handleStdoutLine(
+    resultFor(thinkingFrames(written)[1].id, {
+      configOptions: optionsFor(
+        'claude-sonnet-4.6',
+        'high',
+        MODEL_CHOICES,
+        'off',
+      ),
+    }),
+  );
+  await tick();
+  await finishTurn(session, written, next);
+});
+
+test('v3 writes no thinking frame when kiro already reports the value', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('claude-sonnet-4.6', 'high'));
+  session.currentModelId = 'claude-sonnet-4.6';
+  session.desiredThinking = 'on';
+
+  const turn = session.startPrompt('claude-sonnet-4.6', '', 'hi');
+  await tick();
+  assert(
+    thinkingFrames(written).length === 0,
+    'thinking on is not written while kiro reports on',
+  );
+  await finishTurn(session, written, turn);
+});
+
+test('v3 runs the turn when the model offers no thinking option', async () => {
+  const { session, written } = v3Session();
+  feedConfigOptions(session, optionsFor('auto', null));
+  session.currentModelId = 'auto';
+  session.desiredThinking = 'off';
+
+  const turn = session.startPrompt('auto', '', 'hi');
+  await tick();
+  assert(
+    configOptionFrames(written).length === 0,
+    'no config write is made for a model without the toggle',
+  );
+  await finishTurn(session, written, turn);
 });
 
 test('v3 refuses a model id it was not offered', async () => {
@@ -573,4 +727,85 @@ test('v3 session_info_update telemetry reaches the metadata only', async () => {
     }),
   );
   assert(forwarded.length === 1, 'model output still reaches the stream');
+
+  // Compaction threshold and the per-category breakdown ride on context_usage.
+  const count = seen.length;
+  info({
+    kind: 'context_usage',
+    usagePercentage: 30,
+    summarizationThreshold: 80,
+    breakdown: {
+      contextFiles: { tokens: 0, percent: 0, items: [] },
+      tools: {
+        tokens: 1698,
+        percent: 0.2,
+        mcp: { tokens: 0, percent: 0 },
+        builtin: { tokens: 1698, percent: 0.2 },
+      },
+      memory: { tokens: 0, percent: 0 },
+      kiroResponses: { tokens: 1, percent: 0.1 },
+      yourPrompts: { tokens: 6, percent: 0.4 },
+      sessionFiles: { tokens: Number.NaN, percent: 'n/a' },
+      unknownCategory: { tokens: 9, percent: 9 },
+    },
+  });
+  assert(seen.length === count + 1, 'the frame is one metadata update');
+  const withBreakdown = seen[count];
+  assert(
+    withBreakdown.summarizationThreshold === 80,
+    'the top-level summarizationThreshold is recorded',
+  );
+  assert(
+    JSON.stringify(withBreakdown.contextBreakdown) ===
+      JSON.stringify([
+        {
+          category: 'tools',
+          tokens: 1698,
+          percent: 0.2,
+          mcpTokens: 0,
+          builtinTokens: 1698,
+        },
+        { category: 'kiroResponses', tokens: 1, percent: 0.1 },
+        { category: 'yourPrompts', tokens: 6, percent: 0.4 },
+      ]),
+    `the breakdown keeps known non-empty rows only (got ${JSON.stringify(withBreakdown.contextBreakdown)})`,
+  );
+
+  // The next tick, without breakdown or threshold, keeps the earlier values.
+  info({ kind: 'context_usage', usagePercentage: 31 });
+  const later = seen[count + 1];
+  assert(
+    later.contextUsagePercentage === 31 &&
+      later.summarizationThreshold === 80 &&
+      JSON.stringify(later.contextBreakdown) ===
+        JSON.stringify(withBreakdown.contextBreakdown),
+    'a tick with only usagePercentage keeps the threshold and breakdown',
+  );
+
+  // The threshold also arrives nested in contextUsage; a breakdown of 0/0
+  // rows does not erase the earlier one.
+  info({
+    kind: 'context_usage',
+    usagePercentage: 32,
+    contextUsage: { usagePercentage: 32, summarizationThreshold: 75 },
+    breakdown: { memory: { tokens: 0, percent: 0 } },
+  });
+  const nested = seen[count + 2];
+  assert(
+    nested.summarizationThreshold === 75 &&
+      JSON.stringify(nested.contextBreakdown) ===
+        JSON.stringify(withBreakdown.contextBreakdown),
+    'the nested summarizationThreshold is read and an all-zero breakdown is ignored',
+  );
+
+  // A non-numeric threshold is not recorded.
+  info({
+    kind: 'context_usage',
+    usagePercentage: 33,
+    summarizationThreshold: '80',
+  });
+  assert(
+    seen[count + 3].summarizationThreshold === 75,
+    'a non-finite threshold leaves the earlier value',
+  );
 });

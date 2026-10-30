@@ -142,6 +142,38 @@ test('session metadata and usage estimates', () => {
     'the kiro_metadata diagnostic reports the summed credits',
   );
 
+  const withContext = sampleOutput('');
+  appendKiroMetadataDiagnostic(withContext, {
+    sessionId: 'acp-1',
+    summarizationThreshold: 80,
+    contextBreakdown: [
+      { category: 'tools', percent: 0.2, mcpTokens: 0, builtinTokens: 1698 },
+    ],
+  } as any);
+  const contextDetails = (withContext.diagnostics?.[0] as any)?.details;
+  assertEqual(
+    contextDetails.summarizationThreshold,
+    80,
+    'the kiro_metadata diagnostic carries the compaction threshold',
+  );
+  assertEqual(
+    contextDetails.contextBreakdown,
+    [{ category: 'tools', percent: 0.2, mcpTokens: 0, builtinTokens: 1698 }],
+    'the kiro_metadata diagnostic carries the context breakdown',
+  );
+
+  const withoutContext = sampleOutput('');
+  appendKiroMetadataDiagnostic(withoutContext, {
+    sessionId: 'acp-1',
+    contextUsagePercentage: 5,
+  } as any);
+  const bareDetails = (withoutContext.diagnostics?.[0] as any)?.details;
+  assert(
+    !('summarizationThreshold' in bareDetails) &&
+      !('contextBreakdown' in bareDetails),
+    'absent threshold and breakdown stay out of the diagnostic',
+  );
+
   // ── session.onMetadata fires on _kiro.dev/metadata updates ───────────────────
   // stream.ts assigns session.onMetadata so partial frames carry live usage.
 

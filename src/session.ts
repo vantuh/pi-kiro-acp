@@ -46,6 +46,8 @@ import {
 } from './tool-bridge.ts';
 import type { ForwardedToolCatalog } from './tool-catalog.ts';
 import type {
+  ContextBreakdownCategory,
+  ContextBreakdownEntry,
   PendingRpc,
   PendingToolCall,
   SessionMetadata,
@@ -155,6 +157,18 @@ const EFFORT_COMMAND_REPLY_MAX_CHARS = 1024;
  * turn is gone, and waiting longer only delays the tool result the model needs. */
 const NATIVE_STEER_TIMEOUT_MS = 10000;
 
+export type KiroThinking = 'on' | 'off';
+
+/** pi reports "thinking off" as a missing reasoning level: its
+ * `SimpleStreamOptions` thinking level has no `off` and the agent loop passes
+ * `undefined`, the same convention pi's own adapters assume
+ * (`options?.reasoning ?? "off"`). */
+export function toKiroThinking(
+  reasoning: SimpleStreamOptions['reasoning'] | 'off',
+): KiroThinking {
+  return reasoning && reasoning !== 'off' ? 'on' : 'off';
+}
+
 export function toKiroEffort(
   reasoning: SimpleStreamOptions['reasoning'],
 ): KiroEffort | null {
@@ -167,6 +181,56 @@ export function toKiroEffort(
       reasoning as keyof typeof KIRO_THINKING_LEVEL_MAP
     ] ?? null
   );
+}
+
+const CONTEXT_BREAKDOWN_CATEGORIES: readonly ContextBreakdownCategory[] = [
+  'contextFiles',
+  'tools',
+  'memory',
+  'kiroResponses',
+  'yourPrompts',
+  'sessionFiles',
+];
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? value
+    : undefined;
+}
+
+/** `_meta.kiro.breakdown` of a `context_usage` frame. Rows without a non-zero
+ * number are dropped, and so is an empty result: a frame without a usable
+ * breakdown must not erase the one an earlier frame reported. */
+function parseContextBreakdown(
+  value: unknown,
+): ContextBreakdownEntry[] | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const raw = value as Record<string, unknown>;
+  const entries: ContextBreakdownEntry[] = [];
+  for (const category of CONTEXT_BREAKDOWN_CATEGORIES) {
+    const row = raw[category];
+    if (typeof row !== 'object' || row === null) continue;
+    const fields = row as Record<string, any>;
+    const entry: ContextBreakdownEntry = { category };
+    const tokens = finiteNumber(fields.tokens);
+    const percent = finiteNumber(fields.percent);
+    if (tokens !== undefined) entry.tokens = tokens;
+    if (percent !== undefined) entry.percent = percent;
+    if (category === 'tools') {
+      const mcpTokens = finiteNumber(fields.mcp?.tokens);
+      const builtinTokens = finiteNumber(fields.builtin?.tokens);
+      if (mcpTokens !== undefined) entry.mcpTokens = mcpTokens;
+      if (builtinTokens !== undefined) entry.builtinTokens = builtinTokens;
+    }
+    const numbers = [
+      entry.tokens,
+      entry.percent,
+      entry.mcpTokens,
+      entry.builtinTokens,
+    ];
+    if (numbers.some((n) => n !== undefined && n !== 0)) entries.push(entry);
+  }
+  return entries.length > 0 ? entries : undefined;
 }
 
 /** `_kiro.dev/metadata` `reasoning` block (kiro-cli 2.24.1): what kiro thinks
@@ -253,6 +317,11 @@ export class AcpSession {
    * the two. Kept apart from currentEffort so a change can be applied to a
    * live session instead of only at spawn. */
   desiredEffort: KiroEffort | null = null;
+  /** Thinking toggle pi wants for the coming turn (V3 `thinking` config
+   * option); null leaves kiro's own setting alone. */
+  desiredThinking: KiroThinking | null = null;
+  /** Model whose missing `thinking` option was already logged. */
+  private thinkingUnavailableLoggedFor: string | null = null;
   /** Set while an intercepted `/effort` command prompt is in flight: its
    * `agent_message_chunk` reply is kiro answering us, never model output, so
    * the session/update routing drops it instead of streaming it to pi. */
@@ -864,6 +933,10 @@ export class AcpSession {
         this.applyV3Metadata({
           sessionId,
           contextUsagePercentage: kiro.usagePercentage,
+          summarizationThreshold:
+            finiteNumber(kiro.summarizationThreshold) ??
+            finiteNumber(kiro.contextUsage?.summarizationThreshold),
+          contextBreakdown: parseContextBreakdown(kiro.breakdown),
         });
     } else if (kiro.kind === 'turn_completion') {
       const meteringUsage = Array.isArray(kiro.promptTurnSummaries)
@@ -906,6 +979,7 @@ export class AcpSession {
       acpSessionId: patch.sessionId,
       kind: 'v3',
       contextUsagePercentage: patch.contextUsagePercentage,
+      summarizationThreshold: patch.summarizationThreshold,
       turnDurationMs: patch.turnDurationMs,
       credits: patch.meteringUsage
         ? sumMeteringCredits(patch.meteringUsage)
@@ -1025,9 +1099,11 @@ export class AcpSession {
   async ensureStarted(
     catalogProvider: CatalogProvider,
     effort: KiroEffort | null = this.desiredEffort,
+    thinking: KiroThinking | null = this.desiredThinking,
   ): Promise<void> {
     this.lastUsedAt = Date.now();
     this.catalogProvider = catalogProvider;
+    this.desiredThinking = thinking;
     // Recorded on every turn; syncEffort (or the spawn path) reconciles it
     // with what kiro's live session actually has.
     this.desiredEffort = effort;
@@ -1177,10 +1253,11 @@ export class AcpSession {
     this.configOptions = options;
   }
 
-  /** Model and effort for one turn, through session/set_config_option. V3
-   * never errors on a value it cannot use — an unknown model even becomes the
-   * reported currentValue — so both are checked against the advertised options
-   * first, and only what kiro echoes back is recorded as applied. */
+  /** Model, thinking and effort for one turn, through
+   * `session/set_config_option`. V3 never errors on a value it cannot use — an
+   * unknown model even becomes the reported currentValue — so all three are
+   * checked against the advertised options first, and only what kiro echoes
+   * back is recorded as applied. */
   private async applyV3TurnConfig(modelId: string): Promise<void> {
     this.effortReconcilePending = false;
     // kiro's own report wins over `currentModelId`: a restored session adopts
@@ -1220,6 +1297,8 @@ export class AcpSession {
         previousModel: liveModel,
       });
     }
+
+    await this.applyV3Thinking(modelId);
 
     const level = this.desiredEffort;
     if (level === null) {
@@ -1264,6 +1343,32 @@ export class AcpSession {
     if (applied !== level) return;
     this.currentEffort = level;
     log('v3 effort applied', { session: this.id, modelId, level });
+  }
+
+  /** pi's thinking on/off through the `thinking` config option. kiro offers
+   * the option only for models with a thinking toggle, so its absence is the
+   * whole gate; the cached option value is the state, nothing is tracked. */
+  private async applyV3Thinking(modelId: string): Promise<void> {
+    const desired = this.desiredThinking;
+    if (desired === null) return;
+    if (!configOptionValues(this.configOptions, 'thinking').includes(desired)) {
+      // Only `off` has something to explain: on a model without the toggle,
+      // thinking stays as the model defines it.
+      if (desired === 'off' && this.thinkingUnavailableLoggedFor !== modelId) {
+        this.thinkingUnavailableLoggedFor = modelId;
+        log('kiro did not offer the thinking option — thinking stays as is', {
+          session: this.id,
+          modelId,
+          desired,
+        });
+      }
+      return;
+    }
+    if (configOptionCurrentValue(this.configOptions, 'thinking') === desired)
+      return;
+    const applied = await this.v3SetConfigOption('thinking', desired);
+    if (applied === desired)
+      log('v3 thinking applied', { session: this.id, modelId, desired });
   }
 
   /** One config_option write; the value kiro reports as current afterwards

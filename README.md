@@ -28,14 +28,19 @@ flowchart LR
 - **Native pi tool flow.** Kiro tool calls become regular pi `toolCall` blocks, so pi
   renders, runs, and approves them as usual. Parallel calls are batched (250 ms).
 - **Thinking levels.** Pi's reasoning level maps to Kiro effort
-  (`low`, `medium`, `high`, `xhigh`, `max`; `off` clears it).
+  (`low`, `medium`, `high`, `xhigh`, `max`; `off` clears it). On V3, pi's level also
+  drives Kiro's `thinking` on/off option: `off` disables thinking on the models that
+  offer it.
 - **Session reuse and resume.** One `kiro-cli` process per pi session. ACP sessions
   are persisted and resumed (`session/resume`, then `session/load`) when the
   conversation history and agent config still match. Records expire after 24 hours.
 - **System prompt.** Pi's system prompt is sent once per ACP session and re-sent after
   a restore or restart.
 - **Usage reporting.** Context usage and credits from ACP metadata are attached to
-  each turn. An optional footer shows your Kiro plan usage; `/kiro-usage` refreshes it.
+  each turn. On V3 that is `usagePercentage`, `summarizationThreshold` and the
+  per-category breakdown percents. Kiro reports **no token or cache numbers** over ACP,
+  so pi's cache counters stay 0 for this provider. An optional footer shows your Kiro
+  plan usage; `/kiro-usage` refreshes it.
 - **Resilience.** Handles aborts (`session/cancel`), orphaned and late tool calls,
   empty refusals (one retry), Kiro's MCP tool-call deadline, and context-overflow
   errors (tagged `context_length_exceeded:` so pi can compact).

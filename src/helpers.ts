@@ -443,6 +443,11 @@ export function appendKiroMetadataDiagnostic(
       details: definedJson({
         sessionId: metadata.sessionId,
         contextUsagePercentage: metadata.contextUsagePercentage,
+        summarizationThreshold: metadata.summarizationThreshold,
+        // Spread: an interface has no index signature, so it is not JsonValue.
+        contextBreakdown: metadata.contextBreakdown?.map((entry) => ({
+          ...entry,
+        })),
         contextUsed: metadata.contextUsed,
         contextSize: metadata.contextSize,
         sessionCost: metadata.sessionCost,

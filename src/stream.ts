@@ -34,7 +34,7 @@ import {
   loadPersistedKiroSession,
   savePersistedKiroSession,
 } from './session-persistence.ts';
-import { toKiroEffort, type AcpSession } from './session.ts';
+import { toKiroEffort, toKiroThinking, type AcpSession } from './session.ts';
 import { hostToolCatalog, KIRO_BUILTIN_NAMES } from './tool-catalog.ts';
 import { createSteerEchoFilter } from './v3/steer-echo.ts';
 
@@ -121,6 +121,7 @@ export function streamKiroAcp(
         session,
         catalogProvider,
         toKiroEffort(options?.reasoning),
+        toKiroThinking(options?.reasoning),
       );
       const ensuredAt = Date.now();
 

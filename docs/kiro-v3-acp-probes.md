@@ -3,7 +3,8 @@
 Measured on 2026-10-28 against the real `kiro-cli acp --agent-engine=v3 --auth-method=cli`.
 Unless a line says otherwise, everything was observed on kiro-cli 2.35.1 (KAS 0.66.70);
 the agent-selection and tool-lockdown probes ran first on 2.34.0 (KAS 0.66.62) and the
-`initialize` result was re-checked on 2.35.1. Steering scenarios are reproducible with
+`initialize` result was re-checked on 2.35.1. The 2.35.2 section near the end
+was measured on kiro-cli 2.35.2. Steering scenarios are reproducible with
 [`test/e2e/v3-native-steer.mjs`](../test/e2e/v3-native-steer.mjs)
 (`KIRO_E2E_LIVE=full`, spends credits). Reference: the
 [ACP client migration guide](https://kiro.dev/docs/cli/v3/acp-migration.md).
@@ -156,7 +157,10 @@ session: `mode`, `model`, `memoryReflection`, `autopilot`, `contentCollection`. 
 - No effort: `auto`, `claude-haiku-4.5`, `deepseek-3.2`, `minimax-m2.5`, `minimax-m2.1`,
   `glm-5`, `qwen3-coder-next` (`hasEffort: false`).
 - There is **no `effortLevel` option** until an effort-capable model is current, and it
-  disappears again when a model without effort is selected.
+  disappears again when a model without effort is selected. On 2.35.2 the same applies to
+  the new `thinking` option, which only some models offer (see the 2.35.2 section).
+- On 2.35.2 each model choice also carries `thinkingToggleable` and
+  `defaultThinkingEnabled`; the lists above are unchanged.
 
 `session/set_config_option { sessionId, configId, value }` answers with the full
 `configOptions` array and emits a `config_option_update` with the same array. Selecting a
@@ -184,7 +188,7 @@ notification. Every `session_info_update` carries `_meta.kiro.kind`:
 
 | kind | payload used |
 |---|---|
-| `context_usage` | `usagePercentage` → `contextUsagePercentage` |
+| `context_usage` | `usagePercentage` → `contextUsagePercentage`; on 2.35.2 also `summarizationThreshold` and the `breakdown` rows (see the 2.35.2 section) |
 | `turn_completion` | `elapsedTime` (ms), `promptTurnSummaries[].{unit,unitPlural,usage}` → credits |
 | `turn_start`, `turn_end`, `focus_update`, `steering_queued`, `steering_injected`, `steering_cleared`, `user_message_id_assigned` | nothing to record |
 
@@ -295,13 +299,129 @@ Two properties the client has to enforce itself, because kiro reports nothing:
 - **Clearing a level.** pi can turn reasoning off after a level was applied, and V3 has no
   "unset effort" value (neither does v2's `/effort`). The provider writes the model's
   `defaultEffortLevel` back and treats the level as unset again; a model that reports no
-  default is logged and left alone.
+  default is logged and left alone. On 2.35.2 a model that offers the `thinking` option
+  gets `thinking: off` as well, so the model stops thinking instead of only returning to
+  its default effort.
 - **Deciding what is live.** A restored session adopts `modelId` from the persisted record,
   which says nothing about the model the restored backend runs. When `configOptions` carry a
   `model` option its `currentValue` wins; the record is only a fallback for a response with
   no options at all. The cached options are dropped on a process restart and before every
   `session/new`/`session/load`, and every `config_option_update` is scoped to the current
   ACP session so a stale frame cannot replace them.
+
+## 2.35.2: context telemetry, no token or cache data, and the new `thinking` option
+
+Free RPCs for the option probes (`initialize`, `session/new`, `session/set_config_option`)
+plus one real prompt on `claude-haiku-4.5` for the turn probe (0.021981556882255393 credit,
+1373 ms). Raw ACP stdio against `kiro-cli 2.35.2` (agent engine v3), the pi-only profile
+from above (`tools: ["@pi_host"]`, builtin denied), no MCP server attached.
+
+### `context_usage` payload
+
+The migration guide only names `usagePercentage`. On 2.35.2 the `session_info_update` with
+`_meta.kiro.kind: "context_usage"` carries more:
+
+- `summarizationThreshold` (`80`): Kiro's own compaction threshold, in percent. It is
+  present on the session-info and on-demand frames and on the final tick of a turn, and
+  absent on some mid-turn ticks.
+- `contextUsage: { usagePercentage, summarizationThreshold? }`: a nested duplicate of the
+  top-level fields.
+- `breakdown` (optional): the categories `contextFiles`, `tools`, `memory`, `kiroResponses`,
+  `yourPrompts`, `sessionFiles`, each `{ tokens, percent }`. `tools` adds `mcp` and `builtin`
+  sub-objects. `contextFiles` and `sessionFiles` add `items[]` with `name`, `uri`, `tokens`,
+  `matched`, `percent`, `progressivelyLoaded`; on this machine 19 `~/.kiro/skills/*` files
+  matched.
+
+The fresh-session frame, abridged to the fields discussed here:
+
+```json
+{ "sessionUpdate": "session_info_update",
+  "_meta": { "kiro": { "kind": "context_usage",
+    "usagePercentage": 0.6000000000000001, "summarizationThreshold": 80,
+    "contextUsage": { "usagePercentage": 0.6, "summarizationThreshold": 80 },
+    "breakdown": {
+      "contextFiles": { "tokens": 0, "percent": 0, "items": [] },
+      "tools": { "tokens": 1698, "percent": 0.2,
+                 "mcp": { "tokens": 0, "percent": 0 },
+                 "builtin": { "tokens": 1698, "percent": 0.2 } },
+      "memory": { "tokens": 0, "percent": 0 },
+      "kiroResponses": { "tokens": 0, "percent": 0 },
+      "yourPrompts": { "tokens": 4310, "percent": 0.4 },
+      "sessionFiles": { "tokens": 0, "percent": 0, "items": [] } } } } }
+```
+
+The `usagePercentage` value is the sum of the per-category `percent` values in floating
+point (`0.2 + 0.4`), so it carries the rounding of every row.
+
+**The `tokens` counts are unreliable; `percent` is the trustworthy field.** The fresh session
+reported `yourPrompts.tokens: 4310` plus `tools.builtin.tokens: 1698`, which sums to 6008 and
+agrees with `usagePercentage: 0.6`. After a real turn the same fields read
+`yourPrompts.tokens: 6` and `kiroResponses.tokens: 1` next to `percent: 0.4` and `0.1`. Only
+`tools.builtin.tokens` stayed consistent.
+
+`_kiro/session/context` is listed in `initialize.agentCapabilities._meta.kiro.extensionMethods`
+and answers `null`. It emitted the `context_usage` frame in one run and nothing in another, so
+it cannot serve as an on-demand display hook.
+
+What the provider does with it (`src/session.ts`, `src/helpers.ts`): records
+`contextUsagePercentage`, `summarizationThreshold` and the non-empty per-category rows (rows
+with 0 tokens and 0 percent are dropped). `contextUsed` stays the percentage times the model's
+context window. The `kiro_metadata` diagnostic repeats both.
+
+### No token or cache telemetry over ACP
+
+One paid turn on `claude-haiku-4.5`:
+
+- The `session/prompt` result is exactly `{"stopReason":"end_turn"}`, with no `usage`. The
+  `sacp 11.0.0` bundled in the `kiro-cli-chat` binary defines `PromptResponse { …, usage }`
+  and `Usage { totalTokens, inputTokens, outputTokens, thoughtTokens, cachedWriteTokens,
+  cachedReadTokens }`, so the unstable ACP end-turn usage field exists in its schema, but
+  Kiro does not populate it.
+- `turn_completion` carries only `promptTurnSummaries`, `elapsedTime`, `status`,
+  `executionId`, `turnId` and `requestIds`.
+- The persisted turn record (`~/.kiro/sessions/<hash>/<session>/messages.jsonl`, payload type
+  `usage_summary`) has the same fields and no tokens.
+- The strings `cacheReadInputTokens`, `cacheWriteInputTokens`, `uncachedInputTokens`,
+  `cachedTokens` and `tokenUsage` exist in the binary, but only on Kiro's internal analytics
+  path (`RequestMetadata`, the chat-cli turn event). None appeared in an ACP frame.
+
+Consequence: pi's `usage.cacheRead` and `usage.cacheWrite` stay 0 for kiro-acp. A cache-hit
+display and cache-miss notices are not possible from ACP today.
+
+### The `thinking` option
+
+Each model choice's `_meta.kiro` now also carries `thinkingToggleable` and
+`defaultThinkingEnabled`. All 15 models:
+
+| Class | Models | `hasEffort` | `thinkingToggleable` | `defaultThinkingEnabled` |
+|---|---|---|---|---|
+| Toggleable | `claude-opus-5`, `claude-sonnet-5`, `claude-opus-4.8`, `claude-sonnet-4.6` | true | true | true |
+| Effort only | `claude-opus-5.5`, `claude-sonnet-5.5`, `gpt-5.6-terra`, `gpt-5.6-luna` | true | false | absent |
+| Neither | `auto`, `claude-haiku-4.5`, `deepseek-3.2`, `minimax-m2.5`, `minimax-m2.1`, `glm-5`, `qwen3-coder-next` | false | false | absent |
+
+`thinkingToggleable` is present as `false` on the other eleven models; `defaultThinkingEnabled`
+is only reported by the four toggleable ones.
+
+- `session/new` on `auto` offers `mode`, `model`, `memoryReflection`, `autopilot`,
+  `contentCollection`: no `effortLevel`, no `thinking`. Selecting `claude-sonnet-4.6` adds
+  `effortLevel` (`currentValue: "high"`, its `defaultEffortLevel`) and `thinking`
+  (`currentValue: "on"`, values `["on","off"]`).
+- `session/set_config_option { configId: "thinking", value: "off" }` echoes
+  `currentValue: "off"`, leaves `effortLevel` at `high`, and pushes a `config_option_update`.
+  Writing the same value again is harmless: another `config_option_update`, no error.
+- An unusable value (`"nonsense"`) is **not an error**: Kiro keeps the previous value. This
+  is the same trap as for model and effort, so the caller has to check the advertised values
+  and read the echo back.
+- Still true from 2.35.1: no `effortLevel` option until an effort-capable model is current,
+  an unadvertised level is silently ignored, and `gpt-5.6-*` list `none` in `effortLevels`.
+
+What the provider does: pi's thinking level `off` writes `thinking: off`; any other level
+writes `thinking: on` plus the effort level as before. `off` reaches the provider as a missing
+`reasoning` option (pi's `SimpleStreamOptions` thinking level has no `off`; its agent loop
+passes `undefined`), which is also how pi's own adapters read "off", so a turn without a
+reasoning level is treated as thinking off. Nothing is written when the option is
+not offered; only a deduped log line says `off` could not be honoured. Before, `off` only
+reset the effort level to the model default and the model kept thinking.
 
 ## Not verified
 
@@ -311,3 +431,8 @@ Two properties the client has to enforce itself, because kiro reports nothing:
 - Whether context compaction keeps an injected steer.
 - The `session/request_permission` option shape on a live V3 session (`autopilot: off`).
 - Whether `session/load` returns `configOptions` — handled defensively either way.
+- 2.35.2: whether `thinking: off` stops the model from emitting thinking output. Only the
+  `currentValue` echo was read, no prompt ran with it.
+- 2.35.2: whether `thinking` survives `session/load`.
+- 2.35.2: why the `breakdown.*.tokens` values disagree with `percent`, and why
+  `_kiro/session/context` emitted a frame in only one run.

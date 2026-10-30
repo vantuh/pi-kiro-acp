@@ -34,9 +34,31 @@ export interface SessionUpdate {
   [key: string]: unknown;
 }
 
+export type ContextBreakdownCategory =
+  | 'contextFiles'
+  | 'tools'
+  | 'memory'
+  | 'kiroResponses'
+  | 'yourPrompts'
+  | 'sessionFiles';
+
+export interface ContextBreakdownEntry {
+  category: ContextBreakdownCategory;
+  tokens?: number;
+  percent?: number;
+  /** tools only: kiro's mcp/builtin split. */
+  mcpTokens?: number;
+  builtinTokens?: number;
+}
+
 export interface SessionMetadata {
   sessionId: string;
   contextUsagePercentage?: number;
+  /** kiro's own compaction threshold, in percent of the context window. */
+  summarizationThreshold?: number;
+  /** Per-category share of the context. `percent` is reliable; on kiro-cli
+   * 2.35.2 `tokens` is only trustworthy for tools.builtin. */
+  contextBreakdown?: ContextBreakdownEntry[];
   contextUsed?: number;
   contextSize?: number;
   // NOTE: sessionCost / meteringUsage are per-turn session telemetry only —

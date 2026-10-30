@@ -4,7 +4,7 @@ import { loadKiroAcpConfig, resolveAgentEngine } from './config.ts';
 import { extractToolResults } from './helpers.ts';
 import { log } from './logging.ts';
 import { persistenceKeyForSession } from './session-persistence.ts';
-import { AcpSession, type KiroEffort } from './session.ts';
+import { AcpSession, type KiroEffort, type KiroThinking } from './session.ts';
 import { hostToolCatalog } from './tool-catalog.ts';
 import type { ToolResultInfo } from './types.ts';
 
@@ -247,10 +247,11 @@ export class SessionManager {
     session: AcpSession,
     catalogProvider: () => ReturnType<typeof hostToolCatalog>,
     effort: KiroEffort | null,
+    thinking: KiroThinking | null = null,
   ): Promise<void> {
     if (this.#closed) throw new Error('Kiro ACP runtime is closed');
     if (this.#stopping) throw new Error('Kiro ACP runtime is stopping');
-    const pending = session.ensureStarted(catalogProvider, effort);
+    const pending = session.ensureStarted(catalogProvider, effort, thinking);
     this.#pendingStartups.add(pending);
     try {
       await pending;
