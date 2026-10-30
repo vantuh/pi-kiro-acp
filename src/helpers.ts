@@ -453,10 +453,40 @@ export function appendKiroMetadataDiagnostic(
         sessionCost: metadata.sessionCost,
         meteringUsage: metadata.meteringUsage,
         turnDurationMs: metadata.turnDurationMs,
+        summarization: metadata.summarization
+          ? definedJson({ ...metadata.summarization })
+          : undefined,
         credits: sumMeteringCredits(metadata.meteringUsage) || undefined,
       }),
     },
   ];
+}
+
+/** Footer text for kiro's context fill, e.g. `ctx 12.4% · sum@80%`. */
+export function kiroContextStatusText(
+  metadata: SessionMetadata | null | undefined,
+  theme?: any,
+): string {
+  const used = metadata?.contextUsagePercentage;
+  if (typeof used !== 'number' || !Number.isFinite(used)) return '';
+  const threshold = metadata?.summarizationThreshold;
+  const hasThreshold =
+    typeof threshold === 'number' && Number.isFinite(threshold);
+  let text = `ctx ${used.toFixed(1)}%`;
+  if (hasThreshold) text += ` · sum@${threshold}%`;
+  if (!theme) return text;
+  const color = !hasThreshold
+    ? 'muted'
+    : used >= threshold
+      ? 'error'
+      : used >= threshold - 10
+        ? 'warning'
+        : 'muted';
+  try {
+    return theme.fg(color, text);
+  } catch {
+    return text;
+  }
 }
 
 export function createOutputMessage(model: any): AssistantMessage {

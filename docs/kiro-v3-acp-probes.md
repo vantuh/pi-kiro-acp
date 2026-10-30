@@ -423,6 +423,47 @@ reasoning level is treated as thinking off. Nothing is written when the option i
 not offered; only a deduped log line says `off` could not be honoured. Before, `off` only
 reset the effort level to the model default and the model kept thinking.
 
+### Compaction: `summarization_completed`
+
+`_kiro/session/compact` is in the advertised `extensionMethods`. A manual compaction of a
+three-turn session answered `{"success":true}` and emitted one notification, with no
+`turn_completion` and therefore no credit metering for the compaction itself:
+
+```json
+{
+  "sessionUpdate": "session_info_update",
+  "_meta": {
+    "kiro": {
+      "kind": "summarization_completed",
+      "conversationSummary": "## Overview\n...",
+      "truncated": false,
+      "summarization": {
+        "status": "success",
+        "summary": {"conversationSummary": "## Overview\n...", "truncated": false}
+      }
+    }
+  }
+}
+```
+
+- The kind is a family: `summarization_completed` was observed, the binary also carries
+  `failed`, `started`, `terminated` and an `unsummarized_dropped` counter. No payload field
+  reports how many messages or tokens were dropped.
+- `conversationSummary` is the whole markdown summary and appears at both
+  `_meta.kiro.conversationSummary` and `_meta.kiro.summarization.summary.conversationSummary`.
+  It is private conversation content, so the provider records only `status`, `truncated`
+  and the summary length; the text never enters metadata, diagnostics or logs.
+- `contextUsageInvalidated` (next to `contextUsagePercentage` in the binary) does **not**
+  arrive on compaction. A regular `context_usage` frame follows, which is enough.
+- `_kiro/session/context` answered `null` again, before and after the compaction.
+- On that tiny history the usage percentage rose (2.4545% → 2.5195%): the summary is
+  injected into the context and outweighed what was dropped. A real session shows the
+  opposite, a sharp fall with no other explanation.
+
+What the provider does: the metadata gains `summarization` (also in the `kiro_metadata`
+diagnostic), the footer shows `ctx 12.4% · sum@80%` from the same frames, and one `info`
+notice fires per compaction.
+
 ## Not verified
 
 - Steer arriving while two `pi_host` tool calls run in parallel.
@@ -436,3 +477,7 @@ reset the effort level to the model default and the model kept thinking.
 - 2.35.2: whether `thinking` survives `session/load`.
 - 2.35.2: why the `breakdown.*.tokens` values disagree with `percent`, and why
   `_kiro/session/context` emitted a frame in only one run.
+- Whether auto-compaction at `summarizationThreshold` emits the same `summarization_*`
+  kinds and payload as the explicit `_kiro/session/compact` call.
+- What kind and status a failed or skipped compaction reports.
+- Whether `_kiro/session/compact` accepts custom instructions.

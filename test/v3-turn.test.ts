@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import { test } from 'vitest';
 
+import { appendKiroMetadataDiagnostic } from '../src/helpers.ts';
 import { AcpSession, toKiroThinking } from '../src/session.ts';
 import { configOptionValues } from '../src/v3/config-options.ts';
 import { assert, fakeSession, parseLines, settled, tick } from './support.ts';
@@ -808,4 +809,70 @@ test('v3 session_info_update telemetry reaches the metadata only', async () => {
     seen[count + 3].summarizationThreshold === 75,
     'a non-finite threshold leaves the earlier value',
   );
+});
+
+test('v3 summarization frames record sizes and never the summary text', () => {
+  const { session } = v3Session();
+  const seen: any[] = [];
+  session.onMetadata = (metadata) => seen.push({ ...metadata });
+  const info = (kiro: Record<string, unknown>) =>
+    session.handleStdoutLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'acp-1',
+          update: { sessionUpdate: 'session_info_update', _meta: { kiro } },
+        },
+      }),
+    );
+
+  const marker = 'SECRET-SUMMARY-BODY-7f3a';
+  const conversationSummary = `## Overview\n${marker}`;
+  // The shape kiro-cli 2.35.2 sends for `_kiro/session/compact`.
+  info({
+    kind: 'summarization_completed',
+    conversationSummary,
+    truncated: false,
+    summarization: {
+      status: 'success',
+      summary: { conversationSummary, truncated: false },
+    },
+  });
+  assert(seen.length === 1, 'the frame is one metadata update');
+  const { at, ...recorded } = seen[0].summarization;
+  assert(
+    typeof at === 'number' &&
+      JSON.stringify(recorded) ===
+        JSON.stringify({
+          status: 'success',
+          truncated: false,
+          summaryChars: conversationSummary.length,
+        }),
+    `summarization_completed is recorded (got ${JSON.stringify(seen[0].summarization)})`,
+  );
+
+  const output: any = { content: [] };
+  appendKiroMetadataDiagnostic(output, session.metadata);
+  assert(
+    !JSON.stringify(session.metadata).includes(marker) &&
+      !JSON.stringify(output.diagnostics).includes(marker),
+    'the summary text is in neither the metadata nor the diagnostic',
+  );
+  assert(
+    output.diagnostics[0].details.summarization.status === 'success',
+    'the kiro_metadata diagnostic carries the summarization',
+  );
+
+  // The family is open: an unknown kind still records its status.
+  info({ kind: 'summarization_failed', summarization: { status: 'failed' } });
+  assert(
+    seen.length === 2 &&
+      seen[1].summarization.status === 'failed' &&
+      seen[1].summarization.summaryChars === undefined,
+    `an unknown summarization_* kind records its status (got ${JSON.stringify(seen[1]?.summarization)})`,
+  );
+
+  info({ kind: 'summary_unrelated' });
+  assert(seen.length === 2, 'a kind outside the family is still dropped');
 });

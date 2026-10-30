@@ -31,6 +31,7 @@ import {
   pickV3PermissionOptionId,
 } from './permissions.ts';
 import { getDescendantPids, terminateProcessTree } from './process-utils.ts';
+import { emitKiroSessionMetadata } from './session-events.ts';
 import {
   agentConfigFingerprint,
   canRestorePersisted,
@@ -961,6 +962,32 @@ export class AcpSession {
           typeof kiro.elapsedTime === 'number' ? kiro.elapsedTime : undefined,
         meteringUsage,
       });
+    } else if (
+      typeof kiro.kind === 'string' &&
+      kiro.kind.startsWith('summarization')
+    ) {
+      // Also fires mid-turn (auto-compaction). Only sizes are recorded: the
+      // summary text stays out of metadata, logs and diagnostics.
+      const summary = kiro.summarization?.summary;
+      const text = [
+        kiro.conversationSummary,
+        summary?.conversationSummary,
+      ].find((value) => typeof value === 'string');
+      const truncated = [kiro.truncated, summary?.truncated].find(
+        (value) => typeof value === 'boolean',
+      );
+      this.applyV3Metadata({
+        sessionId,
+        summarization: {
+          status:
+            typeof kiro.summarization?.status === 'string'
+              ? kiro.summarization.status
+              : undefined,
+          truncated,
+          summaryChars: text?.length,
+          at: Date.now(),
+        },
+      });
     }
     return true;
   }
@@ -985,6 +1012,7 @@ export class AcpSession {
         ? sumMeteringCredits(patch.meteringUsage)
         : undefined,
     });
+    emitKiroSessionMetadata(this.metadata);
     try {
       this.onMetadata?.(this.metadata);
     } catch (error) {

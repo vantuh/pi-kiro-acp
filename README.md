@@ -238,8 +238,12 @@ the model and Kiro builtins never register. Model and effort are set in-band wit
 `session/set_config_option` instead of spawn flags. Steering goes through native
 `_session/steer` while a tool result is still live and falls back to the
 synthetic `<user_message_during_run>` block inside that tool result otherwise;
-the model's `[STEERING <id>: …]` echo is stripped from its output. Probe
-findings: [docs/kiro-v3-acp-probes.md](docs/kiro-v3-acp-probes.md).
+the model's `[STEERING <id>: …]` echo is stripped from its output. While a V3
+session streams, the footer carries Kiro's own context fill and compaction
+threshold (`ctx 12.4% · sum@80%`), and Kiro compacting the conversation — which
+happens before pi's auto-compact — raises a one-off notice. The summary text is
+not kept; only its status and size reach the metadata. Probe findings:
+[docs/kiro-v3-acp-probes.md](docs/kiro-v3-acp-probes.md).
 
 ## Commands
 

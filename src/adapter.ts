@@ -4,10 +4,12 @@ import type {
 } from '@earendil-works/pi-coding-agent';
 
 import { loadKiroAcpConfig, resolveUsageFooterConfig } from './config.ts';
+import { kiroContextStatusText } from './helpers.ts';
 import { log, logDir } from './logging.ts';
 import { stripAssistantContentFrames } from './native-tool-frame.ts';
 import { KIRO_ACP_PROVIDER, normalizeKiroContextOverflow } from './overflow.ts';
 import { createKiroAcpProvider, type KiroAcpProvider } from './provider.ts';
+import { onKiroSessionMetadata } from './session-events.ts';
 import { sessionRuntimeRegistry } from './session-runtime-registry.ts';
 import { getKiroUsage, type KiroUsage } from './usage.ts';
 
@@ -92,6 +94,8 @@ export default function (pi: ExtensionAPI) {
 
   const syncKiroUsageFooter = (model: { provider?: string } | undefined) => {
     const config = resolveUsageFooterConfig(loadKiroAcpConfig());
+    if (model?.provider !== KIRO_ACP_PROVIDER)
+      getUi()?.setStatus('kiro-ctx', undefined);
     if (!config.enabled || model?.provider !== KIRO_ACP_PROVIDER) {
       clearKiroUsageStatus();
       return;
@@ -128,9 +132,35 @@ export default function (pi: ExtensionAPI) {
     },
   });
 
+  // Subscribed once and never unsubscribed: the extension lives as long as the
+  // process, and session_shutdown must not drop it for the next /new or /resume.
+  let lastSummarizationAt = 0;
+  onKiroSessionMetadata((metadata) => {
+    const ui = getUi();
+    if (!ui) return;
+    ui.setStatus(
+      'kiro-ctx',
+      kiroContextStatusText(metadata, getTheme()) || undefined,
+    );
+    const summarization = metadata.summarization;
+    if (!summarization || summarization.at <= lastSummarizationAt) return;
+    lastSummarizationAt = summarization.at;
+    const details = [
+      summarization.status,
+      summarization.summaryChars !== undefined
+        ? `${summarization.summaryChars} chars kept`
+        : undefined,
+    ].filter(Boolean);
+    ui.notify(
+      `Kiro summarized the conversation${details.length ? ` (${details.join(', ')})` : ''}`,
+      'info',
+    );
+  });
+
   pi.on('session_shutdown', () => {
     usageFooterActive = false;
     clearInterval(usageTimer);
+    getUi()?.setStatus('kiro-ctx', undefined);
   });
 
   // Legacy native-tool frames (see native-tool-frame.ts) are normal text
